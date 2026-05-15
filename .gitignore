@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Build / dist
+build/
+dist/
+*.spec
+*.exe.manifest
+
+# Nuitka
+*.build/
+*.dist/
+*.onefile-build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Runtime user data (放在 %APPDATA% 但开发期可能在工作目录)
+src/user_prefs.json
+logs/
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
+
+# 临时/缓存
+*.tmp
+*.bak
