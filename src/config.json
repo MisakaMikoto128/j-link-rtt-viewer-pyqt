@@ -1,0 +1,21 @@
+{
+  "chip_models": [
+    "STM32F103C8",
+    "STM32F407VG",
+    "STM32G070CB",
+    "STM32G473RE",
+    "STM32G474RE",
+    "STM32H750VB",
+    "nRF52840_xxAA",
+    "CS32F103C8"
+  ],
+  "default_interface": "SWD",
+  "default_speed_khz": 4000,
+  "speed_options_khz": [
+    100, 400, 1000, 2000, 4000, 8000, 9600,
+    10000, 12000, 14400, 16000, 18000, 20000, 24000
+  ],
+  "default_font_family": "Consolas",
+  "default_font_size": 13,
+  "default_rtt_channel": 0
+}
