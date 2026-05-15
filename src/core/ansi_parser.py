@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 CSI_RE = re.compile(r"\x1b\[([0-9;]*)m")
 
@@ -60,12 +60,15 @@ def _apply_sgr(state: _MutAttrs, params: list[int]) -> None:
             if i + 1 < len(params):
                 mode = params[i + 1]
                 if mode == 5 and i + 2 < len(params):
-                    i += 2
+                    i += 2          # 消费 5;N
                 elif mode == 2 and i + 4 < len(params):
-                    i += 4
+                    i += 4          # 消费 2;R;G;B
+                elif mode in (2, 5):
+                    # 不完整：消费剩余所有参数，避免泄漏
+                    i = len(params) - 1
                 else:
                     i += 1
-            # else: malformed, just consume
+            # else: 只有 38/48，下一次循环 i+1 自然超出
         # 其他参数（粗体/斜体/下划线之外）忽略
         i += 1
 
@@ -85,14 +88,11 @@ def parse_ansi(text: str) -> list[tuple[str, AnsiAttrs]]:
             segments.append((text[pos:m.start()], state.freeze()))
 
         params_str = m.group(1)
-        try:
-            params = [int(p) for p in params_str.split(";") if p != ""]
-            if not params:
-                params = [0]
-            _apply_sgr(state, params)
-        except ValueError:
-            # 非法参数 → 把这段 CSI 当字面量保留
-            segments.append((m.group(0), state.freeze()))
+        # 含字母字符的 CSI 序列（如 \x1b[abcm）不会被正则匹配，自然作为文本流过
+        params = [int(p) for p in params_str.split(";") if p != ""]
+        if not params:
+            params = [0]
+        _apply_sgr(state, params)
         pos = m.end()
 
     # 剩余文本（如果末尾有未匹配的 \x1b[ 不会被 finditer 命中，会留在这里）
