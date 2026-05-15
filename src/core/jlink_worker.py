@@ -198,16 +198,39 @@ class JLinkWorker(QThread):
             self._write_log_file(decoded)
 
     # ============================================================
-    # 命令槽（占位，下一 Task 实现）
+    # 命令槽
     # ============================================================
     @Slot(str, bool)
     def _on_send_data(self, data: str, is_hex: bool) -> None:
-        # Task 8 实现
-        pass
+        if self._state != _STATE_CONNECTED:
+            self.command_result.emit("send_data", False, {"error": "未连接"})
+            return
+        try:
+            if is_hex:
+                cleaned = data.replace(" ", "").replace("\n", "").replace("\r", "")
+                if len(cleaned) % 2 != 0:
+                    cleaned += "0"
+                payload = bytes.fromhex(cleaned)
+            else:
+                payload = data.encode("utf-8")
+            written = self.jlink.rtt_write(self._channel, payload)
+            ok = written == len(payload)
+            self.command_result.emit("send_data", ok, {"bytes": written})
+        except Exception as e:
+            self._logger.error(f"发送数据失败：{e}")
+            self.command_result.emit("send_data", False, {"error": str(e)})
 
     @Slot()
     def _on_reset_target(self) -> None:
-        pass
+        if self._state != _STATE_CONNECTED:
+            self.command_result.emit("reset", False, {"error": "未连接"})
+            return
+        try:
+            self.jlink.reset(1, False)  # 正常重置，复位后运行
+            self.command_result.emit("reset", True, {})
+            self.log_message.emit("info", "目标设备已重置")
+        except Exception as e:
+            self.command_result.emit("reset", False, {"error": str(e)})
 
     @Slot(int)
     def _on_set_channel(self, channel: int) -> None:
@@ -220,23 +243,68 @@ class JLinkWorker(QThread):
 
     @Slot(bool)
     def _on_set_power(self, enable: bool) -> None:
-        pass
+        if self._state != _STATE_CONNECTED:
+            self.command_result.emit("power_output", False, {"error": "未连接"})
+            return
+        try:
+            if enable:
+                self.jlink.power_on(default=False)
+            else:
+                self.jlink.power_off(default=False)
+            self.command_result.emit("power_output", True, {"enabled": enable})
+        except Exception as e:
+            self.command_result.emit("power_output", False, {"error": str(e)})
 
     @Slot(int, int)
     def _on_read_memory(self, addr: int, size: int) -> None:
-        pass
+        if self._state != _STATE_CONNECTED:
+            self.command_result.emit("read_memory", False, {"error": "未连接"})
+            return
+        try:
+            raw = memory_service.read_memory(self.jlink, addr, size)
+            self.memory_read_finished.emit(addr, bytes(raw))
+        except Exception as e:
+            self._logger.error(f"读内存失败：{e}")
+            self.command_result.emit("read_memory", False, {"error": str(e)})
 
     @Slot(str, int, int)
     def _on_export_firmware(self, path: str, start_addr: int, size: int) -> None:
-        pass
+        if self._state != _STATE_CONNECTED:
+            self.firmware_export_finished.emit(False, "", "未连接")
+            return
+        # 导出期间停 RTT 读循环
+        was_active = self._poll_timer.isActive()
+        self._poll_timer.stop()
+        try:
+            def cb(cur: int, total: int) -> None:
+                self.firmware_export_progress.emit(cur, total)
+            memory_service.export_firmware(self.jlink, path, start_addr, size, cb)
+            self.firmware_export_finished.emit(True, path, "")
+        except Exception as e:
+            self._logger.error(f"导出固件失败：{e}")
+            self.firmware_export_finished.emit(False, path, str(e))
+        finally:
+            if was_active and self._state == _STATE_CONNECTED:
+                self._poll_timer.start()
 
     @Slot(str)
     def _on_start_log(self, log_dir: str) -> None:
-        pass
+        if self._log_file is not None:
+            return
+        try:
+            Path(log_dir).mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self._log_path = str(Path(log_dir) / f"rtt_{stamp}.log")
+            self._log_file = open(self._log_path, "a", encoding="utf-8", buffering=1)
+            self.command_result.emit("log_recording", True, {"path": self._log_path})
+        except Exception as e:
+            self._logger.error(f"开始日志记录失败：{e}")
+            self.command_result.emit("log_recording", False, {"error": str(e)})
 
     @Slot()
     def _on_stop_log(self) -> None:
-        pass
+        self._close_log_file()
+        self.command_result.emit("log_recording", True, {"stopped": True})
 
     def _close_log_file(self) -> None:
         if self._log_file is not None:
