@@ -108,6 +108,32 @@ class RTTMonitorPage(QWidget):
         ctrl.addStretch(1)
         root.addLayout(ctrl)
 
+        # ---- 设备信息折叠组（用 QGroupBox.setCheckable 实现简易折叠）----
+        from PySide6.QtWidgets import QGroupBox, QGridLayout
+        self.gb_info = QGroupBox("设备信息", self)
+        self.gb_info.setCheckable(True)
+        self.gb_info.setChecked(False)
+        info_grid = QGridLayout(self.gb_info)
+        self._info_labels: dict[str, QLabel] = {}
+        rows = [
+            ("固件版本", "jlink_firmware"),
+            ("硬件版本", "jlink_hardware"),
+            ("序列号", "jlink_serial"),
+            ("核心名称", "core_name"),
+            ("核心 ID", "core_id"),
+            ("CPU 类型", "core_cpu"),
+            ("目标设备", "target_device"),
+            ("接口", "interface"),
+            ("速度 (kHz)", "speed_khz"),
+        ]
+        for i, (text, key) in enumerate(rows):
+            r, c = divmod(i, 3)
+            info_grid.addWidget(QLabel(f"{text}:"), r, c * 2)
+            lbl = QLabel("-")
+            self._info_labels[key] = lbl
+            info_grid.addWidget(lbl, r, c * 2 + 1)
+        root.addWidget(self.gb_info)
+
         # ---- 选项栏 ----
         opt = QHBoxLayout()
         self.chk_auto_scroll = CheckBox("自动滚动")
@@ -133,6 +159,24 @@ class RTTMonitorPage(QWidget):
         self.display.setMaximumBlockCount(self._cfg.get("max_display_lines"))
         self.display.setLineWrapMode(QPlainTextEdit.NoWrap)
         root.addWidget(self.display, 1)
+
+        # ---- 搜索栏 ----
+        try:
+            from qfluentwidgets import SearchLineEdit
+            self.le_search = SearchLineEdit(self)
+        except (ImportError, AttributeError):
+            from PySide6.QtWidgets import QLineEdit
+            self.le_search = QLineEdit(self)
+        srch = QHBoxLayout()
+        self.le_search.setPlaceholderText("搜索日志…")
+        self.btn_prev = PushButton("↑", self)
+        self.btn_next = PushButton("↓", self)
+        self.lbl_match = QLabel("0/0")
+        srch.addWidget(self.le_search, 1)
+        srch.addWidget(self.btn_prev)
+        srch.addWidget(self.btn_next)
+        srch.addWidget(self.lbl_match)
+        root.addLayout(srch)
 
         # ---- 发送栏 ----
         send = QHBoxLayout()
@@ -166,6 +210,20 @@ class RTTMonitorPage(QWidget):
         self._worker.connection_state_changed.connect(self._on_state_changed)
 
         self._cfg.font_changed.connect(self._apply_font)
+
+        # 日志记录
+        self.chk_log_rec.toggled.connect(self._on_log_recording_toggled)
+        # 保存当前
+        self.btn_save.clicked.connect(self._on_save_clicked)
+        # 搜索
+        self.btn_prev.clicked.connect(lambda: self._do_search(backward=True))
+        self.btn_next.clicked.connect(lambda: self._do_search(backward=False))
+        self.le_search.returnPressed.connect(lambda: self._do_search(backward=False))
+        self.le_search.textChanged.connect(self._update_match_count)
+
+        # 命令结果（错误提示）
+        self._worker.command_result.connect(self._on_command_result)
+        self._worker.log_message.connect(self._on_log_message)
 
     # ------------------------------------------------------------------
     # 槽函数
@@ -205,11 +263,18 @@ class RTTMonitorPage(QWidget):
         hist.append(text)
         self._cfg.set("send_history", hist)
 
-    def _on_state_changed(self, connected: bool, _info: dict) -> None:
+    def _on_state_changed(self, connected: bool, info: dict) -> None:
         self.btn_connect.setText("断开" if connected else "连接")
         self.btn_reset.setEnabled(connected)
         self.btn_send.setEnabled(connected)
         self.chk_power.setEnabled(connected)
+        if connected:
+            for key, lbl in self._info_labels.items():
+                lbl.setText(str(info.get(key, "-")))
+            self.gb_info.setChecked(True)
+        else:
+            for lbl in self._info_labels.values():
+                lbl.setText("-")
 
     def _on_rtt_data(self, text: str) -> None:
         # 自动滚动判断必须在插入文本前
@@ -243,3 +308,65 @@ class RTTMonitorPage(QWidget):
             font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
             font.setPointSize(size)
         self.display.setFont(font)
+
+    # ------------------------------------------------------------------
+    # 日志记录 / 保存当前 / 搜索 / 错误提示
+    # ------------------------------------------------------------------
+    def _on_log_recording_toggled(self, checked: bool) -> None:
+        if checked:
+            from core.logger import get_log_dir
+            log_dir = self._cfg.get("log_dir") or str(get_log_dir())
+            self._worker.start_log_recording_requested.emit(log_dir)
+        else:
+            self._worker.stop_log_recording_requested.emit()
+
+    def _on_save_clicked(self) -> None:
+        from datetime import datetime
+        from pathlib import Path
+        from PySide6.QtWidgets import QFileDialog
+        default_name = f"rtt_snapshot_{datetime.now():%Y%m%d_%H%M%S}.log"
+        path, _ = QFileDialog.getSaveFileName(self, "保存当前显示", default_name, "Log files (*.log);;All files (*)")
+        if not path:
+            return
+        try:
+            Path(path).write_text(self.display.toPlainText(), encoding="utf-8")
+            InfoBar.success("已保存", path, parent=self,
+                            position=InfoBarPosition.TOP, duration=2000)
+        except Exception as e:
+            InfoBar.error("保存失败", str(e), parent=self,
+                          position=InfoBarPosition.TOP, duration=3000)
+
+    def _do_search(self, backward: bool) -> None:
+        text = self.le_search.text()
+        if not text:
+            return
+        from PySide6.QtGui import QTextDocument
+        flags = QTextDocument.FindFlag(0)
+        if backward:
+            flags |= QTextDocument.FindBackward
+        if not self.display.find(text, flags):
+            # 回卷
+            cursor = self.display.textCursor()
+            cursor.movePosition(QTextCursor.End if backward else QTextCursor.Start)
+            self.display.setTextCursor(cursor)
+            self.display.find(text, flags)
+
+    def _update_match_count(self, text: str) -> None:
+        if not text:
+            self.lbl_match.setText("0/0")
+            return
+        # 简单计数
+        cnt = self.display.toPlainText().count(text)
+        self.lbl_match.setText(f"-/{cnt}")
+
+    def _on_command_result(self, cmd: str, ok: bool, payload: dict) -> None:
+        if ok:
+            return
+        err = payload.get("error", "未知错误")
+        InfoBar.warning(cmd, err, parent=self,
+                        position=InfoBarPosition.TOP, duration=3000)
+
+    def _on_log_message(self, level: str, msg: str) -> None:
+        if level == "error":
+            InfoBar.error("错误", msg, parent=self,
+                          position=InfoBarPosition.TOP, duration=3000)
