@@ -90,8 +90,13 @@ class ConfigService(QObject):
         if not isinstance(disk, dict):
             return
         for key, default in self.DEFAULTS.items():
-            if key in disk and isinstance(disk[key], type(default)):
-                self._data[key] = disk[key]
+            if key not in disk:
+                continue
+            v = disk[key]
+            expected = type(default)
+            if not isinstance(v, expected) or (expected is int and isinstance(v, bool)):
+                continue
+            self._data[key] = v
 
     def get(self, key: str) -> Any:
         return self._data.get(key, self.DEFAULTS.get(key))
@@ -101,7 +106,8 @@ class ConfigService(QObject):
             self._logger.warning(f"忽略未知偏好键：{key}")
             return
         expected = type(self.DEFAULTS[key])
-        if not isinstance(value, expected):
+        # bool/int 隔离：isinstance(True, int) == True 是 Python 历史负债
+        if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
             self._logger.warning(
                 f"偏好 {key} 类型不匹配，期望 {expected.__name__}，收到 {type(value).__name__}"
             )
@@ -109,11 +115,12 @@ class ConfigService(QObject):
         if key == "send_history":
             value = [str(x) for x in value][-self.SEND_HISTORY_MAX:]
 
-        changed = self._data.get(key) != value
-        if changed:
-            self._data[key] = value
-            self._dirty = True
-            self._flush_timer.start()
+        if self._data.get(key) == value:
+            return  # 值未变：什么都不做（既不写盘也不发信号，避免双向绑定无限递归）
+
+        self._data[key] = value
+        self._dirty = True
+        self._flush_timer.start()
 
         if key == "theme":
             self.theme_changed.emit(value)

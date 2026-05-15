@@ -42,13 +42,13 @@ def test_set_emits_signals(cfg, qapp):
     cfg.font_changed.connect(lambda f, s: received.append(("font", f, s)))
 
     cfg.set("theme", "dark")
-    cfg.set("theme_color", "#28afe9")
+    cfg.set("theme_color", "#ff0000")  # 非 DEFAULT 值，确保信号触发
     cfg.set("font_family", "Cascadia Mono")
     cfg.set("font_size", 16)
 
     QCoreApplication.processEvents()
     assert ("theme", "dark") in received
-    assert ("color", "#28afe9") in received
+    assert ("color", "#ff0000") in received
     assert any(r[0] == "font" for r in received)
 
 
@@ -95,6 +95,11 @@ def test_reload_from_disk(cfg, qapp, tmp_path):
     cfg2 = ConfigService(bundled_config_path=cfg._bundled_path, throttle_ms=50)
     assert cfg2.get("theme") == "dark"
     assert cfg2.get("target_mcu") == "STM32H750VB"
+
+
+def test_bool_not_accepted_as_int(cfg, qapp):
+    cfg.set("speed_khz", True)
+    assert cfg.get("speed_khz") == 4000  # 未被修改，保持 default
 
 
 def test_atomic_write_on_crash(cfg, qapp, tmp_path, monkeypatch):
