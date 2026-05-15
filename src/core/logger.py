@@ -14,7 +14,6 @@ from pathlib import Path
 _LOGGER_NAME = "jlink_rtt_viewer"
 _FORMAT = "%(asctime)s %(levelname)-5s %(name)s | %(message)s"
 
-_initialized: bool = False
 _logger: logging.Logger | None = None
 _log_dir_override: Path | None = None  # 测试注入用
 
@@ -30,12 +29,9 @@ def get_log_dir() -> Path:
 
 def get_logger() -> logging.Logger:
     """获取应用全局 logger（单例）。"""
-    global _initialized, _logger
-    if _initialized and _logger is not None:
+    global _logger
+    if _logger is not None:
         return _logger
-
-    log_dir = get_log_dir()
-    log_dir.mkdir(parents=True, exist_ok=True)
 
     logger = logging.getLogger(_LOGGER_NAME)
     logger.setLevel(logging.DEBUG)
@@ -47,16 +43,21 @@ def get_logger() -> logging.Logger:
     console.setFormatter(formatter)
     logger.addHandler(console)
 
-    file_handler = RotatingFileHandler(
-        log_dir / "app.log",
-        maxBytes=5 * 1024 * 1024,
-        backupCount=3,
-        encoding="utf-8",
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+    # 尝试添加文件 handler，失败则只保留 console
+    try:
+        log_dir = get_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            log_dir / "app.log",
+            maxBytes=5 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except Exception as e:
+        logger.warning(f"无法创建日志文件 handler，将仅输出到控制台：{e}")
 
-    _initialized = True
     _logger = logger
     return logger
