@@ -10,7 +10,6 @@ python -m nuitka ^
     --include-package=pylink ^
     --include-package-data=pylink ^
     --include-data-files=src\config.json=config.json ^
-    --include-data-dir=img=img ^
     --output-dir=build ^
     --output-filename=JLinkRTTViewer.exe ^
     src\main.py

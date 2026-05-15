@@ -36,6 +36,7 @@ class JLinkWorker(QThread):
     set_rtt_channel_requested = Signal(int)
     set_pause_receive_requested = Signal(bool)
     set_power_output_requested = Signal(bool)
+    set_poll_interval_requested = Signal(int)        # poll timer interval in ms
     read_memory_requested = Signal(int, int)
     export_firmware_requested = Signal(str, int, int)
     start_log_recording_requested = Signal(str)
@@ -86,6 +87,7 @@ class JLinkWorker(QThread):
         self.set_rtt_channel_requested.connect(self._on_set_channel, type=Qt.ConnectionType.QueuedConnection)
         self.set_pause_receive_requested.connect(self._on_set_paused, type=Qt.ConnectionType.QueuedConnection)
         self.set_power_output_requested.connect(self._on_set_power, type=Qt.ConnectionType.QueuedConnection)
+        self.set_poll_interval_requested.connect(self._on_set_poll_interval, type=Qt.ConnectionType.QueuedConnection)
         self.read_memory_requested.connect(self._on_read_memory, type=Qt.ConnectionType.QueuedConnection)
         self.export_firmware_requested.connect(self._on_export_firmware, type=Qt.ConnectionType.QueuedConnection)
         self.start_log_recording_requested.connect(self._on_start_log, type=Qt.ConnectionType.QueuedConnection)
@@ -240,6 +242,14 @@ class JLinkWorker(QThread):
     @Slot(bool)
     def _on_set_paused(self, paused: bool) -> None:
         self._paused = paused
+
+    @Slot(int)
+    def _on_set_poll_interval(self, ms: int) -> None:
+        if ms < 1:
+            ms = 20  # 防御性下限
+        if self._poll_timer is not None:
+            self._poll_timer.setInterval(ms)
+        self.log_message.emit("info", f"RTT 轮询间隔设为 {ms} ms")
 
     @Slot(bool)
     def _on_set_power(self, enable: bool) -> None:

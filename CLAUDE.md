@@ -171,3 +171,7 @@ if at_bottom and self.chk_auto_scroll.isChecked():
 参考：`build_nuitka.bat`
 
 ---
+
+## TODO：发版前敲定作者信息
+
+`src/ui/about_page.py` 顶部的 `AUTHOR_NAME = "待定"` 和 `AUTHOR_GITHUB = "https://github.com/"` 在 0.1.0 发版前需要替换为真实信息。

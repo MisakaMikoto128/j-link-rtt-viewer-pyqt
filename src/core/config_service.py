@@ -22,6 +22,8 @@ class ConfigService(QObject):
     theme_changed = Signal(str)             # "light" / "dark" / "auto"
     theme_color_changed = Signal(str)       # hex e.g. "#28afe9"
     font_changed = Signal(str, int)         # (family, size)
+    max_display_lines_changed = Signal(int) # new max block count for QPlainTextEdit
+    rtt_poll_interval_changed = Signal(int) # poll timer interval in ms
 
     DEFAULTS: dict[str, Any] = {
         "target_mcu": "",
@@ -128,6 +130,10 @@ class ConfigService(QObject):
             self.theme_color_changed.emit(value)
         elif key in ("font_family", "font_size"):
             self.font_changed.emit(self._data["font_family"], self._data["font_size"])
+        elif key == "max_display_lines":
+            self.max_display_lines_changed.emit(value)
+        elif key == "rx_timeout_ms":
+            self.rtt_poll_interval_changed.emit(value)
 
     def flush(self) -> None:
         self._flush_timer.stop()

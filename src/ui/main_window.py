@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 
-from PySide6.QtCore import QByteArray
+from PySide6.QtCore import QByteArray, QTimer
 from PySide6.QtGui import QCloseEvent
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, NavigationItemPosition
@@ -45,7 +45,14 @@ class MainWindow(FluentWindow):
             self.about_page, FIF.INFO, "关于", NavigationItemPosition.BOTTOM
         )
 
-        # 4. 窗口属性
+        # 4. 把 ConfigService 的 rtt_poll_interval_changed 接到 worker
+        self._cfg.rtt_poll_interval_changed.connect(self.worker.set_poll_interval_requested)
+        # 启动时用当前值初始化 worker 的 poll interval
+        QTimer.singleShot(500, lambda: self.worker.set_poll_interval_requested.emit(
+            max(20, self._cfg.get("rx_timeout_ms") or 20)
+        ))
+
+        # 5. 窗口属性
         self.setWindowTitle("J-Link RTT Viewer")
         self._restore_geometry()
 

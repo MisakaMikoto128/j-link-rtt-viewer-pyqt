@@ -119,11 +119,11 @@ class SettingsPage(QWidget):
         rtt_lay.addWidget(_SettingRow("显示区最大行数", self.sp_max_lines))
 
         self.sp_rx_to = SpinBox(self)
-        self.sp_rx_to.setRange(0, 5000)
+        self.sp_rx_to.setRange(5, 1000)   # 5ms - 1s
         self.sp_rx_to.setSuffix(" ms")
-        self.sp_rx_to.setValue(self._cfg.get("rx_timeout_ms"))
+        self.sp_rx_to.setValue(max(20, self._cfg.get("rx_timeout_ms") or 20))
         self.sp_rx_to.valueChanged.connect(lambda v: self._cfg.set("rx_timeout_ms", v))
-        rtt_lay.addWidget(_SettingRow("Rx Timeout", self.sp_rx_to))
+        rtt_lay.addWidget(_SettingRow("RTT 轮询间隔", self.sp_rx_to))
 
         log_row = QHBoxLayout()
         log_row.addWidget(BodyLabel("日志保存目录"), 1)

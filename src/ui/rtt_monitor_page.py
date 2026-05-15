@@ -4,7 +4,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QFontDatabase, QTextCharFormat, QTextCursor, QColor
 from PySide6.QtWidgets import (
-    QCheckBox,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -210,6 +209,7 @@ class RTTMonitorPage(QWidget):
         self._worker.connection_state_changed.connect(self._on_state_changed)
 
         self._cfg.font_changed.connect(self._apply_font)
+        self._cfg.max_display_lines_changed.connect(self.display.setMaximumBlockCount)
 
         # 日志记录
         self.chk_log_rec.toggled.connect(self._on_log_recording_toggled)
