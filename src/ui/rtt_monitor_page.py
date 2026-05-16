@@ -598,7 +598,9 @@ class RTTMonitorPage(QWidget):
             # 自动重连：reset_mode=auto_reconnect 且用户点了重置 → 触发重连
             if self._pending_auto_reconnect:
                 self._pending_auto_reconnect = False
-                self._reconnect_with_saved_params()
+                # 100ms 缓冲：让 J-Link DLL / pylink 完成内部清理（disconnect 后
+                # 紧跟着 connect 偶尔会撞到 close 还没完成的状态而连接失败）
+                QTimer.singleShot(100, self._reconnect_with_saved_params)
 
     def _set_connected_ui(self, info: dict) -> None:
         self.btn_connect.setEnabled(True)
