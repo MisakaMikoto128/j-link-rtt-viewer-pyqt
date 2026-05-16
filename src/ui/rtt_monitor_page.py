@@ -361,9 +361,8 @@ class RTTMonitorPage(QWidget):
         self.chk_power.setEnabled(True)
         for key, lbl in self._info_labels.items():
             lbl.setText(str(info.get(key, "-")))
-        # 连接成功后自动展开设备信息卡片
-        if not self._info_container.isVisible():
-            self._set_info_expanded(True)
+        # 设备信息卡片保持当前折叠/展开状态，不自动展开
+        # （用户可以点击右上 ⌄ 按钮手动展开）
 
     def _set_disconnected_ui(self) -> None:
         self.btn_connect.setEnabled(True)
