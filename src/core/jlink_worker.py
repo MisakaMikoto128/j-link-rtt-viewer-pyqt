@@ -455,6 +455,13 @@ class JLinkWorker(QObject):
     def _on_stop(self) -> None:
         self._do_disconnect()
         # _do_disconnect 已经停了读线程
+        # 在 worker 线程内显式 stop + deleteLater drain timer，避免应用退出时
+        # 主线程 GC 销毁 timer 触发 cross-thread killTimer 警告
+        # （timer 的 thread affinity 是 worker_thread）
+        if self._rtt_drain_timer is not None:
+            self._rtt_drain_timer.stop()
+            self._rtt_drain_timer.deleteLater()
+            self._rtt_drain_timer = None
         # self.thread() 返回 worker 被 moveTo 的那个 QThread
         t = self.thread()
         if t is not None:

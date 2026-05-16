@@ -255,6 +255,46 @@ def _drain_rtt_buffer(self):
 
 ---
 
+## worker 线程内的 QTimer/QObject 退出前必须自己 stop + deleteLater
+
+**现象**：应用正常退出（连接 → 断开 → 关窗口），所有功能都跑完了 `rc=0`，但控制台尾巴上跟两条警告：
+```
+QObject::killTimer: Timers cannot be stopped from another thread
+QObject::~QObject: Timers cannot be stopped from another thread
+```
+
+**原因**：worker 用 `moveToThread` 范式后，在 `initialize()` 内创建的 `QTimer()`（无 parent）thread affinity 跟 worker_thread。退出流程：
+1. 主线程 `closeEvent` emit `stop_requested`
+2. worker `_on_stop` 在 worker 线程跑：`_do_disconnect` → `thread.quit()`
+3. 主线程 `thread.wait()` 返回 — worker_thread 已结束
+4. **Python GC 在主线程回收 `JLinkWorker` 实例**，间接析构 `_rtt_drain_timer`
+5. QTimer 析构 → `killTimer()` → 当前是主线程，但 timer.thread() = 已结束的 worker_thread → 警告
+
+只是噪音，功能没受影响，但应该处理掉。
+
+**处理**：worker `_on_stop` 内在 `thread().quit()` **之前**显式 stop + deleteLater 所有 worker 线程内创建的 QObject（QTimer 等）：
+
+```python
+@Slot()
+def _on_stop(self) -> None:
+    self._do_disconnect()
+    if self._rtt_drain_timer is not None:
+        self._rtt_drain_timer.stop()
+        self._rtt_drain_timer.deleteLater()
+        self._rtt_drain_timer = None
+    t = self.thread()
+    if t is not None:
+        t.quit()
+```
+
+`deleteLater()` 把删除事件 post 到 worker_thread 的事件队列。`quit()` 之后 worker_thread 的事件循环在退出前会处理这个 deleteLater event，timer 在自己的线程内被销毁。等主线程 GC 回收 worker 时 timer 已经是 None，不再触发 cross-thread killTimer。
+
+**不要尝试给 timer 设 `QTimer(self)` 解决**：worker 已经在 worker_thread，timer parent=self 看似让父子链一起销毁，但 worker 实例的 Python 引用还是从主线程释放，C++ 析构链最终还是在主线程跑，警告不消。**只有"worker 线程内主动 deleteLater"** 才真正干净。
+
+参考：`src/core/jlink_worker.py` `_on_stop`
+
+---
+
 ## PySide6 跨线程 Signal 不要传 dict 参数
 
 **现象**：worker 在 `_do_disconnect` 末尾 `self.connection_state_changed.emit(False, {})` —— 紧接着的 `self._logger.info("disconnect: connection_state_changed 已 emit")` **没有**打印到日志，同时控制台输出 `QObject::setParent: Cannot set parent, new parent is in a different thread` 警告，主线程随后卡死。`Signal(bool, dict)` 这种带 dict 参数的信号，**在 worker 线程跨线程 emit 给主线程槽时**触发 PySide6 内部 dict marshalling 路径，该路径会做一次跨线程 setParent 操作（推测是把 dict 封进 QVariant 时连带的某个临时 QObject 被 reparent），**整个 emit 调用阻塞 worker 线程，并污染主线程事件循环**。
