@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QFontDatabase, QTextCharFormat, QTextCursor, QColor
+from PySide6.QtGui import QFont, QFontDatabase, QTextCharFormat, QTextCursor, QColor, QWheelEvent
 from PySide6.QtWidgets import (
     QCompleter,
     QGridLayout,
@@ -31,6 +31,32 @@ from qfluentwidgets import (
 from core.ansi_parser import AnsiAttrs, parse_ansi
 from core.config_service import ConfigService
 from core.jlink_worker import JLinkWorker
+
+
+class _ZoomablePlainTextEdit(PlainTextEdit):
+    """fluent PlainTextEdit + Ctrl+滚轮缩放走 ConfigService。
+
+    QPlainTextEdit 自带的 zoomIn/zoomOut 改的是 widget 自身 font，
+    会被下次 _apply_font(cfg) 重设回 cfg 字号 → 看上去"只能缩小"。
+    改为：Ctrl+wheel 直接 cfg.set("font_size", new)，触发 font_changed
+    → _apply_font 重新设置 → 双向缩放 + 持久化。
+    """
+    def __init__(self, cfg, parent=None):
+        super().__init__(parent)
+        self._cfg = cfg
+
+    def wheelEvent(self, e: QWheelEvent) -> None:  # type: ignore[override]
+        if e.modifiers() & Qt.ControlModifier:
+            delta = e.angleDelta().y()
+            if delta != 0:
+                cur = int(self._cfg.get("font_size"))
+                step = 1 if delta > 0 else -1
+                new = max(8, min(32, cur + step))
+                if new != cur:
+                    self._cfg.set("font_size", new)
+            e.accept()
+            return
+        super().wheelEvent(e)
 
 
 _ANSI_COLOR_MAP = {
@@ -192,10 +218,12 @@ class RTTMonitorPage(QWidget):
         root.addLayout(opt)
 
         # ---- 显示区（qfluentwidgets PlainTextEdit 自动适应主题）----
-        self.display = PlainTextEdit(self)
+        # 用 _ZoomablePlainTextEdit 让 Ctrl+滚轮走 cfg 走 font_changed，双向缩放
+        self.display = _ZoomablePlainTextEdit(self._cfg, self)
         self.display.setReadOnly(True)
         self.display.setMaximumBlockCount(self._cfg.get("max_display_lines"))
-        self.display.setLineWrapMode(PlainTextEdit.NoWrap)
+        # 固定宽度按窗口宽度换行（超过窗宽自动 wrap，便于阅读长行日志）
+        self.display.setLineWrapMode(PlainTextEdit.WidgetWidth)
         root.addWidget(self.display, 1)
 
         # ---- 搜索栏 ----
@@ -375,9 +403,10 @@ class RTTMonitorPage(QWidget):
         if attrs.bg:
             fmt.setBackground(QColor(_ANSI_COLOR_MAP.get(attrs.bg, "#222222")))
         if attrs.bold:
-            f = fmt.font()
-            f.setBold(True)
-            fmt.setFont(f)
+            # 用 setFontWeight 而非 setFont(fmt.font())——后者会把字号也设回
+            # QTextCharFormat 默认值（通常远小于 widget 字号），导致 bold
+            # 段落字号被缩水。setFontWeight 只改 weight，字号继承 widget。
+            fmt.setFontWeight(QFont.Bold)
         return fmt
 
     def _apply_font(self, family: str, size: int) -> None:
