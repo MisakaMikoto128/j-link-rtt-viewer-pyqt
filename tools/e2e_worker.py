@@ -47,7 +47,7 @@ def main() -> int:
     log_msgs: list[tuple[str, str]] = []
 
     worker.rtt_data_received.connect(lambda s: received_chunks.append(s))
-    worker.connection_state_changed.connect(lambda c, info: states.append((c, dict(info))))
+    worker.connection_state_changed.connect(lambda c: states.append((c, worker.get_device_info())))
     worker.log_message.connect(lambda lvl, msg: log_msgs.append((lvl, msg)))
 
     # === 3. emit connect_requested ===

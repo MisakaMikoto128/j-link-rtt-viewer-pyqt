@@ -68,7 +68,7 @@ def test_connect_sequence(worker):
     jl.connected.return_value = True
 
     states = []
-    w.connection_state_changed.connect(lambda c, info: states.append((c, dict(info))))
+    w.connection_state_changed.connect(lambda c: states.append(c))
 
     w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
     _drain_events(1.0)
@@ -81,7 +81,12 @@ def test_connect_sequence(worker):
     assert jl.connect.call_args[0][0] == "STM32G070CB"
     assert jl.rtt_start.called
 
-    assert any(c is True for c, _ in states)
+    assert True in states
+    # 信号不再传 dict，设备信息走同步方法
+    info = w.get_device_info()
+    assert info.get("target_device") == "STM32G070CB"
+    assert info.get("interface") == "SWD"
+    assert info.get("speed_khz") == 4000
     assert w.state_name() == "CONNECTED"
 
 
@@ -244,7 +249,7 @@ def test_send_data_hex(worker):
 def test_send_data_when_not_connected(worker):
     w, jl = worker
     results = []
-    w.command_result.connect(lambda c, ok, p: results.append((c, ok, dict(p))))
+    w.command_result.connect(lambda c, ok, msg: results.append((c, ok, msg)))
 
     w.send_data_requested.emit("hello", False)
     _drain_events(0.3)

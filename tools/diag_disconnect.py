@@ -42,7 +42,7 @@ def main() -> int:
         nonlocal chunks_count
         chunks_count += 1
 
-    def on_state(connected: bool, info: dict) -> None:
+    def on_state(connected: bool) -> None:
         state_log.append(f"t={time.perf_counter()-t_cycle:.3f}s connected={connected}")
 
     def on_log(level: str, msg: str) -> None:

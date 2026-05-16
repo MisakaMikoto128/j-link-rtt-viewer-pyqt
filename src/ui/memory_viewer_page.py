@@ -140,9 +140,7 @@ class MemoryViewerPage(QWidget):
         self.btn_choose.clicked.connect(self._on_choose_path)
         self.btn_export.clicked.connect(self._on_export_clicked)
 
-        self._worker.connection_state_changed.connect(
-            lambda c, _info: self._set_enabled_by_connection(c)
-        )
+        self._worker.connection_state_changed.connect(self._set_enabled_by_connection)
         self._worker.memory_read_finished.connect(self._on_memory_read)
         self._worker.firmware_export_progress.connect(self._on_export_progress)
         self._worker.firmware_export_finished.connect(self._on_export_finished)
@@ -234,7 +232,7 @@ class MemoryViewerPage(QWidget):
             InfoBar.error("导出失败", err, parent=self,
                           position=InfoBarPosition.TOP, duration=4000)
 
-    def _on_command_result(self, cmd: str, ok: bool, payload: dict) -> None:
+    def _on_command_result(self, cmd: str, ok: bool, msg: str) -> None:
         if cmd == "read_memory" and not ok:
-            InfoBar.error("读取失败", payload.get("error", ""), parent=self,
+            InfoBar.error("读取失败", msg or "", parent=self,
                           position=InfoBarPosition.TOP, duration=3000)

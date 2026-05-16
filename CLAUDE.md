@@ -255,31 +255,48 @@ def _drain_rtt_buffer(self):
 
 ---
 
-## UI 状态切换不要依赖跨线程信号 round-trip
+## PySide6 跨线程 Signal 不要传 dict 参数
 
-**现象**：点击"断开"按钮，UI 卡在"断开中…"，永不恢复成"连接"。worker 日志已经打印"已断开 J-Link"（意味着 `connection_state_changed.emit(False, {})` 已发出），同时控制台出现 `QObject::setParent: Cannot set parent, new parent is in a different thread` 警告。重启程序、再连再断，复现稳定。
+**现象**：worker 在 `_do_disconnect` 末尾 `self.connection_state_changed.emit(False, {})` —— 紧接着的 `self._logger.info("disconnect: connection_state_changed 已 emit")` **没有**打印到日志，同时控制台输出 `QObject::setParent: Cannot set parent, new parent is in a different thread` 警告，主线程随后卡死。`Signal(bool, dict)` 这种带 dict 参数的信号，**在 worker 线程跨线程 emit 给主线程槽时**触发 PySide6 内部 dict marshalling 路径，该路径会做一次跨线程 setParent 操作（推测是把 dict 封进 QVariant 时连带的某个临时 QObject 被 reparent），**整个 emit 调用阻塞 worker 线程，并污染主线程事件循环**。
 
-**原因**：UI 点击"断开"后只 `setEnabled(False) + setText("断开中…")` 等 worker 跑完清理后通过 `connection_state_changed` queued signal 回来再把按钮切回"连接"。但跨线程信号 round-trip 不可靠：
-- worker 是 `moveToThread(worker_thread)` 后的 QObject，read 循环是 native `threading.Thread`（不是 QThread）
-- 从 native thread emit 信号、Auto Connection 在 PySide6 上的 sender thread 判定有 edge case
-- 跨线程传 `dict` 参数时 PySide6 的 marshalling 偶发会让 slot 不被调用，但不抛错只默默丢
-- 这条路径上还有 `setParent` 警告，说明确实有跨线程 widget 操作竞争
+参数全部是 `bool/int/str/bytes` 的信号不受影响——只有 `dict`（和大概率 `list` / 自定义 PyObject）会踩。
 
-总之这条路径**不稳定**——任何时候只要 UI 状态切换得**等** worker 回信号才发生，就有卡 UI 的风险。
+**处理**：worker → UI 的跨线程 Signal **一律不传 dict**。两种替代：
 
-**处理**：
-1. **断开按钮立即乐观恢复 UI**：worker 内部 `_do_disconnect()` 对每一步都 try/except + warning，外部看一定"成功"。UI 直接 `_set_disconnected_ui()` 把按钮、reset/send/power、设备信息标签全置回初始态。`worker.disconnect_requested.emit()` 仍然发出，但 UI 不等回信号。
-2. **`_on_state_changed` 拆出 `_set_connected_ui` / `_set_disconnected_ui` 两个方法**，让 worker 回信号时仍能调（幂等，无害）——作为兜底而不是主路径。
-3. **worker → UI 信号显式 `Qt.QueuedConnection`**：
+1. **改 str（推荐复杂结构）**：要传的内容序列化成 str（或拆 plain 字段）。
    ```python
-   self._worker.rtt_data_received.connect(self._on_rtt_data, Qt.QueuedConnection)
-   self._worker.connection_state_changed.connect(self._on_state_changed, Qt.QueuedConnection)
-   self._worker.command_result.connect(self._on_command_result, Qt.QueuedConnection)
-   self._worker.log_message.connect(self._on_log_message, Qt.QueuedConnection)
+   # 原
+   command_result = Signal(str, bool, dict)
+   self.command_result.emit("send_data", False, {"error": str(e)})
+   # 改
+   command_result = Signal(str, bool, str)
+   self.command_result.emit("send_data", False, str(e))
    ```
-   排除 PySide6 在 native thread emit 时误判 sender thread 走 DirectConnection 的可能。这是防御性，但**核心修复**是上面的乐观恢复。
 
-参考：`src/ui/rtt_monitor_page.py` `_on_connect_clicked` / `_set_disconnected_ui` / `_wire_signals`
+2. **不通过 Signal 传，改同步方法 + lock**：UI 在收到信号后主动调 worker 的同步方法取信息。
+   ```python
+   # worker
+   connection_state_changed = Signal(bool)  # 只传 bool
+   self._device_info: dict = {}
+   self._info_lock = threading.Lock()
+   def get_device_info(self) -> dict:
+       with self._info_lock:
+           return dict(self._device_info)
+   # worker 连接成功时
+   with self._info_lock:
+       self._device_info = info
+   self.connection_state_changed.emit(True)
+   # UI
+   def _on_state_changed(self, connected: bool):
+       if connected:
+           info = self._worker.get_device_info()
+           self._set_connected_ui(info)
+   ```
+   主线程跨线程读 worker 的 attribute 由 GIL + lock 保证安全，**不走 Qt 信号 marshalling**。
+
+附带规则：worker → UI 跨线程信号一律显式 `Qt.QueuedConnection`，避免 PySide6 在 native thread emit 场景下误判 sender thread。
+
+参考：`src/core/jlink_worker.py` `connection_state_changed` / `command_result` / `get_device_info`，`src/ui/rtt_monitor_page.py` `_on_state_changed` / `_on_command_result`
 
 ---
 

@@ -58,9 +58,14 @@ class JLinkWorker(QObject):
 
     # ---- 输出信号 ----
     rtt_data_received = Signal(str)
-    connection_state_changed = Signal(bool, dict)
+    # 注意：connection_state_changed 不传 dict——PySide6 跨线程 emit dict
+    # 会触发 setParent cross-thread 警告并卡 worker 线程。设备信息改用
+    # get_device_info() 同步方法（lock 保护）让 UI 主动取。
+    connection_state_changed = Signal(bool)
     log_message = Signal(str, str)
-    command_result = Signal(str, bool, dict)
+    # command_result：dict → str（msg/error）。理由同 connection_state_changed：
+    # 跨线程 emit dict 在 PySide6 上不可靠，会触发 setParent cross-thread 警告并卡线程。
+    command_result = Signal(str, bool, str)
     memory_read_finished = Signal(int, bytes)
     firmware_export_progress = Signal(int, int)
     firmware_export_finished = Signal(bool, str, str)
@@ -89,6 +94,11 @@ class JLinkWorker(QObject):
         self._rtt_drain_buffer: list[str] = []
         self._rtt_drain_lock = threading.Lock()
         self._rtt_drain_timer: QTimer | None = None
+
+        # 设备信息：worker 端用 lock 保护，UI 通过 get_device_info() 同步读。
+        # 不通过信号传 dict——dict 跨线程 marshalling 在 PySide6 上会卡 worker 线程。
+        self._device_info: dict = {}
+        self._info_lock = threading.Lock()
 
     # ============================================================
     # worker 线程初始化（由外部 QThread.started 触发）
@@ -129,6 +139,14 @@ class JLinkWorker(QObject):
         """状态名（线程安全：Python 单赋值原子）。"""
         return self._state
 
+    def get_device_info(self) -> dict:
+        """同步取设备信息副本。由 UI 主线程在 _on_state_changed(True) 时调用。
+
+        用 lock 而非跨线程信号传 dict——避免 PySide6 setParent cross-thread 警告。
+        """
+        with self._info_lock:
+            return dict(self._device_info)
+
     # ============================================================
     # 连接 / 断开
     # ============================================================
@@ -160,8 +178,10 @@ class JLinkWorker(QObject):
             if self.jlink.connected():
                 self._state = _STATE_CONNECTED
                 info = self._collect_device_info(target, iface, speed)
+                with self._info_lock:
+                    self._device_info = info
                 self._logger.info(f"已连接 {target} ({iface} {speed}kHz, RTT ch{channel})")
-                self.connection_state_changed.emit(True, info)
+                self.connection_state_changed.emit(True)
                 # 启动读线程
                 self._stop_read = False
                 self._read_thread = threading.Thread(
@@ -221,9 +241,11 @@ class JLinkWorker(QObject):
             self._logger.warning(f"close 失败：{e}")
 
         self._state = _STATE_IDLE
+        with self._info_lock:
+            self._device_info = {}
         if was_active:
             self._logger.info("已断开 J-Link")
-            self.connection_state_changed.emit(False, {})
+            self.connection_state_changed.emit(False)
             self._logger.info("disconnect: connection_state_changed 已 emit")
 
     def _transition_to_idle(self) -> None:
@@ -297,7 +319,7 @@ class JLinkWorker(QObject):
     @Slot(str, bool)
     def _on_send_data(self, data: str, is_hex: bool) -> None:
         if self._state != _STATE_CONNECTED:
-            self.command_result.emit("send_data", False, {"error": "未连接"})
+            self.command_result.emit("send_data", False, "未连接")
             return
         try:
             if is_hex:
@@ -309,23 +331,23 @@ class JLinkWorker(QObject):
                 payload = data.encode("utf-8")
             written = self.jlink.rtt_write(self._channel, payload)
             ok = written == len(payload)
-            self.command_result.emit("send_data", ok, {"bytes": written})
+            self.command_result.emit("send_data", ok, "" if ok else "rtt_write 写入不完整")
         except Exception as e:
             self._logger.error(f"发送数据失败：{e}")
-            self.command_result.emit("send_data", False, {"error": str(e)})
+            self.command_result.emit("send_data", False, str(e))
 
     @Slot()
     def _on_reset_target(self) -> None:
         if self._state != _STATE_CONNECTED:
-            self.command_result.emit("reset", False, {"error": "未连接"})
+            self.command_result.emit("reset", False, "未连接")
             return
         try:
             self.jlink.reset(1, False)
-            self.command_result.emit("reset", True, {})
+            self.command_result.emit("reset", True, "")
             self.log_message.emit("info", "目标设备已重置")
         except Exception as e:
             self._logger.error(f"重置失败：{e}")
-            self.command_result.emit("reset", False, {"error": str(e)})
+            self.command_result.emit("reset", False, str(e))
 
     @Slot(int)
     def _on_set_channel(self, channel: int) -> None:
@@ -346,29 +368,29 @@ class JLinkWorker(QObject):
     @Slot(bool)
     def _on_set_power(self, enable: bool) -> None:
         if self._state != _STATE_CONNECTED:
-            self.command_result.emit("power_output", False, {"error": "未连接"})
+            self.command_result.emit("power_output", False, "未连接")
             return
         try:
             if enable:
                 self.jlink.power_on(default=False)
             else:
                 self.jlink.power_off(default=False)
-            self.command_result.emit("power_output", True, {"enabled": enable})
+            self.command_result.emit("power_output", True, "")
         except Exception as e:
             self._logger.error(f"控制电源失败：{e}")
-            self.command_result.emit("power_output", False, {"error": str(e)})
+            self.command_result.emit("power_output", False, str(e))
 
     @Slot(int, int)
     def _on_read_memory(self, addr: int, size: int) -> None:
         if self._state != _STATE_CONNECTED:
-            self.command_result.emit("read_memory", False, {"error": "未连接"})
+            self.command_result.emit("read_memory", False, "未连接")
             return
         try:
             raw = memory_service.read_memory(self.jlink, addr, size)
             self.memory_read_finished.emit(addr, bytes(raw))
         except Exception as e:
             self._logger.error(f"读内存失败：{e}")
-            self.command_result.emit("read_memory", False, {"error": str(e)})
+            self.command_result.emit("read_memory", False, str(e))
 
     @Slot(str, int, int)
     def _on_export_firmware(self, path: str, start_addr: int, size: int) -> None:
@@ -398,15 +420,15 @@ class JLinkWorker(QObject):
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self._log_path = str(Path(log_dir) / f"rtt_{stamp}.log")
             self._log_file = open(self._log_path, "a", encoding="utf-8", buffering=1)
-            self.command_result.emit("log_recording", True, {"path": self._log_path})
+            self.command_result.emit("log_recording", True, "")
         except Exception as e:
             self._logger.error(f"开始日志记录失败：{e}")
-            self.command_result.emit("log_recording", False, {"error": str(e)})
+            self.command_result.emit("log_recording", False, str(e))
 
     @Slot()
     def _on_stop_log(self) -> None:
         self._close_log_file()
-        self.command_result.emit("log_recording", True, {"stopped": True})
+        self.command_result.emit("log_recording", True, "")
 
     def _close_log_file(self) -> None:
         if self._log_file is not None:

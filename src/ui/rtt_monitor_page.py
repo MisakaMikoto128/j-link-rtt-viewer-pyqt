@@ -317,8 +317,10 @@ class RTTMonitorPage(QWidget):
         hist.append(text)
         self._cfg.set("send_history", hist)
 
-    def _on_state_changed(self, connected: bool, info: dict) -> None:
+    def _on_state_changed(self, connected: bool) -> None:
         if connected:
+            # 同步从 worker 取 device_info（lock 保护，不走跨线程 dict signal）
+            info = self._worker.get_device_info()
             self._set_connected_ui(info)
         else:
             self._set_disconnected_ui()
@@ -430,11 +432,10 @@ class RTTMonitorPage(QWidget):
         cnt = self.display.toPlainText().count(text)
         self.lbl_match.setText(f"-/{cnt}")
 
-    def _on_command_result(self, cmd: str, ok: bool, payload: dict) -> None:
+    def _on_command_result(self, cmd: str, ok: bool, msg: str) -> None:
         if ok:
             return
-        err = payload.get("error", "未知错误")
-        InfoBar.warning(cmd, err, parent=self,
+        InfoBar.warning(cmd, msg or "未知错误", parent=self,
                         position=InfoBarPosition.TOP, duration=3000)
 
     def _on_log_message(self, level: str, msg: str) -> None:
