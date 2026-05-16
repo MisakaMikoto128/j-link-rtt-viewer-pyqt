@@ -29,8 +29,6 @@ from qfluentwidgets import (
     CardWidget,
     CheckBox,
     ComboBox,
-    InfoBar,
-    InfoBarPosition,
     LineEdit,
     PlainTextEdit,
     PrimaryPushButton,
@@ -42,6 +40,8 @@ from qfluentwidgets import (
 from core.config_service import ConfigService
 from core.jlink_worker import JLinkWorker
 from core.memory_service import format_as_c_array, format_hex_dump, parse_value
+
+from . import _infobar
 
 
 _SIZE_PRESETS = [
@@ -359,19 +359,16 @@ class MemoryViewerPage(QWidget):
 
     def _on_read_clicked(self) -> None:
         if not self._connected:
-            InfoBar.warning("未连接 J-Link", "请先到 RTT 监控页连接 J-Link",
-                            parent=self, position=InfoBarPosition.TOP, duration=2000)
+            _infobar.warn(self, "未连接 J-Link", "请先到 RTT 监控页连接 J-Link")
             return
         try:
             addr = _parse_int(self.le_read_addr.text())
             size = _parse_int(self.le_read_size.text())
         except ValueError as e:
-            InfoBar.warning("地址/大小格式错误", str(e), parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            _infobar.warn(self, "地址/大小格式错误", str(e))
             return
         if size <= 0 or size > 16 * 1024 * 1024:
-            InfoBar.warning("大小越界", "1B - 16MB", parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            _infobar.warn(self, "大小越界", "1B - 16MB")
             return
         self._worker.read_memory_requested.emit(addr, size)
 
@@ -470,13 +467,11 @@ class MemoryViewerPage(QWidget):
         try:
             addr = _parse_int(self.le_goto.text())
         except ValueError as e:
-            InfoBar.warning("地址格式错误", str(e), parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            _infobar.warn(self, "地址格式错误", str(e))
             return
         offset = addr - self._buffer_base
         if offset < 0 or offset >= len(self._buffer):
-            InfoBar.warning("地址越界", "该地址不在已读取的缓冲区内", parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            _infobar.warn(self, "地址越界", "该地址不在已读取的缓冲区内")
             return
         self._select_buffer_range(offset, 1)
 
@@ -486,8 +481,7 @@ class MemoryViewerPage(QWidget):
         try:
             needle = _parse_hex_pattern(self.le_search.text())
         except ValueError as e:
-            InfoBar.warning("Hex 格式错误", str(e), parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            _infobar.warn(self, "Hex 格式错误", str(e))
             return
         # 从当前光标位置之后开始找
         start = self._cursor_byte_offset() + 1
@@ -497,8 +491,7 @@ class MemoryViewerPage(QWidget):
         if idx < 0 and start > 0:
             idx = self._buffer.find(needle, 0)  # 回卷
         if idx < 0:
-            InfoBar.warning("未找到", f"pattern={needle.hex(' ').upper()}", parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            _infobar.warn(self, "未找到", f"pattern={needle.hex(' ').upper()}")
             return
         self._select_buffer_range(idx, len(needle))
 
@@ -527,8 +520,7 @@ class MemoryViewerPage(QWidget):
             return
         sel = self._selected_bytes()
         QGuiApplication.clipboard().setText(sel.hex(" ").upper())
-        InfoBar.success("已复制 Hex", f"{len(sel)} 字节", parent=self,
-                        position=InfoBarPosition.TOP, duration=1500)
+        _infobar.ok(self, "已复制 Hex", f"{len(sel)} 字节", duration=1500)
 
     def _on_copy_ascii(self) -> None:
         if not self._buffer:
@@ -536,21 +528,18 @@ class MemoryViewerPage(QWidget):
         sel = self._selected_bytes()
         text = "".join(chr(b) if 32 <= b <= 126 else "." for b in sel)
         QGuiApplication.clipboard().setText(text)
-        InfoBar.success("已复制 ASCII", f"{len(sel)} 字节", parent=self,
-                        position=InfoBarPosition.TOP, duration=1500)
+        _infobar.ok(self, "已复制 ASCII", f"{len(sel)} 字节", duration=1500)
 
     def _on_copy_carray(self) -> None:
         if not self._buffer:
             return
         text = format_as_c_array(self._buffer, name="data", bytes_per_row=self._bytes_per_row)
         QGuiApplication.clipboard().setText(text)
-        InfoBar.success("已复制 C 数组", f"{len(self._buffer)} 字节", parent=self,
-                        position=InfoBarPosition.TOP, duration=1500)
+        _infobar.ok(self, "已复制 C 数组", f"{len(self._buffer)} 字节", duration=1500)
 
     def _on_save_bin(self) -> None:
         if not self._buffer:
-            InfoBar.warning("无数据", "请先读取内存", parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            _infobar.warn(self, "无数据", "请先读取内存")
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "保存为 .bin",
@@ -562,11 +551,9 @@ class MemoryViewerPage(QWidget):
         try:
             from pathlib import Path
             Path(path).write_bytes(self._buffer)
-            InfoBar.success("已保存", path, parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            _infobar.ok(self, "已保存", path)
         except OSError as e:
-            InfoBar.error("保存失败", str(e), parent=self,
-                          position=InfoBarPosition.TOP, duration=3000)
+            _infobar.err(self, "保存失败", str(e))
 
     def _selected_bytes(self) -> bytes:
         """从当前 hex 选区反推 bytes；如无选区则返回全部 buffer。"""
@@ -601,8 +588,7 @@ class MemoryViewerPage(QWidget):
         try:
             start = _parse_int(self.le_ex_addr.text())
         except ValueError as e:
-            InfoBar.warning("地址格式错误", str(e), parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            _infobar.warn(self, "地址格式错误", str(e))
             return
         idx = self.cb_ex_preset.currentIndex()
         _, preset_size = _SIZE_PRESETS[idx]
@@ -610,19 +596,13 @@ class MemoryViewerPage(QWidget):
             try:
                 size = _parse_int(self.le_ex_custom.text())
             except ValueError as e:
-                InfoBar.warning("大小格式错误", str(e), parent=self,
-                                position=InfoBarPosition.TOP, duration=2000)
+                _infobar.warn(self, "大小格式错误", str(e))
                 return
         else:
             size = preset_size
 
-        InfoBar.warning(
-            "RTT 接收将暂停",
-            f"导出 {size // 1024} KB 期间无法接收 RTT 数据",
-            parent=self,
-            position=InfoBarPosition.TOP,
-            duration=2000,
-        )
+        _infobar.warn(self, "RTT 接收将暂停",
+                      f"导出 {size // 1024} KB 期间无法接收 RTT 数据")
         self.pb_export.setValue(0)
         self.btn_export.setEnabled(False)
         self._worker.export_firmware_requested.emit(self._save_path, start, size)
@@ -634,16 +614,13 @@ class MemoryViewerPage(QWidget):
     def _on_export_finished(self, ok: bool, path: str, err: str) -> None:
         self.btn_export.setEnabled(self._connected)
         if ok:
-            InfoBar.success("导出完成", path, parent=self,
-                            position=InfoBarPosition.TOP, duration=3000)
+            _infobar.ok(self, "导出完成", path, duration=3000)
         else:
-            InfoBar.error("导出失败", err, parent=self,
-                          position=InfoBarPosition.TOP, duration=4000)
+            _infobar.err(self, "导出失败", err, duration=4000)
 
     def _on_command_result(self, cmd: str, ok: bool, msg: str) -> None:
         if cmd == "read_memory" and not ok:
-            InfoBar.error("读取失败", msg or "", parent=self,
-                          position=InfoBarPosition.TOP, duration=3000)
+            _infobar.err(self, "读取失败", msg or "")
 
     # ------------------------------------------------------------------
     # 字体 / 字号

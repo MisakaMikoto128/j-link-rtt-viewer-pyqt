@@ -18,8 +18,6 @@ from qfluentwidgets import (
     EditableComboBox,
     FluentIcon,
     HeaderCardWidget,
-    InfoBar,
-    InfoBarPosition,
     PlainTextEdit,
     PrimaryPushButton,
     PushButton,
@@ -31,6 +29,8 @@ from qfluentwidgets import (
 from core.ansi_parser import AnsiAttrs, parse_ansi
 from core.config_service import ConfigService
 from core.jlink_worker import JLinkWorker
+
+from . import _infobar
 
 
 _FONT_SIZE_MIN = 8
@@ -309,8 +309,7 @@ class RTTMonitorPage(QWidget):
         if self.btn_connect.text() == "连接":
             target = self.cb_target.currentText().strip()
             if not target:
-                InfoBar.warning("提示", "请先选择目标芯片", parent=self,
-                                position=InfoBarPosition.TOP, duration=2000)
+                _infobar.warn(self, "提示", "请先选择目标芯片")
                 return
             iface = self.cb_iface.currentText()
             speed = int(self.cb_speed.currentText())
@@ -347,6 +346,8 @@ class RTTMonitorPage(QWidget):
             hist.remove(text)
         hist.append(text)
         self._cfg.set("send_history", hist)
+        # 发送后清空输入框，避免 Enter+Enter 误重发
+        self.le_send.clear()
 
     def _on_state_changed(self, connected: bool) -> None:
         if connected:
@@ -443,11 +444,9 @@ class RTTMonitorPage(QWidget):
             return
         try:
             Path(path).write_text(self.display.toPlainText(), encoding="utf-8")
-            InfoBar.success("已保存", path, parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            _infobar.ok(self, "已保存", path)
         except Exception as e:
-            InfoBar.error("保存失败", str(e), parent=self,
-                          position=InfoBarPosition.TOP, duration=3000)
+            _infobar.err(self, "保存失败", str(e))
 
     def _do_search(self, backward: bool) -> None:
         text = self.le_search.text()
@@ -457,12 +456,15 @@ class RTTMonitorPage(QWidget):
         flags = QTextDocument.FindFlag(0)
         if backward:
             flags |= QTextDocument.FindBackward
-        if not self.display.find(text, flags):
-            # 回卷
+        found = self.display.find(text, flags)
+        if not found:
+            # 回卷一次
             cursor = self.display.textCursor()
             cursor.movePosition(QTextCursor.End if backward else QTextCursor.Start)
             self.display.setTextCursor(cursor)
-            self.display.find(text, flags)
+            found = self.display.find(text, flags)
+        # 更新 "第 N 个 / 总数" 标签
+        self._update_match_position(text)
 
     def _update_match_count(self, text: str) -> None:
         """textChanged 信号槽：节流到 200ms 再算计数，避免大日志按键卡顿。"""
@@ -474,20 +476,52 @@ class RTTMonitorPage(QWidget):
         self._match_count_timer.start()
 
     def _do_update_match_count(self) -> None:
-        text = self.le_search.text()
+        self._update_match_position(self.le_search.text())
+
+    def _update_match_position(self, text: str) -> None:
+        """显示 "当前第 N 个 / 总数"（N=0 表示尚未定位）。"""
         if not text:
             self.lbl_match.setText("0/0")
             return
-        cnt = self.display.toPlainText().count(text)
-        self.lbl_match.setText(f"-/{cnt}")
+        full = self.display.toPlainText()
+        cnt = full.count(text)
+        if cnt == 0:
+            self.lbl_match.setText(f"0/0")
+            return
+        # 用当前光标 absolute position 反推是第几个匹配
+        cursor = self.display.textCursor()
+        cur_pos = cursor.selectionStart()
+        # 数 cur_pos 之前出现的次数 + 1（如果当前位置正好选中该 pattern）
+        before = full.count(text, 0, max(0, cur_pos))
+        # selection 当前就是一个 hit → before + 1；否则下一个 hit 算 before+1
+        if cursor.hasSelection() and full[cursor.selectionStart():cursor.selectionEnd()] == text:
+            idx = before + 1
+        else:
+            idx = before  # 0 表示当前位置之后才是第 1 个
+        self.lbl_match.setText(f"{idx}/{cnt}")
+
+    # 命令内部名 → 用户可读标题
+    _CMD_TITLES = {
+        "send_data": "发送失败",
+        "reset": "重置失败",
+        "power_output": "电源切换失败",
+        "read_memory": "读取内存失败",
+        "log_recording": "日志记录失败",
+    }
 
     def _on_command_result(self, cmd: str, ok: bool, msg: str) -> None:
         if ok:
             return
-        InfoBar.warning(cmd, msg or "未知错误", parent=self,
-                        position=InfoBarPosition.TOP, duration=3000)
+        title = self._CMD_TITLES.get(cmd, "操作失败")
+        _infobar.warn(self, title, msg or "未知错误", duration=3000)
 
     def _on_log_message(self, level: str, msg: str) -> None:
+        """worker → UI 日志投递。level: error/warning/info。"""
         if level == "error":
-            InfoBar.error("错误", msg, parent=self,
-                          position=InfoBarPosition.TOP, duration=3000)
+            _infobar.err(self, "错误", msg)
+            # 兜底：连接路径异常时按钮可能卡在"连接中…"，这里强制恢复
+            if self.btn_connect.text() == "连接中…":
+                self._set_disconnected_ui()
+        elif level == "warning":
+            _infobar.warn(self, "警告", msg)
+        # info 级别只进 logger 文件，不弹 toast——避免噪音

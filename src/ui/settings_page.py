@@ -20,8 +20,6 @@ from qfluentwidgets import (
     CardWidget,
     ComboBox,
     EditableComboBox,
-    InfoBar,
-    InfoBarPosition,
     PushButton,
     SpinBox,
     SubtitleLabel,
@@ -30,6 +28,8 @@ from qfluentwidgets import (
     setThemeColor,
 )
 from PySide6.QtGui import QColor, QFont
+
+from . import _infobar
 
 from core.config_service import ConfigService
 from core.logger import get_log_dir
@@ -255,8 +255,7 @@ class SettingsPage(QWidget):
         self.sp_ui_font_size.blockSignals(True)
         self.sp_ui_font_size.setValue(9)
         self.sp_ui_font_size.blockSignals(False)
-        InfoBar.success("已恢复默认", "UI 界面字体已重置", parent=self,
-                        position=InfoBarPosition.TOP, duration=2000)
+        _infobar.ok(self, "已恢复默认", "UI 界面字体已重置")
 
     def _on_pick_log_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择日志目录", self.lbl_log_dir.text())
@@ -274,5 +273,4 @@ class SettingsPage(QWidget):
                 import subprocess
                 subprocess.Popen(["xdg-open", path])
         except Exception as e:
-            InfoBar.error("打开失败", str(e), parent=self,
-                          position=InfoBarPosition.TOP, duration=3000)
+            _infobar.err(self, "打开失败", str(e))
