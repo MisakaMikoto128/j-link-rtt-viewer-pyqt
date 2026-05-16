@@ -1,7 +1,7 @@
 """RTT 监控页：控制栏 + 选项栏 + 显示区 + 搜索栏 + 发送栏。"""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QTextCharFormat, QTextCursor, QColor
 from PySide6.QtWidgets import (
     QCompleter,
@@ -63,6 +63,14 @@ class RTTMonitorPage(QWidget):
         self._build_ui()
         self._wire_signals()
         self._apply_font(cfg.get("font_family"), cfg.get("font_size"))
+
+        # RTT 数据节流批量渲染：每收到数据先入缓冲，50ms 刷一次屏
+        self._rtt_buffer: list[str] = []
+        self._rtt_flush_timer = QTimer(self)
+        self._rtt_flush_timer.setInterval(50)
+        self._rtt_flush_timer.setSingleShot(False)
+        self._rtt_flush_timer.timeout.connect(self._flush_rtt_buffer)
+        self._rtt_flush_timer.start()
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -284,8 +292,14 @@ class RTTMonitorPage(QWidget):
             self._cfg.set("interface", iface)
             self._cfg.set("speed_khz", speed)
             self._cfg.set("rtt_channel", channel)
+            # 立即给 UI 反馈：禁用按钮 + 改文字
+            self.btn_connect.setEnabled(False)
+            self.btn_connect.setText("连接中…")
             self._worker.connect_requested.emit(target, iface, speed, channel)
         else:
+            # 立即给 UI 反馈
+            self.btn_connect.setEnabled(False)
+            self.btn_connect.setText("断开中…")
             self._worker.disconnect_requested.emit()
 
     def _on_channel_changed(self, ch: int) -> None:
@@ -305,6 +319,7 @@ class RTTMonitorPage(QWidget):
         self._cfg.set("send_history", hist)
 
     def _on_state_changed(self, connected: bool, info: dict) -> None:
+        self.btn_connect.setEnabled(True)
         self.btn_connect.setText("断开" if connected else "连接")
         self.btn_reset.setEnabled(connected)
         self.btn_send.setEnabled(connected)
@@ -320,13 +335,23 @@ class RTTMonitorPage(QWidget):
                 lbl.setText("-")
 
     def _on_rtt_data(self, text: str) -> None:
+        """只入缓冲，由 _flush_rtt_buffer 定时批量渲染。"""
+        self._rtt_buffer.append(text)
+
+    def _flush_rtt_buffer(self) -> None:
+        """每 50ms 合并所有积压数据一次性 insertText，极大减少 layout 重算次数。"""
+        if not self._rtt_buffer:
+            return
+        merged = "".join(self._rtt_buffer)
+        self._rtt_buffer.clear()
+
         # 自动滚动判断必须在插入文本前
         sb = self.display.verticalScrollBar()
         at_bottom = sb.value() >= sb.maximum() - 4
 
         cursor = self.display.textCursor()
         cursor.movePosition(QTextCursor.End)
-        for seg, attrs in parse_ansi(text):
+        for seg, attrs in parse_ansi(merged):
             cursor.insertText(seg, self._fmt(attrs))
 
         if at_bottom and self.chk_auto_scroll.isChecked():

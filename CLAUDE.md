@@ -203,6 +203,22 @@ if at_bottom and self.chk_auto_scroll.isChecked():
 
 ---
 
+## RTT 读循环用 threading.Thread 而不是 QTimer
+
+**现象**：UI 主线程被高频 `rtt_data_received` 信号 + `cursor.insertText` 渲染占满，用户点"断开"按钮事件排在队列末尾，体感"UI 卡死"几秒钟。
+
+**原因**：用 `QTimer` 在 worker 线程跑 RTT 轮询时，每次 timeout 都通过 Qt 事件队列调度 `rtt_read` + emit `rtt_data_received`。signal-to-main-thread 排队 + 主线程逐条 ANSI 解析 + insertText → 主线程任务队列被填满。
+
+**处理**：
+1. 读循环用 `threading.Thread + time.sleep(0.1)` 模式（参考项目方案）。这样读线程完全独立于 Qt 事件循环，emit 信号只是 post 到主线程队列。
+2. disconnect 时先 `_stop_read = True` + `read_thread.join(timeout=2.0)`，确保读线程退出后才调 `rtt_stop/close`——避免 close 时 jlink 句柄被读线程持有。
+3. UI 侧做节流：`rtt_data_received` 只入缓冲，每 50ms `_flush_rtt_buffer` 合并所有数据一次性 insertText。极大减少 layout 重算次数。
+4. 点击连接/断开按钮**立即**给 UI 反馈（setEnabled(False) + 改文字"连接中…/断开中…"），不等 worker 的 connection_state_changed 信号回来。
+
+参考：`src/core/jlink_worker.py` `_read_loop` / `_do_disconnect`、`src/ui/rtt_monitor_page.py` `_flush_rtt_buffer`、参考项目 `RTT-T/src/services/jlink_service.py` `read_rtt_data` / `disconnect`
+
+---
+
 ## pylink 1.6.0 连接顺序：必须 open → close → open(serial) → rtt_start → set_tif → set_speed → connect
 
 **现象**：单次 `open()` 后直接 `set_tif → set_speed → connect → rtt_start` 这个看起来更简洁的顺序，在 pylink 1.6.0 上会导致 RTT 永远没数据（虽然 `connected()` 返回 True）。

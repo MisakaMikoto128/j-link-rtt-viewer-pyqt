@@ -6,8 +6,12 @@ Qt 官方反复强调："不要继承 QThread 把业务逻辑放进去"。正确
 - 业务对象（本类）就是 QObject，所有信号/槽/状态都在这里。
 - 调用方（MainWindow / 测试 fixture）外部创建 QThread，调 `worker.moveToThread(thread)`、
   `thread.started.connect(worker.initialize)`、`thread.start()`。
-- worker 拥有真正的 worker 线程 thread affinity，所有信号槽 + QTimer 操作都在同一线程，
+- worker 拥有真正的 worker 线程 thread affinity，所有信号槽操作都在同一线程，
   无 cross-thread 警告。
+
+读循环：
+- 用 `threading.Thread + time.sleep(0.1)` 独立于 Qt 事件循环，emit 信号只是 post 到主线程队列。
+- disconnect 时先 `_stop_read = True` + `read_thread.join(timeout=2.0)`，确保读线程退出后才 rtt_stop/close。
 
 退出流程：
 - 主线程 emit stop_requested → worker._on_stop 在 worker 线程跑 →
@@ -17,11 +21,13 @@ Qt 官方反复强调："不要继承 QThread 把业务逻辑放进去"。正确
 from __future__ import annotations
 
 import codecs
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
 import pylink
-from PySide6.QtCore import QObject, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, Signal, Slot
 
 from . import memory_service
 from .logger import get_logger
@@ -67,10 +73,12 @@ class JLinkWorker(QObject):
         self._paused: bool = False
         self._ready: bool = False
 
-        # 这些在 initialize() 内（worker 线程）创建：
+        # 这些在 initialize() 内（worker 线程）创建/启动：
         self.jlink: pylink.JLink | None = None
         self._decoder: codecs.IncrementalDecoder | None = None
-        self._poll_timer: QTimer | None = None
+        self._read_thread: threading.Thread | None = None
+        self._stop_read: bool = False
+        self._poll_interval: float = 0.1   # 100ms，匹配参考项目
         self._log_file = None
         self._log_path: str | None = None
 
@@ -82,9 +90,6 @@ class JLinkWorker(QObject):
         """在 worker 线程内创建所有 thread-affinity 敏感的对象。"""
         self.jlink = pylink.JLink()
         self._reset_utf8_decoder()
-        self._poll_timer = QTimer()  # 当前线程 = worker 线程
-        self._poll_timer.setInterval(20)
-        self._poll_timer.timeout.connect(self._poll_rtt)
 
         # 把输入信号连到本地槽（同线程，DirectConnection）
         self.connect_requested.connect(self._on_connect)
@@ -141,7 +146,12 @@ class JLinkWorker(QObject):
                 info = self._collect_device_info(target, iface, speed)
                 self._logger.info(f"已连接 {target} ({iface} {speed}kHz, RTT ch{channel})")
                 self.connection_state_changed.emit(True, info)
-                self._poll_timer.start()
+                # 启动读线程
+                self._stop_read = False
+                self._read_thread = threading.Thread(
+                    target=self._read_loop, name="JLinkReadThread", daemon=True
+                )
+                self._read_thread.start()
             else:
                 self._logger.error("connect(target) 后 connected() 仍为 False")
                 self.log_message.emit("error", "连接目标失败")
@@ -158,12 +168,17 @@ class JLinkWorker(QObject):
     def _do_disconnect(self) -> None:
         was_active = self._state in (_STATE_CONNECTING, _STATE_CONNECTED)
         self._state = _STATE_DISCONNECTING
-        if self._poll_timer is not None and self._poll_timer.isActive():
-            self._poll_timer.stop()
+
+        # 1. 通知读线程退出，join with timeout（参考项目模式）
+        self._stop_read = True
+        if self._read_thread is not None and self._read_thread.is_alive():
+            self._read_thread.join(timeout=2.0)
+        self._read_thread = None
+
         self._close_log_file()
 
-        # 参考项目的断开模式（pylink 1.6.0 直接调，不做 connected()/opened() 守卫——
-        # 守卫反而是噪音，pylink 1.6.0 在已断开状态下调 rtt_stop/close 不会致命）
+        # 2. rtt_stop + close（无条件调用，pylink 1.6.0 直接调，
+        #    异常只 warning 不阻断——守卫反而会因内部状态时序问题误判）
         try:
             self.jlink.rtt_stop()
         except Exception as e:
@@ -204,22 +219,27 @@ class JLinkWorker(QObject):
     def _reset_utf8_decoder(self) -> None:
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
-    def _poll_rtt(self) -> None:
-        if self._state != _STATE_CONNECTED or self._paused:
-            return
-        try:
-            data = self.jlink.rtt_read(self._channel, 4096)
-        except Exception as e:
-            self._logger.error(f"RTT 读异常：{e}")
-            self.log_message.emit("error", f"RTT 读异常：{e}")
-            self._transition_to_idle()
-            return
-        if not data:
-            return
-        decoded = self._decoder.decode(bytes(data))
-        if decoded:
-            self.rtt_data_received.emit(decoded)
-            self._write_log_file(decoded)
+    def _read_loop(self) -> None:
+        """daemon 读线程：在独立 Python 线程跑，照搬参考项目模式。
+
+        通过 self._stop_read 标志退出。disconnect 时主流程先 _stop_read=True
+        再 join 这个线程，确保读循环干净结束后才调 rtt_stop/close。
+        """
+        while not self._stop_read:
+            try:
+                if self._state == _STATE_CONNECTED and not self._paused and self.jlink is not None:
+                    data = self.jlink.rtt_read(self._channel, 4096)
+                    if data:
+                        decoded = self._decoder.decode(bytes(data))
+                        if decoded:
+                            self.rtt_data_received.emit(decoded)
+                            self._write_log_file(decoded)
+            except Exception as e:
+                self._logger.error(f"RTT 读异常：{e}")
+                self.log_message.emit("error", f"RTT 读异常：{e}")
+                self._stop_read = True
+                break
+            time.sleep(self._poll_interval)
 
     # ============================================================
     # 命令槽
@@ -269,9 +289,8 @@ class JLinkWorker(QObject):
     @Slot(int)
     def _on_set_poll_interval(self, ms: int) -> None:
         if ms < 1:
-            ms = 20
-        if self._poll_timer is not None:
-            self._poll_timer.setInterval(ms)
+            ms = 100
+        self._poll_interval = ms / 1000.0
         self.log_message.emit("info", f"RTT 轮询间隔设为 {ms} ms")
 
     @Slot(bool)
@@ -306,8 +325,9 @@ class JLinkWorker(QObject):
         if self._state != _STATE_CONNECTED:
             self.firmware_export_finished.emit(False, "", "未连接")
             return
-        was_active = self._poll_timer.isActive()
-        self._poll_timer.stop()
+        # 导出期间暂停 RTT 读循环
+        was_paused = self._paused
+        self._paused = True
         try:
             def cb(cur: int, total: int) -> None:
                 self.firmware_export_progress.emit(cur, total)
@@ -317,8 +337,7 @@ class JLinkWorker(QObject):
             self._logger.error(f"导出固件失败：{e}")
             self.firmware_export_finished.emit(False, path, str(e))
         finally:
-            if was_active and self._state == _STATE_CONNECTED:
-                self._poll_timer.start()
+            self._paused = was_paused
 
     @Slot(str)
     def _on_start_log(self, log_dir: str) -> None:
@@ -363,8 +382,7 @@ class JLinkWorker(QObject):
     @Slot()
     def _on_stop(self) -> None:
         self._do_disconnect()
-        if self._poll_timer is not None:
-            self._poll_timer.stop()
+        # _do_disconnect 已经停了读线程
         # self.thread() 返回 worker 被 moveTo 的那个 QThread
         t = self.thread()
         if t is not None:
