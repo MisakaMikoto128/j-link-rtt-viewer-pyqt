@@ -21,7 +21,8 @@ from .logger import get_logger
 class ConfigService(QObject):
     theme_changed = Signal(str)             # "light" / "dark" / "auto"
     theme_color_changed = Signal(str)       # hex e.g. "#28afe9"
-    font_changed = Signal(str, int)         # (family, size)
+    font_changed = Signal(str, int)         # (family, size) — RTT 显示区字体
+    ui_font_changed = Signal(str, int)      # (family, size) — UI 界面字体（QApplication.setFont）
     max_display_lines_changed = Signal(int) # new max block count for QPlainTextEdit
     rtt_poll_interval_changed = Signal(int) # poll timer interval in ms
 
@@ -35,6 +36,9 @@ class ConfigService(QObject):
         "theme_color": "#28afe9",
         "font_family": "Consolas",
         "font_size": 13,
+        # UI 界面字体（侧边栏/按钮/标签）。空 family 或 size=0 表示使用 fluent 默认
+        "ui_font_family": "",
+        "ui_font_size": 0,
         "max_display_lines": 10000,
         "rtt_poll_interval_ms": 100,   # RTT 轮询间隔（ms）—— 旧版叫 rx_timeout_ms，已迁移
         "log_dir": "",              # 空 → 用默认 %APPDATA%/JLinkRTTViewer/logs
@@ -136,6 +140,8 @@ class ConfigService(QObject):
             self.theme_color_changed.emit(value)
         elif key in ("font_family", "font_size"):
             self.font_changed.emit(self._data["font_family"], self._data["font_size"])
+        elif key in ("ui_font_family", "ui_font_size"):
+            self.ui_font_changed.emit(self._data["ui_font_family"], self._data["ui_font_size"])
         elif key == "max_display_lines":
             self.max_display_lines_changed.emit(value)
         elif key == "rtt_poll_interval_ms":

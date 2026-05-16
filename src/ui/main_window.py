@@ -4,7 +4,8 @@ from __future__ import annotations
 import base64
 
 from PySide6.QtCore import QByteArray, QThread
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QFont
+from PySide6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, NavigationItemPosition
 
@@ -51,9 +52,26 @@ class MainWindow(FluentWindow):
         # 4. ConfigService 的 rtt_poll_interval_changed 信号连到 worker
         self._cfg.rtt_poll_interval_changed.connect(self.worker.set_poll_interval_requested)
 
-        # 5. 窗口属性
+        # 5. UI 界面字体（应用到 QApplication，影响侧边栏/按钮/标签等所有 fluent 控件）
+        self._cfg.ui_font_changed.connect(self._apply_ui_font)
+        self._apply_ui_font(self._cfg.get("ui_font_family"), self._cfg.get("ui_font_size"))
+
+        # 6. 窗口属性
         self.setWindowTitle("J-Link RTT Viewer")
         self._restore_geometry()
+
+    def _apply_ui_font(self, family: str, size: int) -> None:
+        """应用 UI 全局字体。空 family 或 size<=0 → 恢复 fluent 默认（QApplication 出厂 font）。"""
+        app = QApplication.instance()
+        if app is None:
+            return
+        if family and size > 0:
+            font = QFont(family, size)
+            app.setFont(font)
+        else:
+            # 恢复默认：用一个全新 QApplication 创建时的默认 font 不容易拿到，
+            # 这里用空字符串构造 + 默认字号 9（fluent 标准）作为兜底
+            app.setFont(QFont("", 9))
 
     def _restore_geometry(self) -> None:
         geom_b64 = self._cfg.get("window_geometry")
