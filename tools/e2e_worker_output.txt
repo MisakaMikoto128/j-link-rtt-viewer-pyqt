@@ -1,0 +1,36 @@
+2026-05-16 13:43:01,951 INFO  jlink_rtt_viewer | JLinkWorker initialized in worker thread
+2026-05-16 13:43:02,144 INFO  jlink_rtt_viewer | 已连接 STM32H750VB (SWD 4000kHz, RTT ch0)
+2026-05-16 13:43:09,985 INFO  jlink_rtt_viewer | 已断开 J-Link
+2026-05-16 13:43:11,973 WARNING jlink_rtt_viewer | rtt_stop 失败：J-Link DLL is not open.
+[step 1] 创建 worker + QThread
+[step 1] OK，worker._ready=True
+
+[step 2] 订阅 rtt_data_received / connection_state_changed / log_message
+
+[step 3] emit connect_requested(STM32H750VB, SWD, 4000, ch=0)
+  [t=8.0s remain] chunks=0, latest connected=no state yet
+  [t=7.8s remain] chunks=1, latest connected=True
+  [t=7.0s remain] chunks=2, latest connected=True
+  [t=6.0s remain] chunks=3, latest connected=True
+  [t=5.0s remain] chunks=4, latest connected=True
+  [t=4.0s remain] chunks=5, latest connected=True
+  [t=3.0s remain] chunks=6, latest connected=True
+  [t=2.0s remain] chunks=7, latest connected=True
+  [t=1.0s remain] chunks=8, latest connected=True
+
+[step 4] 收到 9 个 rtt_data 段，总 2215 字符
+  第一段前 120 字符: '2000.01.02 23:40:59  [INFO]: [PrimMod] lift.conn=-1 gbt.conn=-1 capv.conn=-1 relay={T=-1 A=-1 M=-1 thr=0.00} vcap=0.00 v'
+  最后 200 字符: ' thr=0.00} vcap=0.00 vbms=0.00 tx=0 rx=0 timeout=0\n2000.01.02 23:41:13  [INFO]: [PrimMod] lift.conn=-1 gbt.conn=-1 capv.conn=-1 relay={T=-1 A=-1 M=-1 thr=0.00} vcap=0.00 vbms=0.00 tx=0 rx=0 timeout=0\n'
+
+[step 4] 收到 1 次 connection_state_changed:
+  connected=True, info_keys=['core_cpu', 'core_id', 'core_name', 'interface', 'jlink_firmware']
+
+[step 4] 收到 0 条 log_message:
+
+[step 5] emit disconnect_requested
+
+[step 6] emit stop_requested
+[step 6] thread 干净退出
+
+=== 结论 ===
+PASS: 成功收到 2215 字符的 RTT 数据
