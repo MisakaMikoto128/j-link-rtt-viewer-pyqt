@@ -12,8 +12,9 @@ from qfluentwidgets import (
 )
 
 APP_VERSION = "0.1.0"
-AUTHOR_NAME = "待定"
-AUTHOR_GITHUB = "https://github.com/"
+AUTHOR_NAME = "MisakaMikoto128"
+AUTHOR_GITHUB = "https://github.com/MisakaMikoto128"
+PROJECT_URL = "https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt"
 
 
 class AboutPage(QWidget):
@@ -56,6 +57,7 @@ class AboutPage(QWidget):
         a_lay.addWidget(SubtitleLabel("作者", self))
         a_lay.addWidget(BodyLabel(AUTHOR_NAME, self))
         a_lay.addWidget(HyperlinkButton(AUTHOR_GITHUB, f"GitHub: {AUTHOR_NAME}"))
+        a_lay.addWidget(HyperlinkButton(PROJECT_URL, "📦 项目仓库"))
         root.addWidget(author)
 
         # 致谢
