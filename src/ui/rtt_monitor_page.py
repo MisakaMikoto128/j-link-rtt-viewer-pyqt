@@ -2,7 +2,17 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QFontDatabase, QMouseEvent, QTextCharFormat, QTextCursor, QColor
+from PySide6.QtGui import (
+    QColor,
+    QEnterEvent,
+    QFont,
+    QFontDatabase,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QTextCharFormat,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
     QCompleter,
     QFrame,
@@ -71,12 +81,13 @@ _ANSI_COLOR_MAP = {
 
 
 class _VResizeHandle(QFrame):
-    """display 下方的水平拖动条。拖动 → 改 target 的 fixedHeight。
+    """display 下方的水平拖动条 —— 极简观感，跟随主题色。
 
-    为什么不用 QSplitter？QSplitter 在 QScrollArea 里只能在 viewport 内
-    重新分配两个 children 的高度，display 永远拖不到比 viewport 大——
-    无法触发整页 ScrollArea 滚动。这里直接改 display 的 setFixedHeight，
-    inner widget 的 sizeHint 跟着长高，ScrollArea 自然出滚条。
+    6px 命中区（够大好抓）+ 1px 中央细灰线（默认几乎不可见）；hover/拖动
+    时变 2px 主题色线（用 qfluentwidgets.themeColor()，自动跟用户偏好）。
+
+    为什么不用 QSplitter：splitter 在 QScrollArea 里只能在 viewport 内
+    分配 children，display 永远拖不到比 viewport 大 —— 无法触发整页滚。
     """
 
     heightChanged = Signal(int)  # 拖动结束 emit 最终高度（持久化用）
@@ -87,22 +98,43 @@ class _VResizeHandle(QFrame):
         super().__init__(parent)
         self._target = target
         self._dragging = False
+        self._hover = False
         self._start_y = 0.0
         self._start_h = 0
-        self.setFixedHeight(8)
+        self.setFixedHeight(6)
         self.setCursor(Qt.SizeVerCursor)
-        self.setObjectName("rtt_resize_handle")
-        # 视觉：默认半透明灰条，hover 时主题蓝高亮——模仿 splitter handle。
-        self.setStyleSheet(
-            "#rtt_resize_handle { background: rgba(128, 128, 128, 50); border-radius: 2px; }"
-            "#rtt_resize_handle:hover { background: rgba(40, 175, 233, 120); }"
-        )
+        # 用 paintEvent 自绘，stylesheet 留空避免 QSS 引擎干扰 paint
+
+    def enterEvent(self, e: QEnterEvent) -> None:
+        self._hover = True
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        self._hover = False
+        self.update()
+        super().leaveEvent(e)
+
+    def paintEvent(self, _e: QPaintEvent) -> None:
+        from qfluentwidgets import themeColor
+        p = QPainter(self)
+        w, h = self.width(), self.height()
+        if self._dragging or self._hover:
+            color = QColor(themeColor())
+            color.setAlpha(220 if self._dragging else 150)
+            thickness = 2
+        else:
+            color = QColor(128, 128, 128, 45)
+            thickness = 1
+        y = (h - thickness) // 2
+        p.fillRect(0, y, w, thickness, color)
 
     def mousePressEvent(self, e: QMouseEvent) -> None:
         if e.button() == Qt.LeftButton:
             self._dragging = True
             self._start_y = e.globalPosition().y()
             self._start_h = self._target.height()
+            self.update()
             e.accept()
 
     def mouseMoveEvent(self, e: QMouseEvent) -> None:
@@ -116,6 +148,7 @@ class _VResizeHandle(QFrame):
         if self._dragging:
             self._dragging = False
             self.heightChanged.emit(self._target.height())
+            self.update()
             e.accept()
 
 
