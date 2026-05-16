@@ -64,13 +64,8 @@ class RTTMonitorPage(QWidget):
         self._wire_signals()
         self._apply_font(cfg.get("font_family"), cfg.get("font_size"))
 
-        # RTT 数据节流批量渲染：每收到数据先入缓冲，50ms 刷一次屏
-        self._rtt_buffer: list[str] = []
-        self._rtt_flush_timer = QTimer(self)
-        self._rtt_flush_timer.setInterval(50)
-        self._rtt_flush_timer.setSingleShot(False)
-        self._rtt_flush_timer.timeout.connect(self._flush_rtt_buffer)
-        self._rtt_flush_timer.start()
+        # 注意：RTT 节流在 worker 侧做（_rtt_drain_timer 50ms 合并 emit），
+        # UI 收到的已经是合并好的批量数据，直接 insertText，不再加一层 timer。
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -299,11 +294,12 @@ class RTTMonitorPage(QWidget):
             self.btn_connect.setText("连接中…")
             self._worker.connect_requested.emit(target, iface, speed, channel)
         else:
-            # 乐观立即恢复 UI：worker 内部 try/except 全包，disconnect 不会失败。
-            # 不依赖跨线程 connection_state_changed 信号 round-trip，避免信号未到时 UI 卡死。
-            # worker 实际跑完后回 _on_state_changed(False, {}) 仍会被调用，幂等无害。
-            self._worker.disconnect_requested.emit()
+            # 先恢复 UI 再 emit：万一 emit 异常或被堵也不影响按钮已经切回"连接"。
+            # worker 内部 _do_disconnect 全部 try/except，不会失败。
+            # 跨线程 connection_state_changed 信号回来时走 _on_state_changed → _set_disconnected_ui()，
+            # 幂等无害。
             self._set_disconnected_ui()
+            self._worker.disconnect_requested.emit()
 
     def _on_channel_changed(self, ch: int) -> None:
         self._cfg.set("rtt_channel", ch)
@@ -349,23 +345,16 @@ class RTTMonitorPage(QWidget):
             lbl.setText("-")
 
     def _on_rtt_data(self, text: str) -> None:
-        """只入缓冲，由 _flush_rtt_buffer 定时批量渲染。"""
-        self._rtt_buffer.append(text)
-
-    def _flush_rtt_buffer(self) -> None:
-        """每 50ms 合并所有积压数据一次性 insertText，极大减少 layout 重算次数。"""
-        if not self._rtt_buffer:
+        """worker 已经 50ms 合并好，直接 insertText。"""
+        if not text:
             return
-        merged = "".join(self._rtt_buffer)
-        self._rtt_buffer.clear()
-
         # 自动滚动判断必须在插入文本前
         sb = self.display.verticalScrollBar()
         at_bottom = sb.value() >= sb.maximum() - 4
 
         cursor = self.display.textCursor()
         cursor.movePosition(QTextCursor.End)
-        for seg, attrs in parse_ansi(merged):
+        for seg, attrs in parse_ansi(text):
             cursor.insertText(seg, self._fmt(attrs))
 
         if at_bottom and self.chk_auto_scroll.isChecked():

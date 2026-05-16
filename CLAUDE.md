@@ -219,6 +219,42 @@ if at_bottom and self.chk_auto_scroll.isChecked():
 
 ---
 
+## native threading.Thread 不要直接 emit Qt signal
+
+**现象**：连接 STM32 收数据 → 点断开 → UI 整体卡死（不只是按钮不变，鼠标点其他位置也不响应）。worker 日志显示 `_do_disconnect()` 完整跑完（"已断开 J-Link" 打印了），但主线程不动。控制台必带一条 `QObject::setParent: Cannot set parent, new parent is in a different thread`。复现 100%。
+
+**原因**：之前的实现里，RTT 读循环跑在 `threading.Thread(target=self._read_loop, daemon=True)`（**native pthread，不是 QThread**），循环内直接 `self.rtt_data_received.emit(decoded)` emit 跨线程 Qt 信号。PySide6 在「从非 QThread 创建的 pthread emit Signal 跨线程到主线程槽」这个场景下行为不可靠——会偶发产生 setParent cross-thread 警告，并污染主线程事件循环，最终表现为主线程卡住。Qt 文档对此场景措辞模糊：能 emit，但内部 sender thread / QObject affinity / QMetaCallEvent 创建路径都有 edge case。
+
+**处理**：read_thread **永远不直接碰 Qt signal**，只跟 Python `threading.Lock` + `list` 打交道：
+
+```python
+# read_thread 里
+with self._rtt_drain_lock:
+    self._rtt_drain_buffer.append(decoded)
+
+# worker 线程在 initialize() 内建 QTimer 50ms drain：
+self._rtt_drain_timer = QTimer()  # 无 parent，affinity 跟 worker_thread
+self._rtt_drain_timer.setInterval(50)
+self._rtt_drain_timer.timeout.connect(self._drain_rtt_buffer)
+self._rtt_drain_timer.start()
+
+@Slot()
+def _drain_rtt_buffer(self):
+    with self._rtt_drain_lock:
+        if not self._rtt_drain_buffer: return
+        merged = "".join(self._rtt_drain_buffer)
+        self._rtt_drain_buffer.clear()
+    self.rtt_data_received.emit(merged)  # 从 worker_thread context emit，安全
+```
+
+同时：read_thread 异常路径**也不要** emit `log_message`，只 `_logger.error()` 写文件日志。错误从日志看就够，不值得为它再开一条跨线程信号路径。
+
+顺带：worker 已经 50ms 合并好一次推给 UI，UI 侧不需要再加一层节流 timer/buffer——直接 `_on_rtt_data` 里 `cursor.insertText` 即可。
+
+参考：`src/core/jlink_worker.py` `_read_loop` / `_drain_rtt_buffer` / `initialize`，`src/ui/rtt_monitor_page.py` `_on_rtt_data`
+
+---
+
 ## UI 状态切换不要依赖跨线程信号 round-trip
 
 **现象**：点击"断开"按钮，UI 卡在"断开中…"，永不恢复成"连接"。worker 日志已经打印"已断开 J-Link"（意味着 `connection_state_changed.emit(False, {})` 已发出），同时控制台出现 `QObject::setParent: Cannot set parent, new parent is in a different thread` 警告。重启程序、再连再断，复现稳定。

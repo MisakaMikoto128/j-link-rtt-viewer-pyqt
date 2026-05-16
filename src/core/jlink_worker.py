@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pylink
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from . import memory_service
 from .logger import get_logger
@@ -82,6 +82,14 @@ class JLinkWorker(QObject):
         self._log_file = None
         self._log_path: str | None = None
 
+        # RTT 数据中转：read_thread 写入 buffer（lock 保护），worker 线程 QTimer 取出合并 emit。
+        # **关键**：避免 native threading.Thread 直接 emit Qt signal——
+        # PySide6 从非 QThread 的 pthread emit 跨线程信号会产生 setParent cross-thread 警告，
+        # 并可能让主线程事件循环异常（卡 UI）。
+        self._rtt_drain_buffer: list[str] = []
+        self._rtt_drain_lock = threading.Lock()
+        self._rtt_drain_timer: QTimer | None = None
+
     # ============================================================
     # worker 线程初始化（由外部 QThread.started 触发）
     # ============================================================
@@ -105,6 +113,14 @@ class JLinkWorker(QObject):
         self.start_log_recording_requested.connect(self._on_start_log)
         self.stop_log_recording_requested.connect(self._on_stop_log)
         self.stop_requested.connect(self._on_stop)
+
+        # RTT 数据中转 timer：worker 线程内 QObject，affinity 跟 self（worker_thread）。
+        # 50ms 一次从 read_thread 写入的 buffer 取出 → emit 给 UI。
+        # emit 在 worker_thread context 进行，Qt 跨线程信号传递走标准 QueuedConnection，行为可靠。
+        self._rtt_drain_timer = QTimer()
+        self._rtt_drain_timer.setInterval(50)
+        self._rtt_drain_timer.timeout.connect(self._drain_rtt_buffer)
+        self._rtt_drain_timer.start()
 
         self._ready = True
         self._logger.info("JLinkWorker initialized in worker thread")
@@ -168,23 +184,39 @@ class JLinkWorker(QObject):
     def _do_disconnect(self) -> None:
         was_active = self._state in (_STATE_CONNECTING, _STATE_CONNECTED)
         self._state = _STATE_DISCONNECTING
+        self._logger.info("disconnect: 开始")
 
         # 1. 通知读线程退出，join with timeout（参考项目模式）
         self._stop_read = True
         if self._read_thread is not None and self._read_thread.is_alive():
+            self._logger.info("disconnect: 等 read_thread join")
             self._read_thread.join(timeout=2.0)
+            if self._read_thread.is_alive():
+                self._logger.warning("disconnect: read_thread join 超时（仍 alive）")
+            else:
+                self._logger.info("disconnect: read_thread 已退出")
         self._read_thread = None
 
+        # 把 buffer 里残留的数据也 emit 出去，避免最后一帧丢失
+        with self._rtt_drain_lock:
+            tail = "".join(self._rtt_drain_buffer)
+            self._rtt_drain_buffer.clear()
+        if tail:
+            self.rtt_data_received.emit(tail)
+
         self._close_log_file()
+        self._logger.info("disconnect: 日志文件已关")
 
         # 2. rtt_stop + close（无条件调用，pylink 1.6.0 直接调，
         #    异常只 warning 不阻断——守卫反而会因内部状态时序问题误判）
         try:
             self.jlink.rtt_stop()
+            self._logger.info("disconnect: rtt_stop 完成")
         except Exception as e:
             self._logger.warning(f"rtt_stop 失败：{e}")
         try:
             self.jlink.close()
+            self._logger.info("disconnect: close 完成")
         except Exception as e:
             self._logger.warning(f"close 失败：{e}")
 
@@ -192,6 +224,7 @@ class JLinkWorker(QObject):
         if was_active:
             self._logger.info("已断开 J-Link")
             self.connection_state_changed.emit(False, {})
+            self._logger.info("disconnect: connection_state_changed 已 emit")
 
     def _transition_to_idle(self) -> None:
         self._do_disconnect()
@@ -222,6 +255,11 @@ class JLinkWorker(QObject):
     def _read_loop(self) -> None:
         """daemon 读线程：在独立 Python 线程跑，照搬参考项目模式。
 
+        **不在此线程 emit Qt signal**——native threading.Thread emit Qt signal 在 PySide6
+        上偶发会产生 setParent cross-thread 警告并污染主线程事件循环。
+        改为把数据写到 _rtt_drain_buffer，由 worker 线程的 _rtt_drain_timer 50ms 一次
+        合并 emit 给 UI。
+
         通过 self._stop_read 标志退出。disconnect 时主流程先 _stop_read=True
         再 join 这个线程，确保读循环干净结束后才调 rtt_stop/close。
         """
@@ -232,14 +270,26 @@ class JLinkWorker(QObject):
                     if data:
                         decoded = self._decoder.decode(bytes(data))
                         if decoded:
-                            self.rtt_data_received.emit(decoded)
+                            with self._rtt_drain_lock:
+                                self._rtt_drain_buffer.append(decoded)
                             self._write_log_file(decoded)
             except Exception as e:
+                # 不 emit log_message——避免 native thread 跨线程 emit。
+                # 错误从 logger 文件看，足够诊断。
                 self._logger.error(f"RTT 读异常：{e}")
-                self.log_message.emit("error", f"RTT 读异常：{e}")
                 self._stop_read = True
                 break
             time.sleep(self._poll_interval)
+
+    @Slot()
+    def _drain_rtt_buffer(self) -> None:
+        """worker 线程槽：50ms 一次，把 read_thread 累积的数据合并 emit 给 UI。"""
+        with self._rtt_drain_lock:
+            if not self._rtt_drain_buffer:
+                return
+            merged = "".join(self._rtt_drain_buffer)
+            self._rtt_drain_buffer.clear()
+        self.rtt_data_received.emit(merged)
 
     # ============================================================
     # 命令槽
