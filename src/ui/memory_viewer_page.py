@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QTextCursor, QGuiApplication
+from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QProgressBar,
     QSplitter,
+    QTextEdit,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -88,6 +90,9 @@ class MemoryViewerPage(QWidget):
         self._buffer: bytes = b""
         self._buffer_base: int = 0
         self._bytes_per_row: int = 16
+        # 上次缓冲（用于 diff highlight）
+        self._prev_buffer: bytes = b""
+        self._prev_buffer_base: int = -1
 
         # 自动刷新 timer
         self._auto_refresh_timer = QTimer(self)
@@ -136,15 +141,19 @@ class MemoryViewerPage(QWidget):
         r1.addStretch(1)
         read_outer.addLayout(r1)
 
-        # 第二行：自动刷新 + 跳转 + 搜索
+        # 第二行：自动刷新 + 高亮变化 + 跳转 + 搜索
         r2 = QHBoxLayout()
         self.chk_auto_refresh = CheckBox("自动刷新")
         self.sp_refresh_sec = SpinBox(self)
         self.sp_refresh_sec.setRange(1, 60)
         self.sp_refresh_sec.setValue(2)
         self.sp_refresh_sec.setSuffix(" s")
+        self.chk_diff = CheckBox("高亮变化")
+        self.chk_diff.setChecked(True)
+        self.chk_diff.setToolTip("重新读取相同地址/大小时，把变化的字节背景标红")
         r2.addWidget(self.chk_auto_refresh)
         r2.addWidget(self.sp_refresh_sec)
+        r2.addWidget(self.chk_diff)
         r2.addSpacing(16)
         r2.addWidget(BodyLabel("跳转到"))
         self.le_goto = LineEdit(self)
@@ -283,6 +292,11 @@ class MemoryViewerPage(QWidget):
         self.btn_export.setEnabled(False)
         self.chk_auto_refresh.setEnabled(False)
 
+        # Hover tooltip：在 hex 字节字符上悬停时显示 LE/BE 解析
+        # PlainTextEdit 的鼠标事件在 viewport 上，需要 mouse tracking + filter
+        self.display.viewport().setMouseTracking(True)
+        self.display.viewport().installEventFilter(self)
+
     # ------------------------------------------------------------------
     # 信号接线
     # ------------------------------------------------------------------
@@ -378,10 +392,73 @@ class MemoryViewerPage(QWidget):
             self._on_read_clicked()
 
     def _on_memory_read(self, addr: int, raw: bytes) -> None:
+        # 计算 diff（仅在地址 + 长度都不变时有意义，否则没法对位比较）
+        diff_offsets: list[int] = []
+        if (self.chk_diff.isChecked() and self._prev_buffer_base == addr
+                and len(self._prev_buffer) == len(raw)):
+            diff_offsets = [i for i in range(len(raw)) if raw[i] != self._prev_buffer[i]]
+        # 用新数据替换缓冲
+        self._prev_buffer = raw
+        self._prev_buffer_base = addr
         self._buffer = raw
         self._buffer_base = addr
         self._rerender()
         self._refresh_types()
+        if diff_offsets:
+            self._highlight_diff(diff_offsets)
+        else:
+            self.display.setExtraSelections([])
+
+    def _highlight_diff(self, offsets: list[int]) -> None:
+        """给变化字节的 HH 字符（2 列）叠红色半透明背景。"""
+        selections: list[QTextEdit.ExtraSelection] = []
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor(255, 80, 80, 100))
+        bpr = self._bytes_per_row
+        for offset in offsets:
+            row = offset // bpr
+            col_in_row = offset % bpr
+            col = _HEX_START_COL + col_in_row * 3 + (col_in_row // 4) * 1
+            cursor = QTextCursor(self.display.document())
+            cursor.movePosition(QTextCursor.Start)
+            cursor.movePosition(QTextCursor.Down, QTextCursor.MoveAnchor, row)
+            cursor.movePosition(QTextCursor.Right, QTextCursor.MoveAnchor, col)
+            cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 2)
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = cursor
+            sel.format = fmt
+            selections.append(sel)
+        self.display.setExtraSelections(selections)
+
+    # ------------------------------------------------------------------
+    # Hover tooltip
+    # ------------------------------------------------------------------
+    def eventFilter(self, obj, event):  # type: ignore[override]
+        if obj is self.display.viewport():
+            if event.type() == QEvent.MouseMove:
+                self._show_hover_tooltip(event)
+            elif event.type() == QEvent.Leave:
+                QToolTip.hideText()
+        return super().eventFilter(obj, event)
+
+    def _show_hover_tooltip(self, event) -> None:
+        if not self._buffer:
+            return
+        cursor = self.display.cursorForPosition(event.pos())
+        offset = self._byte_offset_at(cursor.blockNumber(), cursor.positionInBlock())
+        if offset < 0 or offset >= len(self._buffer):
+            QToolTip.hideText()
+            return
+        addr = self._buffer_base + offset
+        # 同一 offset 给出 4 字节 LE/BE + 2 字节 LE，方便对照寄存器布局
+        le_u32 = parse_value(self._buffer, offset, "u32", True)
+        be_u32 = parse_value(self._buffer, offset, "u32", False)
+        le_u16 = parse_value(self._buffer, offset, "u16", True)
+        text = (f"地址 0x{addr:08X}  (+{offset})\n"
+                f"u32 LE: {le_u32}\n"
+                f"u32 BE: {be_u32}\n"
+                f"u16 LE: {le_u16}")
+        QToolTip.showText(event.globalPosition().toPoint(), text, self.display)
 
     def _rerender(self) -> None:
         if not self._buffer:
@@ -410,40 +487,36 @@ class MemoryViewerPage(QWidget):
         for dt, lbl in self._type_labels.items():
             lbl.setText(parse_value(self._buffer, offset, dt, little_endian))
 
-    def _cursor_byte_offset(self) -> int:
-        """根据文本光标在 hex dump 中的位置反推 buffer 字节偏移。
+    def _byte_offset_at(self, block_num: int, col: int) -> int:
+        """根据 (block行号, 列位置) 反推 buffer 字节偏移；-1 表示越界。
 
-        format_hex_dump 每行：``0xAAAAAAAA:  HH HH HH HH  HH HH HH HH ...`` →
-        地址前缀 11 字符（``0x12345678:``）+ 2 空格 = **13** 起始 hex 区。
-        每字节 ``HH `` = 3 字符，每 4 字节末加一个分组空格。
-        硬契约由 test_format_hex_dump_row_layout_contract 保护。
+        format_hex_dump 每行：``0xAAAAAAAA:  HH HH HH HH  HH HH HH HH ...``
+        硬契约：hex 区起始 col 13，每字节 ``HH `` 3 字符，每 4 字节末加 1 个分组空格。
+        被 _cursor_byte_offset（点击）+ _hover_byte_offset（悬停）共用。
+        契约由 test_format_hex_dump_row_layout_contract 保护。
         """
         if not self._buffer:
             return -1
-        cur = self.display.textCursor()
-        block_num = cur.blockNumber()
-        col = cur.positionInBlock()
         bpr = self._bytes_per_row
         line_offset = block_num * bpr
         if line_offset >= len(self._buffer):
             return -1
-        hex_start = _HEX_START_COL
-        if col < hex_start:
+        if col < _HEX_START_COL:
             return line_offset  # 光标在地址列，定位行首
-        # 找到属于第几个字节：每字节 3 字符（"HH "），每 4 字节后多 1 个空格
-        c = col - hex_start
-        idx = 0
+        c = col - _HEX_START_COL
         consumed = 0
         for j in range(bpr):
-            byte_chars = 3  # "HH "
-            if j % 4 == 3:
-                byte_chars += 1  # 块间额外空格
+            byte_chars = 3 + (1 if j % 4 == 3 else 0)
             if consumed + byte_chars > c:
-                idx = j
-                break
+                return min(line_offset + j, len(self._buffer) - 1)
             consumed += byte_chars
-            idx = j + 1
-        return min(line_offset + idx, len(self._buffer) - 1)
+        return min(line_offset + bpr - 1, len(self._buffer) - 1)
+
+    def _cursor_byte_offset(self) -> int:
+        if not self._buffer:
+            return -1
+        cur = self.display.textCursor()
+        return self._byte_offset_at(cur.blockNumber(), cur.positionInBlock())
 
     # ------------------------------------------------------------------
     # 自动刷新

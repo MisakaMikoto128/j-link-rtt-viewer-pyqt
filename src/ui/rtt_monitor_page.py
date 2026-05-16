@@ -194,6 +194,14 @@ class RTTMonitorPage(QWidget):
         self.btn_font_plus = PushButton("A+", self)
         self.btn_font_plus.setFixedWidth(36)
         self.btn_font_plus.setToolTip("字号 +1")
+        # 插入会话标记：输入框 + 按钮，在 RTT 显示区插入分隔行
+        self.le_mark = EditableComboBox(self)
+        self.le_mark.setPlaceholderText("会话标记文本…")
+        self.le_mark.setMinimumWidth(180)
+        # 最近 10 条标记历史（不持久化，会话内可重用）
+        self._mark_history: list[str] = []
+        self.btn_mark = PushButton("插入标记", self)
+        self.btn_mark.setToolTip("在显示区插入一行分隔标记，便于会话分段")
         self.btn_clear = PushButton("清除", self)
         self.btn_save = PushButton("💾 保存当前", self)
         opt.addWidget(self.chk_auto_scroll)
@@ -201,6 +209,8 @@ class RTTMonitorPage(QWidget):
         opt.addWidget(self.chk_power)
         opt.addWidget(self.chk_log_rec)
         opt.addStretch(1)
+        opt.addWidget(self.le_mark)
+        opt.addWidget(self.btn_mark)
         opt.addWidget(self.btn_font_minus)
         opt.addWidget(self.lbl_font_size)
         opt.addWidget(self.btn_font_plus)
@@ -268,6 +278,11 @@ class RTTMonitorPage(QWidget):
         # 字号 ± 按钮：直接走 cfg.set → font_changed → _apply_font
         self.btn_font_minus.clicked.connect(lambda: self._adjust_font_size(-1))
         self.btn_font_plus.clicked.connect(lambda: self._adjust_font_size(+1))
+
+        # 插入会话标记（点按钮触发；EditableComboBox 不暴露 lineEdit，
+        # Enter 键需通过 ComboBox.activated 信号——但 fluent 实现略有差异，
+        # 用户用按钮足够）
+        self.btn_mark.clicked.connect(self._on_insert_mark)
 
         # 显式 QueuedConnection：worker 线程 → 主线程槽，避免 PySide6 在
         # 「emit 调用从 native threading.Thread 发起」场景下误判 sender thread 走 DirectConnection。
@@ -392,6 +407,47 @@ class RTTMonitorPage(QWidget):
 
         if at_bottom and self.chk_auto_scroll.isChecked():
             sb.setValue(sb.maximum())
+
+    def _on_insert_mark(self) -> None:
+        """在显示区追加一行视觉分隔的会话标记。
+
+        格式：``──── 用户输入文本 ────`` 整行用 bright_yellow + bold。
+        不带时间戳（用户明确要求）。空输入时插入纯分隔行 ───────。
+        """
+        text = self.le_mark.currentText().strip()
+        # 保存历史（最多 10 条，去重）
+        if text:
+            if text in self._mark_history:
+                self._mark_history.remove(text)
+            self._mark_history.append(text)
+            self._mark_history = self._mark_history[-10:]
+            self.le_mark.blockSignals(True)
+            self.le_mark.clear()
+            self.le_mark.addItems(reversed(self._mark_history))
+            self.le_mark.blockSignals(False)
+
+        if text:
+            line = f"──── {text} ────"
+        else:
+            line = "─" * 50
+
+        sb = self.display.verticalScrollBar()
+        at_bottom = sb.value() >= sb.maximum() - 4
+
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(_ANSI_COLOR_MAP["bright_yellow"]))
+        fmt.setFontWeight(QFont.Bold)
+
+        cursor = self.display.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        # 若当前不在行首，先插换行
+        if cursor.columnNumber() != 0:
+            cursor.insertText("\n")
+        cursor.insertText(line + "\n", fmt)
+
+        if at_bottom:
+            sb.setValue(sb.maximum())
+        self.le_mark.clearEditText()
 
     def _fmt(self, attrs: AnsiAttrs) -> QTextCharFormat:
         fmt = QTextCharFormat()
