@@ -188,17 +188,19 @@ if at_bottom and self.chk_auto_scroll.isChecked():
 
 ---
 
-## QThread 子类反模式：slots 实际在主线程跑
+## QThread 必须独立于业务对象：永远不要继承 QThread
 
-**现象**：日志反复出现 `QObject::startTimer: Timers cannot be started from another thread`（实测 11 次）。J-Link 连接成功（设备信息正确填充），但 RTT 显示区始终空白；窗口关闭时 worker 卡住强制 terminate（~3 秒）。
+**现象**：worker 跑得"半生不熟"——slot 看似在 worker 线程跑（mock 测试也能通过），但实际跑在主线程；poll timer 在 worker 线程但 start() 失效；日志反复出现 `QObject::startTimer: Timers cannot be started from another thread` 或 `QObject::setParent: Cannot set parent, new parent is in a different thread`；J-Link 连上但 RTT 显示区永远空白；关闭窗口不响应。
 
-**原因**：曾用 `class JLinkWorker(QThread)` + override `run()` 模式。但 QThread 实例的 thread affinity 是**创建它的线程**（主线程），不是 `run()` 内执行的新线程。即使用 `Qt.QueuedConnection` 连接槽，slot 仍在主线程跑——而在 `run()` 内创建的 `QTimer` 在 worker 线程。结果：所有 `_poll_timer.start()/stop()/setInterval()` 都是 cross-thread 调用，Qt 静默不生效；poll 不真正发生 → 没有 rtt_data_received signal → 显示区永远空白。
+**原因**：
+1. **直接继承 QThread + override run() 是 Qt 官方反复警告的反模式**。QThread 对象的 thread affinity 永远是创建它的线程（通常是主线程），不是 `run()` 内执行的新线程。结果：所有 `Qt.QueuedConnection` 信号 slot 实际投递到主线程的事件循环。
+2. **"backend + QThread 子类瘦壳 + __getattr__ 转发"也是 hack**。`moveToThread(self)` 把 backend 移到一个 QObject（QThread 本身），但 QThread 自己的 thread affinity 还在主线程。PySide6 的 signal-slot 元对象系统在做 QueuedConnection 内部分发时，会触发隐藏的 setParent 调用——跨线程，warning。
 
-**处理**：用标准的 `QObject + moveToThread` 模式：
-- `JLinkBackend(QObject)` 拥有所有状态 / 信号 / 槽
-- `JLinkWorker(QThread)` 是瘦壳，`__init__` 里 `backend.moveToThread(self)` + `self.started.connect(backend.initialize)`
-- `backend.initialize()` 在 worker 线程跑（started 是从 worker 线程发出的，AutoConnection 同线程 = DirectConnection），在那里创建 JLink/QTimer/IncrementalDecoder
-- 所有槽 + timer 都在同一个 worker 线程，无 cross-thread 警告
-- `JLinkWorker` 用 `__getattr__` 转发属性到 backend，保持测试和 UI 接口兼容
+**处理**：
+- worker 类**直接继承 QObject**，**不**继承 QThread；所有信号/槽/状态都在这里。
+- 调用方（MainWindow / 测试 fixture）外部创建独立的 `QThread`，调 `worker.moveToThread(thread)` + `thread.started.connect(worker.initialize)` + `thread.start()`。worker 的 thread affinity 才真正落到 worker 线程。
+- worker 在 `initialize()` 槽内创建 `pylink.JLink / QTimer / IncrementalDecoder`——此槽由 `thread.started` 在 worker 线程触发，所以这些对象的 thread affinity 也是 worker 线程，timer 操作不再 cross-thread。
+- 关闭：worker `_on_stop` 槽内调 `self.thread().quit()` 退出 thread 事件循环；主线程只 `thread.wait()`。
+- 不要用 `__getattr__` 转发签名——会让 PySide6 元对象系统出现 cross-thread 参与对象。
 
-参考：`src/core/jlink_worker.py`。**永远不要 override QThread.run() 把业务逻辑放进去**。
+参考：`src/core/jlink_worker.py`、`src/ui/main_window.py`、`tests/test_jlink_worker.py` fixture。

@@ -1,12 +1,18 @@
-"""JLinkWorker：所有 pylink 调用集中在 worker 线程（QObject + moveToThread 模式）。
+"""JLinkWorker：所有 pylink 调用都在 worker 线程，标准 Qt QObject + moveToThread 范式。
 
-设计要点（修复 cross-thread timer bug）：
-1. JLinkBackend(QObject) 拥有所有状态 + 信号 + 槽。在主线程构造，moveToThread 到 worker。
-2. JLinkBackend.initialize() 在 worker 线程被调用（QThread.started → initialize），
-   在这里才创建 pylink.JLink / QTimer / IncrementalDecoder——确保 thread affinity 正确。
-3. JLinkWorker(QThread) 是瘦壳：拥有 backend，moveToThread，转发属性/方法访问。
-4. 退出：UI emit stop_requested → backend._on_stop 在 worker 线程跑 → 清理 pylink →
-   QThread.currentThread().quit() 让 exec() 返回。主线程只 wait()。
+**重要：本类不继承 QThread。**
+
+Qt 官方反复强调："不要继承 QThread 把业务逻辑放进去"。正确做法：
+- 业务对象（本类）就是 QObject，所有信号/槽/状态都在这里。
+- 调用方（MainWindow / 测试 fixture）外部创建 QThread，调 `worker.moveToThread(thread)`、
+  `thread.started.connect(worker.initialize)`、`thread.start()`。
+- worker 拥有真正的 worker 线程 thread affinity，所有信号槽 + QTimer 操作都在同一线程，
+  无 cross-thread 警告。
+
+退出流程：
+- 主线程 emit stop_requested → worker._on_stop 在 worker 线程跑 →
+  清理 pylink → `self.thread().quit()` 让外部 thread 的 exec() 返回。
+- 主线程 `thread.wait(timeout)`，不主动 quit/terminate（除非超时兜底）。
 """
 from __future__ import annotations
 
@@ -15,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pylink
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from . import memory_service
 from .logger import get_logger
@@ -26,8 +32,8 @@ _STATE_CONNECTED = "CONNECTED"
 _STATE_DISCONNECTING = "DISCONNECTING"
 
 
-class JLinkBackend(QObject):
-    """所有 pylink 调用 + 状态。moveToThread 后，所有槽都在 worker 线程跑。"""
+class JLinkWorker(QObject):
+    """J-Link 后台业务对象。**必须 moveToThread 到一个 QThread 后再用**。"""
 
     # ---- 输入信号 ----
     connect_requested = Signal(str, str, int, int)
@@ -69,18 +75,18 @@ class JLinkBackend(QObject):
         self._log_path: str | None = None
 
     # ============================================================
-    # 在 worker 线程内的初始化
+    # worker 线程初始化（由外部 QThread.started 触发）
     # ============================================================
     @Slot()
     def initialize(self) -> None:
-        """由 QThread.started 信号触发，在 worker 线程内跑。"""
+        """在 worker 线程内创建所有 thread-affinity 敏感的对象。"""
         self.jlink = pylink.JLink()
         self._reset_utf8_decoder()
-        self._poll_timer = QTimer()  # 无 parent → 归属当前（worker）线程
+        self._poll_timer = QTimer()  # 当前线程 = worker 线程
         self._poll_timer.setInterval(20)
         self._poll_timer.timeout.connect(self._poll_rtt)
 
-        # 连接所有输入信号到本地槽（backend 已 moveToThread，AutoConnection = DirectConnection）
+        # 把输入信号连到本地槽（同线程，DirectConnection）
         self.connect_requested.connect(self._on_connect)
         self.disconnect_requested.connect(self._on_disconnect)
         self.send_data_requested.connect(self._on_send_data)
@@ -96,8 +102,10 @@ class JLinkBackend(QObject):
         self.stop_requested.connect(self._on_stop)
 
         self._ready = True
+        self._logger.info("JLinkWorker initialized in worker thread")
 
     def state_name(self) -> str:
+        """状态名（线程安全：Python 单赋值原子）。"""
         return self._state
 
     # ============================================================
@@ -112,7 +120,7 @@ class JLinkBackend(QObject):
         self._channel = channel
         try:
             if not self.jlink.opened():
-                self.jlink.open()  # 不传 serial_no, pylink 自动选第一个
+                self.jlink.open()
             tif = pylink.enums.JLinkInterfaces.SWD if iface == "SWD" \
                 else pylink.enums.JLinkInterfaces.JTAG
             self.jlink.set_tif(tif)
@@ -122,6 +130,7 @@ class JLinkBackend(QObject):
             self._reset_utf8_decoder()
             self._state = _STATE_CONNECTED
             info = self._collect_device_info(target, iface, speed)
+            self._logger.info(f"已连接 {target} ({iface} {speed}kHz, RTT ch{channel})")
             self.connection_state_changed.emit(True, info)
             self._poll_timer.start()
         except Exception as e:
@@ -134,7 +143,6 @@ class JLinkBackend(QObject):
         self._do_disconnect()
 
     def _do_disconnect(self) -> None:
-        # 守卫：避免 IDLE 状态下重复发 connection_state_changed(False, {})
         was_active = self._state in (_STATE_CONNECTING, _STATE_CONNECTED)
         self._state = _STATE_DISCONNECTING
         if self._poll_timer is not None and self._poll_timer.isActive():
@@ -154,6 +162,7 @@ class JLinkBackend(QObject):
 
         self._state = _STATE_IDLE
         if was_active:
+            self._logger.info("已断开 J-Link")
             self.connection_state_changed.emit(False, {})
 
     def _transition_to_idle(self) -> None:
@@ -336,39 +345,14 @@ class JLinkBackend(QObject):
             self._logger.warning(f"写日志文件失败：{e}")
 
     # ============================================================
-    # 停止
+    # 停止：worker 线程内自清理 + 退出 thread 事件循环
     # ============================================================
     @Slot()
     def _on_stop(self) -> None:
-        """worker 线程内自清理 + 退出 QThread 事件循环。"""
         self._do_disconnect()
         if self._poll_timer is not None:
             self._poll_timer.stop()
-        # 在 worker 线程内调 quit() 让 exec() 返回
-        thread = QThread.currentThread()
-        if thread is not None:
-            thread.quit()
-
-
-class JLinkWorker(QThread):
-    """瘦壳 QThread：持有 JLinkBackend，moveToThread，转发属性访问。
-
-    历史原因：测试和 UI 代码用 `worker.connect_requested.emit(...)` /
-    `worker.state_name()` / `worker._channel` 等接口。本类用 __getattr__
-    把所有访问转发给 backend，保持兼容。
-    """
-
-    def __init__(self, parent: QObject | None = None) -> None:
-        super().__init__(parent)
-        self.backend = JLinkBackend()
-        self.backend.moveToThread(self)
-        # QThread.started 在 worker 线程 emit，AutoConnection 到 backend.initialize
-        # （backend 已 moveToThread）→ initialize 在 worker 线程跑
-        self.started.connect(self.backend.initialize)
-
-    def __getattr__(self, name: str):
-        """转发属性/信号/方法访问到 backend。仅在常规属性查找失败时调用。"""
-        # 避免无限递归：访问 self.backend 失败时直接 raise
-        if name == "backend":
-            raise AttributeError(name)
-        return getattr(self.backend, name)
+        # self.thread() 返回 worker 被 moveTo 的那个 QThread
+        t = self.thread()
+        if t is not None:
+            t.quit()

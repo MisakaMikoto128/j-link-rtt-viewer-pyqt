@@ -12,7 +12,8 @@ from PySide6.QtCore import QCoreApplication, Qt
 
 @pytest.fixture
 def worker(qapp, monkeypatch):
-    """创建 JLinkWorker 并 mock 掉 pylink.JLink。"""
+    """创建 JLinkWorker（纯 QObject）+ 外部 QThread + moveToThread。"""
+    from PySide6.QtCore import QThread
     from core import jlink_worker as jw_mod
 
     fake_jlink_cls = MagicMock()
@@ -24,7 +25,10 @@ def worker(qapp, monkeypatch):
     monkeypatch.setattr(jw_mod.pylink, "JLink", fake_jlink_cls)
 
     worker = jw_mod.JLinkWorker()
-    worker.start()
+    thread = QThread()
+    worker.moveToThread(thread)
+    thread.started.connect(worker.initialize)
+    thread.start()
 
     # 等待 worker 进入事件循环
     deadline = time.time() + 2.0
@@ -38,12 +42,12 @@ def worker(qapp, monkeypatch):
     # 清理
     worker.stop_requested.emit()
     deadline = time.time() + 3.0
-    while worker.isRunning() and time.time() < deadline:
+    while thread.isRunning() and time.time() < deadline:
         QCoreApplication.processEvents()
         time.sleep(0.01)
-    if worker.isRunning():
-        worker.terminate()
-        worker.wait(1000)
+    if thread.isRunning():
+        thread.terminate()
+        thread.wait(1000)
 
 
 def _drain_events(timeout=0.5):
@@ -173,7 +177,8 @@ def test_set_tif_swd_vs_jtag(worker):
 
 
 def test_stop_requested_quits_thread(qapp, monkeypatch):
-    """stop_requested 必须 worker 自己 quit()，不能外部 quit()。"""
+    """stop_requested 必须 worker 自己 quit 所在 thread，主线程只 wait。"""
+    from PySide6.QtCore import QThread
     from core import jlink_worker as jw_mod
 
     fake_jlink_cls = MagicMock()
@@ -183,20 +188,24 @@ def test_stop_requested_quits_thread(qapp, monkeypatch):
     fake_jlink_cls.return_value = fake_jlink_instance
     monkeypatch.setattr(jw_mod.pylink, "JLink", fake_jlink_cls)
 
-    w = jw_mod.JLinkWorker()
-    w.start()
+    worker = jw_mod.JLinkWorker()
+    thread = QThread()
+    worker.moveToThread(thread)
+    thread.started.connect(worker.initialize)
+    thread.start()
+
     deadline = time.time() + 2.0
-    while not w._ready and time.time() < deadline:
+    while not worker._ready and time.time() < deadline:
         QCoreApplication.processEvents()
         time.sleep(0.01)
 
-    w.stop_requested.emit()
+    worker.stop_requested.emit()
     deadline = time.time() + 3.0
-    while w.isRunning() and time.time() < deadline:
+    while thread.isRunning() and time.time() < deadline:
         QCoreApplication.processEvents()
         time.sleep(0.01)
 
-    assert not w.isRunning(), "stop_requested 后 worker 应已退出"
+    assert not thread.isRunning(), "stop_requested 后 thread 应已退出"
 
 
 def test_send_data_text(worker):

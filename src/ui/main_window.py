@@ -1,9 +1,9 @@
-"""主窗口：FluentWindow + 左侧导航 + JLinkWorker 全生命周期。"""
+"""主窗口：FluentWindow + 左侧导航 + JLinkWorker（外部 QThread）生命周期。"""
 from __future__ import annotations
 
 import base64
 
-from PySide6.QtCore import QByteArray
+from PySide6.QtCore import QByteArray, QThread
 from PySide6.QtGui import QCloseEvent
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, NavigationItemPosition
@@ -24,9 +24,12 @@ class MainWindow(FluentWindow):
         self._cfg = cfg
         self._logger = get_logger()
 
-        # 1. 创建 worker 并启动
+        # 1. 创建 worker + 独立 QThread（不是 worker 自己继承 QThread！）
+        self.worker_thread = QThread(self)
         self.worker = JLinkWorker()
-        self.worker.start()
+        self.worker.moveToThread(self.worker_thread)
+        self.worker_thread.started.connect(self.worker.initialize)
+        self.worker_thread.start()
 
         # 2. 各页面
         self.rtt_page = RTTMonitorPage(self.worker, cfg, self)
@@ -45,9 +48,7 @@ class MainWindow(FluentWindow):
             self.about_page, FIF.INFO, "关于", NavigationItemPosition.BOTTOM
         )
 
-        # 4. 把 ConfigService 的 rtt_poll_interval_changed 接到 worker
-        # 注意：不做 startup singleShot 信号转发，避免 cross-thread timer 警告。
-        # worker 以默认 poll interval（20 ms）启动；用户在设置页修改后才 emit 一次。
+        # 4. ConfigService 的 rtt_poll_interval_changed 信号连到 worker
         self._cfg.rtt_poll_interval_changed.connect(self.worker.set_poll_interval_requested)
 
         # 5. 窗口属性
@@ -71,11 +72,11 @@ class MainWindow(FluentWindow):
         self._cfg.set("window_geometry", base64.b64encode(bytes(geom)).decode("ascii"))
         self._cfg.flush()
 
-        # 关闭 worker：发停止信号 → wait → 兜底 terminate
+        # 关闭 worker：emit stop → worker._on_stop 在 worker 线程清理 → thread.quit()
         self.worker.stop_requested.emit()
-        if not self.worker.wait(2000):
+        if not self.worker_thread.wait(2000):
             self._logger.error("worker 退出超时，强制 terminate")
-            self.worker.terminate()
-            self.worker.wait(1000)
+            self.worker_thread.terminate()
+            self.worker_thread.wait(1000)
 
         event.accept()
