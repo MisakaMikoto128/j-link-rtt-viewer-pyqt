@@ -1,7 +1,9 @@
 """RTT 监控页：控制栏 + 选项栏 + 显示区 + 搜索栏 + 发送栏。"""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+import base64
+
+from PySide6.QtCore import QByteArray, Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QTextCharFormat, QTextCursor, QColor
 from PySide6.QtWidgets import (
     QCompleter,
@@ -10,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -274,11 +277,8 @@ class RTTMonitorPage(QWidget):
         self.display.setMaximumBlockCount(self._cfg.get("max_display_lines"))
         # 固定宽度按窗口宽度换行（超过窗宽自动 wrap，便于阅读长行日志）
         self.display.setLineWrapMode(PlainTextEdit.WidgetWidth)
-        # 默认最小高度 500px：约 30 行可视——日志阅读舒适带。窗口够高时
-        # stretch=1 会让 display 自然填满剩余空间；窗口高度不够时 ScrollArea
-        # 整页纵向滚动，而不是把日志区压成几行。
-        self.display.setMinimumHeight(500)
-        root.addWidget(self.display, 1)
+        # display 最小 120 / bottom 最小 60：splitter handle 可在两者间自由拖动；
+        # 真正的"默认观感"由下面 splitter.setSizes([500, 160]) 给出。
 
         # ---- 搜索栏 ----
         try:
@@ -332,9 +332,43 @@ class RTTMonitorPage(QWidget):
         status.addStretch(1)
         status.addWidget(self.lbl_status_encoding)
 
-        root.addLayout(srch)
-        root.addLayout(send)
-        root.addLayout(status)
+        # ---- 垂直 splitter：display（上） + 底部控件（下，搜索/发送/状态）----
+        # 用户拖 handle 调 display 高度；状态持久化到 cfg.rtt_splitter_state
+        bottom = QWidget(inner)
+        bot_lay = QVBoxLayout(bottom)
+        bot_lay.setContentsMargins(0, 0, 0, 0)
+        bot_lay.setSpacing(8)
+        bot_lay.addLayout(srch)
+        bot_lay.addLayout(send)
+        bot_lay.addLayout(status)
+        bottom.setMinimumHeight(60)
+        self.display.setMinimumHeight(120)
+
+        self.splitter = QSplitter(Qt.Vertical, inner)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.addWidget(self.display)
+        self.splitter.addWidget(bottom)
+        self.splitter.setStretchFactor(0, 3)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([500, 160])
+        # 整页纵向 ScrollArea 兜底：inner 最小高度 = 顶部固定区 ~250 + splitter
+        # 两子最小 (120 + 60) + spacing ≈ 440。窗口高度低于该值时整页可滚。
+        root.addWidget(self.splitter, 1)
+
+        # splitter 状态持久化（内联，不另起模块——单处使用 + Occam's razor）
+        state_b64 = self._cfg.get("rtt_splitter_state")
+        if state_b64:
+            try:
+                self.splitter.restoreState(QByteArray(base64.b64decode(state_b64)))
+            except Exception:
+                pass  # 旧版数据格式 / base64 损坏 — 忽略，用默认 sizes
+        self.splitter.splitterMoved.connect(self._save_splitter_state)
+
+    def _save_splitter_state(self, *_args) -> None:
+        self._cfg.set(
+            "rtt_splitter_state",
+            base64.b64encode(bytes(self.splitter.saveState())).decode("ascii"),
+        )
 
     # ------------------------------------------------------------------
     # 信号接线
