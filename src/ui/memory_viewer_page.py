@@ -124,9 +124,17 @@ class MemoryViewerPage(QWidget):
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # 三层透明：避免 ScrollArea 默认 base color 叠在 FluentWindow 上泛 cream。
+        # 跟 RTT 页保持一致。objectName 选择器确保不污染 CardWidget 等子控件样式。
+        self._scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        vp = self._scroll.viewport()
+        vp.setObjectName("mem_scroll_viewport")
+        vp.setStyleSheet("QWidget#mem_scroll_viewport { background: transparent; }")
         outer.addWidget(self._scroll)
 
         inner = QWidget()
+        inner.setObjectName("mem_scroll_inner")
+        inner.setStyleSheet("QWidget#mem_scroll_inner { background: transparent; }")
         self._scroll.setWidget(inner)
         root = QVBoxLayout(inner)
         root.setContentsMargins(16, 16, 16, 16)

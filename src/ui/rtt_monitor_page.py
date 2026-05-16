@@ -119,8 +119,17 @@ class RTTMonitorPage(QWidget):
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # 三层透明：ScrollArea / viewport / inner —— 让 FluentWindow 背景透下来，
+        # 避免叠 base color 后泛 cream 的视觉脏。objectName 选择器确保只命中
+        # 这三个 wrapper，不污染 CardWidget/PlainTextEdit 等子控件样式。
+        self._scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        vp = self._scroll.viewport()
+        vp.setObjectName("rtt_scroll_viewport")
+        vp.setStyleSheet("QWidget#rtt_scroll_viewport { background: transparent; }")
         outer.addWidget(self._scroll)
         inner = QWidget()
+        inner.setObjectName("rtt_scroll_inner")
+        inner.setStyleSheet("QWidget#rtt_scroll_inner { background: transparent; }")
         self._scroll.setWidget(inner)
         root = QVBoxLayout(inner)
         root.setContentsMargins(16, 16, 16, 16)
@@ -265,8 +274,10 @@ class RTTMonitorPage(QWidget):
         self.display.setMaximumBlockCount(self._cfg.get("max_display_lines"))
         # 固定宽度按窗口宽度换行（超过窗宽自动 wrap，便于阅读长行日志）
         self.display.setLineWrapMode(PlainTextEdit.WidgetWidth)
-        # 默认最小高度：保证窗口压扁时 ScrollArea 出滚动条而不是把日志区压成 1 行
-        self.display.setMinimumHeight(240)
+        # 默认最小高度 500px：约 30 行可视——日志阅读舒适带。窗口够高时
+        # stretch=1 会让 display 自然填满剩余空间；窗口高度不够时 ScrollArea
+        # 整页纵向滚动，而不是把日志区压成几行。
+        self.display.setMinimumHeight(500)
         root.addWidget(self.display, 1)
 
         # ---- 搜索栏 ----
