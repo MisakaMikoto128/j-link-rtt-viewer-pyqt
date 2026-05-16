@@ -118,12 +118,12 @@ class SettingsPage(QWidget):
         self.sp_max_lines.valueChanged.connect(lambda v: self._cfg.set("max_display_lines", v))
         rtt_lay.addWidget(_SettingRow("显示区最大行数", self.sp_max_lines))
 
-        self.sp_rx_to = SpinBox(self)
-        self.sp_rx_to.setRange(5, 1000)   # 5ms - 1s
-        self.sp_rx_to.setSuffix(" ms")
-        self.sp_rx_to.setValue(max(20, self._cfg.get("rx_timeout_ms") or 20))
-        self.sp_rx_to.valueChanged.connect(lambda v: self._cfg.set("rx_timeout_ms", v))
-        rtt_lay.addWidget(_SettingRow("RTT 轮询间隔", self.sp_rx_to))
+        self.sp_poll = SpinBox(self)
+        self.sp_poll.setRange(5, 1000)   # 5ms - 1s
+        self.sp_poll.setSuffix(" ms")
+        self.sp_poll.setValue(max(20, self._cfg.get("rtt_poll_interval_ms") or 100))
+        self.sp_poll.valueChanged.connect(lambda v: self._cfg.set("rtt_poll_interval_ms", v))
+        rtt_lay.addWidget(_SettingRow("RTT 轮询间隔", self.sp_poll))
 
         log_row = QHBoxLayout()
         log_row.addWidget(BodyLabel("日志保存目录"), 1)

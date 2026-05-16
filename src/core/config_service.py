@@ -36,7 +36,7 @@ class ConfigService(QObject):
         "font_family": "Consolas",
         "font_size": 13,
         "max_display_lines": 10000,
-        "rx_timeout_ms": 0,
+        "rtt_poll_interval_ms": 100,   # RTT 轮询间隔（ms）—— 旧版叫 rx_timeout_ms，已迁移
         "log_dir": "",              # 空 → 用默认 %APPDATA%/JLinkRTTViewer/logs
         "window_geometry": "",      # base64 of QByteArray
         "hex_send_mode": False,
@@ -91,6 +91,12 @@ class ConfigService(QObject):
             return
         if not isinstance(disk, dict):
             return
+        # 一次性迁移：rx_timeout_ms → rtt_poll_interval_ms（旧名语义混乱，新名与信号匹配）
+        if "rx_timeout_ms" in disk and "rtt_poll_interval_ms" not in disk:
+            try:
+                disk["rtt_poll_interval_ms"] = int(disk["rx_timeout_ms"]) or 100
+            except (TypeError, ValueError):
+                disk["rtt_poll_interval_ms"] = 100
         for key, default in self.DEFAULTS.items():
             if key not in disk:
                 continue
@@ -132,7 +138,7 @@ class ConfigService(QObject):
             self.font_changed.emit(self._data["font_family"], self._data["font_size"])
         elif key == "max_display_lines":
             self.max_display_lines_changed.emit(value)
-        elif key == "rx_timeout_ms":
+        elif key == "rtt_poll_interval_ms":
             self.rtt_poll_interval_changed.emit(value)
 
     def flush(self) -> None:
