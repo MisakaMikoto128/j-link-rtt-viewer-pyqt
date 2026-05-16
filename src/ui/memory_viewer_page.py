@@ -60,6 +60,11 @@ _DTYPES = ["u8", "i8", "u16", "i16", "u32", "i32", "float", "double"]
 # format_hex_dump 每行 hex 区起始列：0x{8 hex}: + "  " = 11 + 2 = 13
 # 测试 test_format_hex_dump_row_layout_contract 保护此契约
 _HEX_START_COL = 13
+# Diff highlight 阈值——超过这个大小不算 diff（python 字节比较 O(n) + setExtraSelections
+# 大量选区会让 UI 主线程冻结 1-3s）。256 KB 在 STM32 系列上够看一片 RAM 或一两段 flash。
+_DIFF_MAX_SIZE = 256 * 1024
+# 高亮变化字节数上限：超过则只显示前 N 个，避免 setExtraSelections 万级选区拖垮 layout。
+_DIFF_MAX_HIGHLIGHTS = 512
 
 
 def _parse_int(text: str) -> int:
@@ -90,9 +95,9 @@ class MemoryViewerPage(QWidget):
         self._buffer: bytes = b""
         self._buffer_base: int = 0
         self._bytes_per_row: int = 16
-        # 上次缓冲（用于 diff highlight）
-        self._prev_buffer: bytes = b""
-        self._prev_buffer_base: int = -1
+        # 上次 hover 显示的字节偏移；同一字节内 MouseMove 不重算 tooltip。
+        # cursorForPosition 在大 buffer 上做 layout hit-test 不便宜，每秒可调用百次。
+        self._last_hover_offset: int = -1
 
         # 自动刷新 timer
         self._auto_refresh_timer = QTimer(self)
@@ -358,6 +363,7 @@ class MemoryViewerPage(QWidget):
         self.display.clear()
         self._buffer = b""
         self._buffer_base = 0
+        self._last_hover_offset = -1
         self.lbl_cursor_addr.setText("—")
         for lbl in self._type_labels.values():
             lbl.setText("—")
@@ -392,38 +398,46 @@ class MemoryViewerPage(QWidget):
             self._on_read_clicked()
 
     def _on_memory_read(self, addr: int, raw: bytes) -> None:
-        # 计算 diff（仅在地址 + 长度都不变时有意义，否则没法对位比较）
-        diff_offsets: list[int] = []
-        if (self.chk_diff.isChecked() and self._prev_buffer_base == addr
-                and len(self._prev_buffer) == len(raw)):
-            diff_offsets = [i for i in range(len(raw)) if raw[i] != self._prev_buffer[i]]
-        # 用新数据替换缓冲
-        self._prev_buffer = raw
-        self._prev_buffer_base = addr
+        # 抓 diff 用的「上一帧」快照（只在 reassign 前几行内有意义；
+        # 不需要 self._prev_* 实例字段——重读后 prev 永远等于当前 buffer，是死状态）
+        prev = self._buffer
+        prev_base = self._buffer_base
         self._buffer = raw
         self._buffer_base = addr
         self._rerender()
         self._refresh_types()
-        if diff_offsets:
-            self._highlight_diff(diff_offsets)
-        else:
-            self.display.setExtraSelections([])
+
+        # Diff 仅在 地址+长度 都不变 且 在阈值内 时计算
+        if (self.chk_diff.isChecked() and prev_base == addr
+                and len(prev) == len(raw) and len(raw) <= _DIFF_MAX_SIZE):
+            diff_offsets = [i for i in range(len(raw)) if raw[i] != prev[i]]
+            if diff_offsets:
+                self._highlight_diff(diff_offsets[:_DIFF_MAX_HIGHLIGHTS])
+                return
+        self.display.setExtraSelections([])
 
     def _highlight_diff(self, offsets: list[int]) -> None:
-        """给变化字节的 HH 字符（2 列）叠红色半透明背景。"""
-        selections: list[QTextEdit.ExtraSelection] = []
+        """给变化字节的 HH 字符（2 列）叠红色半透明背景。
+
+        Why findBlockByNumber + setPosition (O(1) per offset)：原实现对每个 offset
+        都 cursor.Start → Down*row → Right*col 三步走，单次 O(rows)；512 个 diff
+        在 16 KB 多行 buffer 上能阻塞 UI 数百 ms。改用 doc.findBlockByNumber(row)
+        + setPosition(block.position()+col) 后是 O(1)，整轮 ~µs 级。
+        """
+        doc = self.display.document()
         fmt = QTextCharFormat()
         fmt.setBackground(QColor(255, 80, 80, 100))
         bpr = self._bytes_per_row
+        selections: list[QTextEdit.ExtraSelection] = []
         for offset in offsets:
-            row = offset // bpr
-            col_in_row = offset % bpr
-            col = _HEX_START_COL + col_in_row * 3 + (col_in_row // 4) * 1
-            cursor = QTextCursor(self.display.document())
-            cursor.movePosition(QTextCursor.Start)
-            cursor.movePosition(QTextCursor.Down, QTextCursor.MoveAnchor, row)
-            cursor.movePosition(QTextCursor.Right, QTextCursor.MoveAnchor, col)
-            cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 2)
+            row, col_in_row = divmod(offset, bpr)
+            block = doc.findBlockByNumber(row)
+            if not block.isValid():
+                continue
+            pos = block.position() + _HEX_START_COL + col_in_row * 3 + (col_in_row // 4)
+            cursor = QTextCursor(doc)
+            cursor.setPosition(pos)
+            cursor.setPosition(pos + 2, QTextCursor.KeepAnchor)
             sel = QTextEdit.ExtraSelection()
             sel.cursor = cursor
             sel.format = fmt
@@ -447,8 +461,12 @@ class MemoryViewerPage(QWidget):
         cursor = self.display.cursorForPosition(event.pos())
         offset = self._byte_offset_at(cursor.blockNumber(), cursor.positionInBlock())
         if offset < 0 or offset >= len(self._buffer):
+            self._last_hover_offset = -1
             QToolTip.hideText()
             return
+        if offset == self._last_hover_offset:
+            return  # 仍在同一字节，tooltip 已显示
+        self._last_hover_offset = offset
         addr = self._buffer_base + offset
         # 同一 offset 给出 4 字节 LE/BE + 2 字节 LE，方便对照寄存器布局
         le_u32 = parse_value(self._buffer, offset, "u32", True)

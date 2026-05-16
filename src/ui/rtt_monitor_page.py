@@ -415,35 +415,24 @@ class RTTMonitorPage(QWidget):
         不带时间戳（用户明确要求）。空输入时插入纯分隔行 ───────。
         """
         text = self.le_mark.currentText().strip()
-        # 保存历史（最多 10 条，去重）
         if text:
             if text in self._mark_history:
                 self._mark_history.remove(text)
             self._mark_history.append(text)
             self._mark_history = self._mark_history[-10:]
-            self.le_mark.blockSignals(True)
             self.le_mark.clear()
             self.le_mark.addItems(reversed(self._mark_history))
-            self.le_mark.blockSignals(False)
 
-        if text:
-            line = f"──── {text} ────"
-        else:
-            line = "─" * 50
+        line = f"──── {text} ────" if text else "─" * 50
 
         sb = self.display.verticalScrollBar()
         at_bottom = sb.value() >= sb.maximum() - 4
 
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(_ANSI_COLOR_MAP["bright_yellow"]))
-        fmt.setFontWeight(QFont.Bold)
-
         cursor = self.display.textCursor()
         cursor.movePosition(QTextCursor.End)
-        # 若当前不在行首，先插换行
         if cursor.columnNumber() != 0:
             cursor.insertText("\n")
-        cursor.insertText(line + "\n", fmt)
+        cursor.insertText(line + "\n", self._fmt(AnsiAttrs(fg="bright_yellow", bold=True)))
 
         if at_bottom:
             sb.setValue(sb.maximum())
@@ -542,7 +531,7 @@ class RTTMonitorPage(QWidget):
         full = self.display.toPlainText()
         cnt = full.count(text)
         if cnt == 0:
-            self.lbl_match.setText(f"0/0")
+            self.lbl_match.setText("0/0")
             return
         # 用当前光标 absolute position 反推是第几个匹配
         cursor = self.display.textCursor()

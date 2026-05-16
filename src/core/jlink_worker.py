@@ -105,11 +105,22 @@ class JLinkWorker(QObject):
     # ============================================================
     # worker 线程初始化（由外部 QThread.started 触发）
     # ============================================================
+    def set_initial_encoding(self, encoding: str) -> None:
+        """主线程在 thread.start() 之前同步设置初始编码。
+
+        Why: MainWindow 启动时如果通过 set_encoding_requested.emit 传递初始编码，
+        会和 thread.started → initialize() 形成竞态——emit 时槽尚未连接，
+        信号被静默丢弃，启动后 worker 永远停在默认 utf-8（即便 user_prefs 里
+        存的是 gbk）。直接同步赋值绕过信号路径，安全因为 worker 线程还没启动。
+        """
+        if encoding:
+            self._encoding = encoding
+
     @Slot()
     def initialize(self) -> None:
         """在 worker 线程内创建所有 thread-affinity 敏感的对象。"""
         self.jlink = pylink.JLink()
-        self._reset_utf8_decoder()
+        self._reset_decoder()
 
         # 把输入信号连到本地槽（同线程，DirectConnection）
         self.connect_requested.connect(self._on_connect)
@@ -176,7 +187,7 @@ class JLinkWorker(QObject):
             self.jlink.set_tif(tif)
             self.jlink.set_speed(int(speed))
             self.jlink.connect(target)
-            self._reset_utf8_decoder()
+            self._reset_decoder()
 
             if self.jlink.connected():
                 self._state = _STATE_CONNECTED
@@ -276,7 +287,7 @@ class JLinkWorker(QObject):
     # ============================================================
     # RTT 读循环
     # ============================================================
-    def _reset_utf8_decoder(self) -> None:
+    def _reset_decoder(self) -> None:
         """重建 incremental decoder。"""
         try:
             self._decoder = codecs.getincrementaldecoder(self._encoding)(errors="replace")
@@ -373,6 +384,8 @@ class JLinkWorker(QObject):
     def _on_set_poll_interval(self, ms: int) -> None:
         if ms < 1:
             ms = 100
+        if ms == int(self._poll_interval * 1000):
+            return
         self._poll_interval = ms / 1000.0
         self.log_message.emit("info", f"RTT 轮询间隔设为 {ms} ms")
 
@@ -384,7 +397,7 @@ class JLinkWorker(QObject):
         if encoding == self._encoding:
             return
         self._encoding = encoding
-        self._reset_utf8_decoder()
+        self._reset_decoder()
         self._logger.info(f"RTT 解码编码切换为 {encoding}")
 
     @Slot(bool)

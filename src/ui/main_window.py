@@ -28,6 +28,9 @@ class MainWindow(FluentWindow):
         # 1. 创建 worker + 独立 QThread（不是 worker 自己继承 QThread！）
         self.worker_thread = QThread(self)
         self.worker = JLinkWorker()
+        # 初始编码在 thread.start() 前同步设置——不能用 set_encoding_requested.emit，
+        # 那会和 initialize() 内 connect 形成竞态导致信号被丢弃。
+        self.worker.set_initial_encoding(cfg.get("rtt_encoding"))
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.initialize)
         self.worker_thread.start()
@@ -52,8 +55,6 @@ class MainWindow(FluentWindow):
         # 4. ConfigService 的 rtt_poll_interval_changed / rtt_encoding_changed 信号连到 worker
         self._cfg.rtt_poll_interval_changed.connect(self.worker.set_poll_interval_requested)
         self._cfg.rtt_encoding_changed.connect(self.worker.set_encoding_requested)
-        # 启动时把当前编码推一次给 worker（initialize 已 ready，QueuedConnection 入队即可）
-        self.worker.set_encoding_requested.emit(self._cfg.get("rtt_encoding") or "utf-8")
 
         # 5. UI 界面字体（应用到 QApplication，影响侧边栏/按钮/标签等所有 fluent 控件）
         self._cfg.ui_font_changed.connect(self._apply_ui_font)

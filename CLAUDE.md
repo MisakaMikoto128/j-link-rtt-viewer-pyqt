@@ -67,9 +67,9 @@ if decoded:
 
 **原因**：`IncrementalDecoder.getstate()` 返回 `(buffer_state, additional_state)` 其中 `additional_state` 是 **整数**（标记位），不是剩余字节。`bytearray(int)` 会创建一个该长度的零字节数组——等于每次清空 buffer 但加几个零字节进去。这是抄来的 bug，但因为 UTF-8 跨行半字节场景很少触发，长期没被发现。
 
-**处理**：直接 `decoded = decoder.decode(bytes(data))` 即可，半字节缓冲在 decoder 内部维护。不要在外层叠一层 byte_buffer。每次重连前 `_reset_utf8_decoder()` 重建 decoder，避免上次掉线残留污染。
+**处理**：直接 `decoded = decoder.decode(bytes(data))` 即可，半字节缓冲在 decoder 内部维护。不要在外层叠一层 byte_buffer。每次重连前 `_reset_decoder()` 重建 decoder，避免上次掉线残留污染。
 
-参考：`src/core/jlink_worker.py` `_poll_rtt` / `_reset_utf8_decoder`
+参考：`src/core/jlink_worker.py` `_poll_rtt` / `_reset_decoder`
 
 ---
 
