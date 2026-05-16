@@ -108,6 +108,9 @@ def test_disconnect_sequence_with_guards(worker):
     jl.connected.return_value = True
     w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
     _drain_events(0.5)
+    # _on_connect 会启动真实的 _read_thread（threading.Thread）
+    assert w._read_thread is not None
+    assert w._read_thread.is_alive(), "连接后 read_thread 应启动"
 
     w.disconnect_requested.emit()
     _drain_events(0.5)
@@ -115,6 +118,10 @@ def test_disconnect_sequence_with_guards(worker):
     assert jl.rtt_stop.called
     assert jl.close.called
     assert w.state_name() == "IDLE"
+    # _do_disconnect 必须 join read_thread 并把句柄置 None
+    assert w._read_thread is None, "disconnect 后 read_thread 句柄应已清空"
+    # _stop_read 对称重置回 False（避免下次连接前残留 True）
+    assert w._stop_read is False, "disconnect 末尾应将 _stop_read 重置为 False"
 
 
 def test_disconnect_always_calls_cleanup(worker):
@@ -218,6 +225,9 @@ def test_stop_requested_quits_thread(qapp, monkeypatch):
         time.sleep(0.01)
 
     assert not thread.isRunning(), "stop_requested 后 thread 应已退出"
+    # drain timer 必须由 worker 在自己线程内 stop+deleteLater，否则退出会有
+    # cross-thread killTimer 警告（CLAUDE.md「worker 线程内的 QTimer 退出前必须自己 stop」）
+    assert worker._rtt_drain_timer is None, "worker 退出前应已清理 drain timer"
 
 
 def test_send_data_text(worker):
