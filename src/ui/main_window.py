@@ -4,7 +4,7 @@ from __future__ import annotations
 import base64
 
 from PySide6.QtCore import QByteArray, QThread
-from PySide6.QtGui import QCloseEvent, QFont
+from PySide6.QtGui import QCloseEvent, QFont, QShowEvent
 from PySide6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, NavigationItemPosition
@@ -49,8 +49,11 @@ class MainWindow(FluentWindow):
             self.about_page, FIF.INFO, "关于", NavigationItemPosition.BOTTOM
         )
 
-        # 4. ConfigService 的 rtt_poll_interval_changed 信号连到 worker
+        # 4. ConfigService 的 rtt_poll_interval_changed / rtt_encoding_changed 信号连到 worker
         self._cfg.rtt_poll_interval_changed.connect(self.worker.set_poll_interval_requested)
+        self._cfg.rtt_encoding_changed.connect(self.worker.set_encoding_requested)
+        # 启动时把当前编码推一次给 worker（initialize 已 ready，QueuedConnection 入队即可）
+        self.worker.set_encoding_requested.emit(self._cfg.get("rtt_encoding") or "utf-8")
 
         # 5. UI 界面字体（应用到 QApplication，影响侧边栏/按钮/标签等所有 fluent 控件）
         self._cfg.ui_font_changed.connect(self._apply_ui_font)
@@ -87,6 +90,34 @@ class MainWindow(FluentWindow):
             except Exception as e:
                 self._logger.warning(f"恢复窗口几何失败：{e}")
         self.resize(1200, 800)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """显示后兜底裁剪到可用区域，防止 Windows 任务栏遮挡底部控件。
+
+        FluentWindow 内部 NavigationInterface + StackedWidget 子页累积 sizeHint
+        可能让 Qt 算出比屏幕可用区域还大的 mintrack。Windows 此时会让 client
+        区扩展到任务栏后方，看上去底部被遮挡。我们在显示后主动检查并夹回
+        可用区域。"""
+        super().showEvent(event)
+        if getattr(self, "_did_initial_fit", False):
+            return
+        self._did_initial_fit = True
+        app = QApplication.instance()
+        if app is None:
+            return
+        screen = app.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        geo = self.frameGeometry()
+        # 任意一边超出可用区域 → 重新放进去
+        if (geo.bottom() > avail.bottom() or geo.right() > avail.right()
+                or geo.top() < avail.top() or geo.left() < avail.left()):
+            new_w = min(geo.width(), avail.width())
+            new_h = min(geo.height(), avail.height())
+            new_x = max(avail.left(), min(geo.left(), avail.right() - new_w))
+            new_y = max(avail.top(), min(geo.top(), avail.bottom() - new_h))
+            self.setGeometry(new_x, new_y, new_w, new_h)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         # 保存窗口几何

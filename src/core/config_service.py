@@ -26,6 +26,7 @@ class ConfigService(QObject):
     memory_font_size_changed = Signal(int)  # 内存页 hex dump 字号（family 与 RTT 共用 font_family）
     max_display_lines_changed = Signal(int) # new max block count for QPlainTextEdit
     rtt_poll_interval_changed = Signal(int) # poll timer interval in ms
+    rtt_encoding_changed = Signal(str)      # RTT 解码编码（utf-8 / gbk / utf-16-le / ...）
 
     DEFAULTS: dict[str, Any] = {
         "target_mcu": "",
@@ -44,6 +45,7 @@ class ConfigService(QObject):
         "ui_font_size": 0,
         "max_display_lines": 10000,
         "rtt_poll_interval_ms": 100,   # RTT 轮询间隔（ms）—— 旧版叫 rx_timeout_ms，已迁移
+        "rtt_encoding": "utf-8",       # RTT 解码编码：utf-8 / gbk / utf-16-le / latin-1 / ascii
         "log_dir": "",              # 空 → 用默认 %APPDATA%/JLinkRTTViewer/logs
         "window_geometry": "",      # base64 of QByteArray
         "hex_send_mode": False,
@@ -153,6 +155,8 @@ class ConfigService(QObject):
             self.ui_font_changed.emit(self._data["ui_font_family"], self._data["ui_font_size"])
         elif key == "memory_font_size":
             self.memory_font_size_changed.emit(self._data["memory_font_size"])
+        elif key == "rtt_encoding":
+            self.rtt_encoding_changed.emit(self._data["rtt_encoding"])
         elif key == "max_display_lines":
             self.max_display_lines_changed.emit(value)
         elif key == "rtt_poll_interval_ms":

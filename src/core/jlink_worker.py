@@ -50,6 +50,7 @@ class JLinkWorker(QObject):
     set_pause_receive_requested = Signal(bool)
     set_power_output_requested = Signal(bool)
     set_poll_interval_requested = Signal(int)
+    set_encoding_requested = Signal(str)
     read_memory_requested = Signal(int, int)
     export_firmware_requested = Signal(str, int, int)
     start_log_recording_requested = Signal(str)
@@ -81,6 +82,7 @@ class JLinkWorker(QObject):
         # 这些在 initialize() 内（worker 线程）创建/启动：
         self.jlink: pylink.JLink | None = None
         self._decoder: codecs.IncrementalDecoder | None = None
+        self._encoding: str = "utf-8"      # 可由 UI 改：utf-8/gbk/utf-16-le/...
         self._read_thread: threading.Thread | None = None
         self._stop_read: bool = False
         self._poll_interval: float = 0.1   # 100ms，匹配参考项目
@@ -118,6 +120,7 @@ class JLinkWorker(QObject):
         self.set_pause_receive_requested.connect(self._on_set_paused)
         self.set_power_output_requested.connect(self._on_set_power)
         self.set_poll_interval_requested.connect(self._on_set_poll_interval)
+        self.set_encoding_requested.connect(self._on_set_encoding)
         self.read_memory_requested.connect(self._on_read_memory)
         self.export_firmware_requested.connect(self._on_export_firmware)
         self.start_log_recording_requested.connect(self._on_start_log)
@@ -274,7 +277,13 @@ class JLinkWorker(QObject):
     # RTT 读循环
     # ============================================================
     def _reset_utf8_decoder(self) -> None:
-        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        """重建 incremental decoder。"""
+        try:
+            self._decoder = codecs.getincrementaldecoder(self._encoding)(errors="replace")
+        except LookupError:
+            self._logger.warning(f"未知编码 {self._encoding}，回退 utf-8")
+            self._encoding = "utf-8"
+            self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     def _read_loop(self) -> None:
         """daemon 读线程：在独立 Python 线程跑，照搬参考项目模式。
@@ -366,6 +375,17 @@ class JLinkWorker(QObject):
             ms = 100
         self._poll_interval = ms / 1000.0
         self.log_message.emit("info", f"RTT 轮询间隔设为 {ms} ms")
+
+    @Slot(str)
+    def _on_set_encoding(self, encoding: str) -> None:
+        """切换 RTT 解码编码（utf-8/gbk/utf-16-le/...）。立即重建 decoder。"""
+        if not encoding:
+            return
+        if encoding == self._encoding:
+            return
+        self._encoding = encoding
+        self._reset_utf8_decoder()
+        self._logger.info(f"RTT 解码编码切换为 {encoding}")
 
     @Slot(bool)
     def _on_set_power(self, enable: bool) -> None:

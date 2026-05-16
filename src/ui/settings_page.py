@@ -164,6 +164,16 @@ class SettingsPage(QWidget):
         self.sp_poll.valueChanged.connect(lambda v: self._cfg.set("rtt_poll_interval_ms", v))
         rtt_lay.addWidget(_SettingRow("RTT 轮询间隔", self.sp_poll))
 
+        # RTT 解码编码：默认 utf-8，可切换 gbk/utf-16-le/latin-1/ascii
+        self.cb_encoding = ComboBox(self)
+        self.cb_encoding.addItems(["utf-8", "gbk", "utf-16-le", "latin-1", "ascii"])
+        cur_enc = (self._cfg.get("rtt_encoding") or "utf-8").lower()
+        if self.cb_encoding.findText(cur_enc) < 0:
+            self.cb_encoding.addItem(cur_enc)
+        self.cb_encoding.setCurrentText(cur_enc)
+        self.cb_encoding.currentTextChanged.connect(self._on_encoding_changed)
+        rtt_lay.addWidget(_SettingRow("RTT 解码编码", self.cb_encoding))
+
         log_row = QHBoxLayout()
         log_row.addWidget(BodyLabel("日志保存目录"), 1)
         self.lbl_log_dir = QLabel(self._cfg.get("log_dir") or str(get_log_dir()))
@@ -244,6 +254,13 @@ class SettingsPage(QWidget):
         if v <= 0:
             return
         self._cfg.set("ui_font_size", v)
+
+    def _on_encoding_changed(self, enc: str) -> None:
+        enc = (enc or "utf-8").strip().lower()
+        if not enc:
+            return
+        self._cfg.set("rtt_encoding", enc)
+        _infobar.ok(self, "已切换 RTT 编码", f"新编码：{enc}（立即生效）")
 
     def _on_reset_ui_font(self) -> None:
         self._cfg.set("ui_font_family", "")
