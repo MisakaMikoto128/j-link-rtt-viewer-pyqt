@@ -219,6 +219,34 @@ if at_bottom and self.chk_auto_scroll.isChecked():
 
 ---
 
+## UI 状态切换不要依赖跨线程信号 round-trip
+
+**现象**：点击"断开"按钮，UI 卡在"断开中…"，永不恢复成"连接"。worker 日志已经打印"已断开 J-Link"（意味着 `connection_state_changed.emit(False, {})` 已发出），同时控制台出现 `QObject::setParent: Cannot set parent, new parent is in a different thread` 警告。重启程序、再连再断，复现稳定。
+
+**原因**：UI 点击"断开"后只 `setEnabled(False) + setText("断开中…")` 等 worker 跑完清理后通过 `connection_state_changed` queued signal 回来再把按钮切回"连接"。但跨线程信号 round-trip 不可靠：
+- worker 是 `moveToThread(worker_thread)` 后的 QObject，read 循环是 native `threading.Thread`（不是 QThread）
+- 从 native thread emit 信号、Auto Connection 在 PySide6 上的 sender thread 判定有 edge case
+- 跨线程传 `dict` 参数时 PySide6 的 marshalling 偶发会让 slot 不被调用，但不抛错只默默丢
+- 这条路径上还有 `setParent` 警告，说明确实有跨线程 widget 操作竞争
+
+总之这条路径**不稳定**——任何时候只要 UI 状态切换得**等** worker 回信号才发生，就有卡 UI 的风险。
+
+**处理**：
+1. **断开按钮立即乐观恢复 UI**：worker 内部 `_do_disconnect()` 对每一步都 try/except + warning，外部看一定"成功"。UI 直接 `_set_disconnected_ui()` 把按钮、reset/send/power、设备信息标签全置回初始态。`worker.disconnect_requested.emit()` 仍然发出，但 UI 不等回信号。
+2. **`_on_state_changed` 拆出 `_set_connected_ui` / `_set_disconnected_ui` 两个方法**，让 worker 回信号时仍能调（幂等，无害）——作为兜底而不是主路径。
+3. **worker → UI 信号显式 `Qt.QueuedConnection`**：
+   ```python
+   self._worker.rtt_data_received.connect(self._on_rtt_data, Qt.QueuedConnection)
+   self._worker.connection_state_changed.connect(self._on_state_changed, Qt.QueuedConnection)
+   self._worker.command_result.connect(self._on_command_result, Qt.QueuedConnection)
+   self._worker.log_message.connect(self._on_log_message, Qt.QueuedConnection)
+   ```
+   排除 PySide6 在 native thread emit 时误判 sender thread 走 DirectConnection 的可能。这是防御性，但**核心修复**是上面的乐观恢复。
+
+参考：`src/ui/rtt_monitor_page.py` `_on_connect_clicked` / `_set_disconnected_ui` / `_wire_signals`
+
+---
+
 ## pylink 1.6.0 连接顺序：必须 open → close → open(serial) → rtt_start → set_tif → set_speed → connect
 
 **现象**：单次 `open()` 后直接 `set_tif → set_speed → connect → rtt_start` 这个看起来更简洁的顺序，在 pylink 1.6.0 上会导致 RTT 永远没数据（虽然 `connected()` 返回 True）。

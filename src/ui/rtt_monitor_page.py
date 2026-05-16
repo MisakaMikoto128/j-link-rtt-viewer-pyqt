@@ -243,8 +243,10 @@ class RTTMonitorPage(QWidget):
         self.chk_hex.toggled.connect(lambda v: self._cfg.set("hex_send_mode", v))
         self.btn_send.clicked.connect(self._on_send_clicked)
 
-        self._worker.rtt_data_received.connect(self._on_rtt_data)
-        self._worker.connection_state_changed.connect(self._on_state_changed)
+        # 显式 QueuedConnection：worker 线程 → 主线程槽，避免 PySide6 在
+        # 「emit 调用从 native threading.Thread 发起」场景下误判 sender thread 走 DirectConnection。
+        self._worker.rtt_data_received.connect(self._on_rtt_data, Qt.QueuedConnection)
+        self._worker.connection_state_changed.connect(self._on_state_changed, Qt.QueuedConnection)
 
         self._cfg.font_changed.connect(self._apply_font)
         self._cfg.max_display_lines_changed.connect(self.display.setMaximumBlockCount)
@@ -259,9 +261,9 @@ class RTTMonitorPage(QWidget):
         self.le_search.returnPressed.connect(lambda: self._do_search(backward=False))
         self.le_search.textChanged.connect(self._update_match_count)
 
-        # 命令结果（错误提示）
-        self._worker.command_result.connect(self._on_command_result)
-        self._worker.log_message.connect(self._on_log_message)
+        # 命令结果（错误提示）—— 同样显式 QueuedConnection
+        self._worker.command_result.connect(self._on_command_result, Qt.QueuedConnection)
+        self._worker.log_message.connect(self._on_log_message, Qt.QueuedConnection)
 
     # ------------------------------------------------------------------
     # 槽函数
@@ -297,10 +299,11 @@ class RTTMonitorPage(QWidget):
             self.btn_connect.setText("连接中…")
             self._worker.connect_requested.emit(target, iface, speed, channel)
         else:
-            # 立即给 UI 反馈
-            self.btn_connect.setEnabled(False)
-            self.btn_connect.setText("断开中…")
+            # 乐观立即恢复 UI：worker 内部 try/except 全包，disconnect 不会失败。
+            # 不依赖跨线程 connection_state_changed 信号 round-trip，避免信号未到时 UI 卡死。
+            # worker 实际跑完后回 _on_state_changed(False, {}) 仍会被调用，幂等无害。
             self._worker.disconnect_requested.emit()
+            self._set_disconnected_ui()
 
     def _on_channel_changed(self, ch: int) -> None:
         self._cfg.set("rtt_channel", ch)
@@ -319,20 +322,31 @@ class RTTMonitorPage(QWidget):
         self._cfg.set("send_history", hist)
 
     def _on_state_changed(self, connected: bool, info: dict) -> None:
-        self.btn_connect.setEnabled(True)
-        self.btn_connect.setText("断开" if connected else "连接")
-        self.btn_reset.setEnabled(connected)
-        self.btn_send.setEnabled(connected)
-        self.chk_power.setEnabled(connected)
         if connected:
-            for key, lbl in self._info_labels.items():
-                lbl.setText(str(info.get(key, "-")))
-            # 连接成功后自动展开设备信息卡片
-            if not self._info_container.isVisible():
-                self._set_info_expanded(True)
+            self._set_connected_ui(info)
         else:
-            for lbl in self._info_labels.values():
-                lbl.setText("-")
+            self._set_disconnected_ui()
+
+    def _set_connected_ui(self, info: dict) -> None:
+        self.btn_connect.setEnabled(True)
+        self.btn_connect.setText("断开")
+        self.btn_reset.setEnabled(True)
+        self.btn_send.setEnabled(True)
+        self.chk_power.setEnabled(True)
+        for key, lbl in self._info_labels.items():
+            lbl.setText(str(info.get(key, "-")))
+        # 连接成功后自动展开设备信息卡片
+        if not self._info_container.isVisible():
+            self._set_info_expanded(True)
+
+    def _set_disconnected_ui(self) -> None:
+        self.btn_connect.setEnabled(True)
+        self.btn_connect.setText("连接")
+        self.btn_reset.setEnabled(False)
+        self.btn_send.setEnabled(False)
+        self.chk_power.setEnabled(False)
+        for lbl in self._info_labels.values():
+            lbl.setText("-")
 
     def _on_rtt_data(self, text: str) -> None:
         """只入缓冲，由 _flush_rtt_buffer 定时批量渲染。"""
