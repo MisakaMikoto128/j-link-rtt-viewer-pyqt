@@ -73,9 +73,16 @@ class MainWindow(FluentWindow):
         self._cfg.flush()
 
         # 关闭 worker：emit stop → worker._on_stop 在 worker 线程清理 → thread.quit()
+        # wait 5 秒：pylink close() 在 STM32H750VB 实测最长 ~3 秒，留余量
         self.worker.stop_requested.emit()
-        if not self.worker_thread.wait(2000):
+        if not self.worker_thread.wait(5000):
             self._logger.error("worker 退出超时，强制 terminate")
+            # terminate 前防御性 close 日志文件，避免最后几秒日志丢失。
+            # Python file 对象的 close() 由 GIL 串行化，主线程调安全。
+            try:
+                self.worker._close_log_file()
+            except Exception as e:
+                self._logger.warning(f"主线程兜底关日志文件失败：{e}")
             self.worker_thread.terminate()
             self.worker_thread.wait(1000)
 

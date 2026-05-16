@@ -241,6 +241,8 @@ class JLinkWorker(QObject):
             self._logger.warning(f"close 失败：{e}")
 
         self._state = _STATE_IDLE
+        # 对称重置 _stop_read：让 flag 生命周期清晰，未来加 reconnect helper 不踩坑
+        self._stop_read = False
         with self._info_lock:
             self._device_info = {}
         if was_active:

@@ -131,7 +131,10 @@ class MemoryViewerPage(QWidget):
         root.addWidget(export_card)
 
         self._save_path: str = ""
-        self._set_enabled_by_connection(False)
+        # 启动时不调 _set_enabled_by_connection(False) 弹 InfoBar——那是噪音。
+        # 控件默认初始 disabled 状态就是正确的。InfoBar 只在用户真正经历 True→False 切换时弹。
+        self.btn_read.setEnabled(False)
+        self.btn_export.setEnabled(False)
 
     def _wire_signals(self) -> None:
         self.btn_read.clicked.connect(self._on_read_clicked)
@@ -140,17 +143,23 @@ class MemoryViewerPage(QWidget):
         self.btn_choose.clicked.connect(self._on_choose_path)
         self.btn_export.clicked.connect(self._on_export_clicked)
 
-        self._worker.connection_state_changed.connect(self._set_enabled_by_connection)
-        self._worker.memory_read_finished.connect(self._on_memory_read)
-        self._worker.firmware_export_progress.connect(self._on_export_progress)
-        self._worker.firmware_export_finished.connect(self._on_export_finished)
-        self._worker.command_result.connect(self._on_command_result)
+        # worker → UI 跨线程连接：一律显式 QueuedConnection，
+        # 对齐 rtt_monitor_page 约定（CLAUDE.md「PySide6 跨线程 Signal 不要传 dict」附则）
+        self._worker.connection_state_changed.connect(
+            self._set_enabled_by_connection, Qt.QueuedConnection
+        )
+        self._worker.memory_read_finished.connect(self._on_memory_read, Qt.QueuedConnection)
+        self._worker.firmware_export_progress.connect(self._on_export_progress, Qt.QueuedConnection)
+        self._worker.firmware_export_finished.connect(self._on_export_finished, Qt.QueuedConnection)
+        self._worker.command_result.connect(self._on_command_result, Qt.QueuedConnection)
 
     def _set_enabled_by_connection(self, connected: bool) -> None:
+        was_connected = self._connected
         self._connected = connected
         self.btn_read.setEnabled(connected)
         self.btn_export.setEnabled(connected and bool(self._save_path))
-        if not connected:
+        # 仅在真正经历过连接后又断开时弹提示，避免启动时的噪音
+        if was_connected and not connected:
             InfoBar.warning(
                 "未连接 J-Link",
                 "请先到 RTT 监控页连接 J-Link，再进行内存读取或导出",

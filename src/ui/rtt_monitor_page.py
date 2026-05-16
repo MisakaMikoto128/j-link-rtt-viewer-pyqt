@@ -67,6 +67,12 @@ class RTTMonitorPage(QWidget):
         # 注意：RTT 节流在 worker 侧做（_rtt_drain_timer 50ms 合并 emit），
         # UI 收到的已经是合并好的批量数据，直接 insertText，不再加一层 timer。
 
+        # 搜索匹配数节流：textChanged 每按键全 buffer 扫描太重，200ms 单次延迟
+        self._match_count_timer = QTimer(self)
+        self._match_count_timer.setSingleShot(True)
+        self._match_count_timer.setInterval(200)
+        self._match_count_timer.timeout.connect(self._do_update_match_count)
+
     # ------------------------------------------------------------------
     # UI 构建
     # ------------------------------------------------------------------
@@ -425,10 +431,19 @@ class RTTMonitorPage(QWidget):
             self.display.find(text, flags)
 
     def _update_match_count(self, text: str) -> None:
+        """textChanged 信号槽：节流到 200ms 再算计数，避免大日志按键卡顿。"""
+        if not text:
+            self.lbl_match.setText("0/0")
+            self._match_count_timer.stop()
+            return
+        # 重启 timer：连续按键期间一直延后到 200ms 静止后才算
+        self._match_count_timer.start()
+
+    def _do_update_match_count(self) -> None:
+        text = self.le_search.text()
         if not text:
             self.lbl_match.setText("0/0")
             return
-        # 简单计数
         cnt = self.display.toPlainText().count(text)
         self.lbl_match.setText(f"-/{cnt}")
 
