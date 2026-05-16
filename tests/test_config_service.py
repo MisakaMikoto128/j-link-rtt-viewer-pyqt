@@ -124,3 +124,16 @@ def test_atomic_write_on_crash(cfg, qapp, tmp_path, monkeypatch):
 
     # 原文件未被破坏
     assert user_prefs.read_text(encoding="utf-8") == original
+
+
+def test_splitter_state_defaults_and_roundtrip(cfg, qapp):
+    """rtt_splitter_state / memory_splitter_state：默认空字符串，可读写 base64 字符串。"""
+    assert cfg.get("rtt_splitter_state") == ""
+    assert cfg.get("memory_splitter_state") == ""
+    # 模拟 QSplitter.saveState() 的 base64 编码（任意非空字节都行，cfg 不解析内容）
+    fake_state = "AAAA/wAAAAEAAAACAAAA9A=="
+    cfg.set("rtt_splitter_state", fake_state)
+    cfg.set("memory_splitter_state", fake_state)
+    cfg.flush()
+    assert cfg.get("rtt_splitter_state") == fake_state
+    assert cfg.get("memory_splitter_state") == fake_state
