@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Draft A: Stylized "J" with lightning bolt — J-Link + 实时速度 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e90c4"/>
+      <stop offset="100%" stop-color="#28afe9"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fff8a0"/>
+      <stop offset="100%" stop-color="#ffd932"/>
+    </linearGradient>
+  </defs>
+  <!-- 圆角背景方块（Fluent 风） -->
+  <rect x="0" y="0" width="256" height="256" rx="48" ry="48" fill="url(#bg)"/>
+  <!-- 大写 J 主体：粗笔画，白色 -->
+  <path d="M 168 56
+           L 168 168
+           C 168 196, 144 220, 116 220
+           C 88  220, 64  196, 64  168
+           L 64  152
+           L 96  152
+           L 96  168
+           C 96  180, 104 188, 116 188
+           C 128 188, 136 180, 136 168
+           L 136 56 Z"
+        fill="#ffffff" stroke="#ffffff" stroke-width="2"/>
+  <!-- J 顶部装饰横（衬线感） -->
+  <rect x="116" y="36" width="84" height="20" rx="4" fill="#ffffff"/>
+  <!-- 闪电符号穿过 J 中部 -->
+  <path d="M 200 80
+           L 168 132
+           L 192 132
+           L 156 188
+           L 188 138
+           L 168 138 Z"
+        fill="url(#bolt)" stroke="#c9a000" stroke-width="2" stroke-linejoin="round"/>
+</svg>

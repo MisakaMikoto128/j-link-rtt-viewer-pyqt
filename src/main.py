@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 # 确保 src 加入 path
@@ -22,11 +23,34 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 
+def _find_app_icon() -> Path | None:
+    """开发模式 vs Nuitka standalone 模式都能找到 app_icon.ico。
+
+    - 开发：<repo>/assets/icons/app_icon.ico
+    - Nuitka standalone：sys.executable 同目录（build_nuitka.bat 用
+      --include-data-files 把 .ico 拷到 exe 旁边）
+    """
+    candidates = [
+        SRC.parent / "assets" / "icons" / "app_icon.ico",
+        Path(sys.executable).resolve().parent / "app_icon.ico",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
+
+
 def main() -> int:
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication(sys.argv)
+
+    # 应用级 icon：影响主窗口左上角、任务栏图标、Alt+Tab 缩略图。
+    # 多分辨率 .ico (16/32/48/64/128/256) 由 Qt 按上下文自动选尺寸。
+    icon_path = _find_app_icon()
+    if icon_path is not None:
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     from core.logger import get_logger
     logger = get_logger()

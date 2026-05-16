@@ -5,11 +5,13 @@ python -m nuitka ^
     --standalone ^
     --enable-plugin=pyside6 ^
     --windows-console-mode=disable ^
+    --windows-icon-from-ico=assets\icons\app_icon.ico ^
     --include-package=qfluentwidgets ^
     --include-package-data=qfluentwidgets ^
     --include-package=pylink ^
     --include-package-data=pylink ^
     --include-data-files=src\config.json=config.json ^
+    --include-data-files=assets\icons\app_icon.ico=app_icon.ico ^
     --output-dir=build ^
     --output-filename=JLinkRTTViewer.exe ^
     src\main.py

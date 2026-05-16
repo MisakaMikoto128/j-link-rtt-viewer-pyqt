@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Draft C: 圆形放大镜 + RTT 数据波形 — 监视 + 实时信号 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <radialGradient id="lens" cx="0.35" cy="0.35" r="0.7">
+      <stop offset="0%" stop-color="#5cc7f5"/>
+      <stop offset="60%" stop-color="#28afe9"/>
+      <stop offset="100%" stop-color="#1a7ba8"/>
+    </radialGradient>
+    <linearGradient id="bgC" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f5f9fc"/>
+      <stop offset="100%" stop-color="#dde7ee"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="256" height="256" rx="48" ry="48" fill="url(#bgC)"/>
+  <!-- 放大镜手柄（先画，被镜片遮住一半） -->
+  <line x1="180" y1="180" x2="232" y2="232"
+        stroke="#5a6a78" stroke-width="22" stroke-linecap="round"/>
+  <line x1="180" y1="180" x2="232" y2="232"
+        stroke="#7a8a98" stroke-width="14" stroke-linecap="round"/>
+  <!-- 镜片主体（圆形） -->
+  <circle cx="112" cy="112" r="84" fill="url(#lens)" stroke="#1a7ba8" stroke-width="6"/>
+  <!-- 镜片内：网格 + RTT 波形（折线 + 矩形脉冲） -->
+  <g clip-path="circle(80px at 112 112)">
+    <!-- 暗背景 -->
+    <rect x="32" y="32" width="160" height="160" fill="#0a1822" opacity="0.55"/>
+    <!-- 横向数据流主波形：脉冲 + 平段，模拟 RTT printf 行 -->
+    <polyline points="40,140 56,140 56,108 80,108 80,140 100,140 100,90 120,90 120,140 140,140 140,120 164,120 164,98 184,98"
+              fill="none" stroke="#55ff88" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+    <!-- 第二条次要波（淡） -->
+    <polyline points="40,80 64,80 64,68 96,68 96,80 128,80 128,72 160,72 160,80 184,80"
+              fill="none" stroke="#ffff88" stroke-width="2" stroke-linejoin="round" opacity="0.7"/>
+  </g>
+  <!-- 镜片高光 -->
+  <ellipse cx="84" cy="80" rx="28" ry="14" fill="#ffffff" opacity="0.35"/>
+</svg>
