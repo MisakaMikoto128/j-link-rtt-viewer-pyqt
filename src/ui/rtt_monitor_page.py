@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QFontDatabase, QTextCharFormat, QTextCursor, QColor, QWheelEvent
+from PySide6.QtGui import QFont, QFontDatabase, QTextCharFormat, QTextCursor, QColor
 from PySide6.QtWidgets import (
     QCompleter,
     QGridLayout,
@@ -33,30 +33,8 @@ from core.config_service import ConfigService
 from core.jlink_worker import JLinkWorker
 
 
-class _ZoomablePlainTextEdit(PlainTextEdit):
-    """fluent PlainTextEdit + Ctrl+滚轮缩放走 ConfigService。
-
-    QPlainTextEdit 自带的 zoomIn/zoomOut 改的是 widget 自身 font，
-    会被下次 _apply_font(cfg) 重设回 cfg 字号 → 看上去"只能缩小"。
-    改为：Ctrl+wheel 直接 cfg.set("font_size", new)，触发 font_changed
-    → _apply_font 重新设置 → 双向缩放 + 持久化。
-    """
-    def __init__(self, cfg, parent=None):
-        super().__init__(parent)
-        self._cfg = cfg
-
-    def wheelEvent(self, e: QWheelEvent) -> None:  # type: ignore[override]
-        if e.modifiers() & Qt.ControlModifier:
-            delta = e.angleDelta().y()
-            if delta != 0:
-                cur = int(self._cfg.get("font_size"))
-                step = 1 if delta > 0 else -1
-                new = max(8, min(32, cur + step))
-                if new != cur:
-                    self._cfg.set("font_size", new)
-            e.accept()
-            return
-        super().wheelEvent(e)
+_FONT_SIZE_MIN = 8
+_FONT_SIZE_MAX = 32
 
 
 _ANSI_COLOR_MAP = {
@@ -206,6 +184,16 @@ class RTTMonitorPage(QWidget):
         self.chk_power = CheckBox("电源输出")
         self.chk_power.setEnabled(False)
         self.chk_log_rec = CheckBox("实时日志记录")
+        # 字号调整按钮（替代 Ctrl+滚轮，避免和滚动冲突）
+        self.btn_font_minus = PushButton("A−", self)
+        self.btn_font_minus.setFixedWidth(36)
+        self.btn_font_minus.setToolTip("字号 −1")
+        self.lbl_font_size = BodyLabel(f"{self._cfg.get('font_size')}")
+        self.lbl_font_size.setAlignment(Qt.AlignCenter)
+        self.lbl_font_size.setFixedWidth(28)
+        self.btn_font_plus = PushButton("A+", self)
+        self.btn_font_plus.setFixedWidth(36)
+        self.btn_font_plus.setToolTip("字号 +1")
         self.btn_clear = PushButton("清除", self)
         self.btn_save = PushButton("💾 保存当前", self)
         opt.addWidget(self.chk_auto_scroll)
@@ -213,13 +201,15 @@ class RTTMonitorPage(QWidget):
         opt.addWidget(self.chk_power)
         opt.addWidget(self.chk_log_rec)
         opt.addStretch(1)
+        opt.addWidget(self.btn_font_minus)
+        opt.addWidget(self.lbl_font_size)
+        opt.addWidget(self.btn_font_plus)
         opt.addWidget(self.btn_clear)
         opt.addWidget(self.btn_save)
         root.addLayout(opt)
 
         # ---- 显示区（qfluentwidgets PlainTextEdit 自动适应主题）----
-        # 用 _ZoomablePlainTextEdit 让 Ctrl+滚轮走 cfg 走 font_changed，双向缩放
-        self.display = _ZoomablePlainTextEdit(self._cfg, self)
+        self.display = PlainTextEdit(self)
         self.display.setReadOnly(True)
         self.display.setMaximumBlockCount(self._cfg.get("max_display_lines"))
         # 固定宽度按窗口宽度换行（超过窗宽自动 wrap，便于阅读长行日志）
@@ -271,6 +261,10 @@ class RTTMonitorPage(QWidget):
         self.chk_auto_scroll.toggled.connect(lambda v: self._cfg.set("auto_scroll", v))
         self.chk_hex.toggled.connect(lambda v: self._cfg.set("hex_send_mode", v))
         self.btn_send.clicked.connect(self._on_send_clicked)
+
+        # 字号 ± 按钮：直接走 cfg.set → font_changed → _apply_font
+        self.btn_font_minus.clicked.connect(lambda: self._adjust_font_size(-1))
+        self.btn_font_plus.clicked.connect(lambda: self._adjust_font_size(+1))
 
         # 显式 QueuedConnection：worker 线程 → 主线程槽，避免 PySide6 在
         # 「emit 调用从 native threading.Thread 发起」场景下误判 sender thread 走 DirectConnection。
@@ -416,6 +410,15 @@ class RTTMonitorPage(QWidget):
             font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
             font.setPointSize(size)
         self.display.setFont(font)
+        # 同步右上角字号显示
+        if hasattr(self, "lbl_font_size"):
+            self.lbl_font_size.setText(str(size))
+
+    def _adjust_font_size(self, delta: int) -> None:
+        cur = int(self._cfg.get("font_size"))
+        new = max(_FONT_SIZE_MIN, min(_FONT_SIZE_MAX, cur + delta))
+        if new != cur:
+            self._cfg.set("font_size", new)
 
     # ------------------------------------------------------------------
     # 日志记录 / 保存当前 / 搜索 / 错误提示
