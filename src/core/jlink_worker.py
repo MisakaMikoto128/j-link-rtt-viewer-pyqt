@@ -1,17 +1,16 @@
-"""JLinkWorker：所有 pylink 调用集中在这一条 QThread。
+"""JLinkWorker：所有 pylink 调用集中在 worker 线程（QObject + moveToThread 模式）。
 
-设计要点：
-1. __init__ 在主线程；run() 内才是 worker 线程。pylink.JLink / QTimer / IncrementalDecoder
-   都在 run() 内创建，确保 thread affinity 正确。
-2. 输入信号用 Qt.QueuedConnection 投递到 worker 自己的事件循环。
-3. stop_requested 由 worker 自己处理：清理 pylink → quit() → run() 退出；
-   主线程不能外部 quit()，否则和阻塞中的 C 调用赛跑。
-4. 连接时 if not opened(): open()；断开时 if connected(): rtt_stop(); if opened(): close()。
+设计要点（修复 cross-thread timer bug）：
+1. JLinkBackend(QObject) 拥有所有状态 + 信号 + 槽。在主线程构造，moveToThread 到 worker。
+2. JLinkBackend.initialize() 在 worker 线程被调用（QThread.started → initialize），
+   在这里才创建 pylink.JLink / QTimer / IncrementalDecoder——确保 thread affinity 正确。
+3. JLinkWorker(QThread) 是瘦壳：拥有 backend，moveToThread，转发属性/方法访问。
+4. 退出：UI emit stop_requested → backend._on_stop 在 worker 线程跑 → 清理 pylink →
+   QThread.currentThread().quit() 让 exec() 返回。主线程只 wait()。
 """
 from __future__ import annotations
 
 import codecs
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -27,16 +26,18 @@ _STATE_CONNECTED = "CONNECTED"
 _STATE_DISCONNECTING = "DISCONNECTING"
 
 
-class JLinkWorker(QThread):
+class JLinkBackend(QObject):
+    """所有 pylink 调用 + 状态。moveToThread 后，所有槽都在 worker 线程跑。"""
+
     # ---- 输入信号 ----
-    connect_requested = Signal(str, str, int, int)   # target, iface, speed, channel
+    connect_requested = Signal(str, str, int, int)
     disconnect_requested = Signal()
     send_data_requested = Signal(str, bool)
     reset_target_requested = Signal()
     set_rtt_channel_requested = Signal(int)
     set_pause_receive_requested = Signal(bool)
     set_power_output_requested = Signal(bool)
-    set_poll_interval_requested = Signal(int)        # poll timer interval in ms
+    set_poll_interval_requested = Signal(int)
     read_memory_requested = Signal(int, int)
     export_firmware_requested = Signal(str, int, int)
     start_log_recording_requested = Signal(str)
@@ -46,21 +47,21 @@ class JLinkWorker(QThread):
     # ---- 输出信号 ----
     rtt_data_received = Signal(str)
     connection_state_changed = Signal(bool, dict)
-    log_message = Signal(str, str)             # level, msg
+    log_message = Signal(str, str)
     command_result = Signal(str, bool, dict)
-    memory_read_finished = Signal(int, bytes)  # addr, raw bytes
+    memory_read_finished = Signal(int, bytes)
     firmware_export_progress = Signal(int, int)
     firmware_export_finished = Signal(bool, str, str)
 
-    def __init__(self, parent: QObject | None = None) -> None:
-        super().__init__(parent)
+    def __init__(self) -> None:
+        super().__init__()
         self._logger = get_logger()
         self._state: str = _STATE_IDLE
         self._channel: int = 0
         self._paused: bool = False
-        self._ready: bool = False  # 测试用：worker 事件循环已就绪
+        self._ready: bool = False
 
-        # 这些在 run() 内创建：
+        # 这些在 initialize() 内（worker 线程）创建：
         self.jlink: pylink.JLink | None = None
         self._decoder: codecs.IncrementalDecoder | None = None
         self._poll_timer: QTimer | None = None
@@ -68,38 +69,34 @@ class JLinkWorker(QThread):
         self._log_path: str | None = None
 
     # ============================================================
-    # 线程入口
+    # 在 worker 线程内的初始化
     # ============================================================
-    def run(self) -> None:
-        # 所有依赖事件循环的 QObject 在这里创建
+    @Slot()
+    def initialize(self) -> None:
+        """由 QThread.started 信号触发，在 worker 线程内跑。"""
         self.jlink = pylink.JLink()
         self._reset_utf8_decoder()
-        self._poll_timer = QTimer()  # 无 parent → 归属当前线程
+        self._poll_timer = QTimer()  # 无 parent → 归属当前（worker）线程
         self._poll_timer.setInterval(20)
         self._poll_timer.timeout.connect(self._poll_rtt)
 
-        # 注：信号 ↔ 槽连接在主线程已经建立（信号对象在 __init__），
-        # 默认 AutoConnection 会变 QueuedConnection（跨线程）
-        self.connect_requested.connect(self._on_connect, type=Qt.ConnectionType.QueuedConnection)
-        self.disconnect_requested.connect(self._on_disconnect, type=Qt.ConnectionType.QueuedConnection)
-        self.send_data_requested.connect(self._on_send_data, type=Qt.ConnectionType.QueuedConnection)
-        self.reset_target_requested.connect(self._on_reset_target, type=Qt.ConnectionType.QueuedConnection)
-        self.set_rtt_channel_requested.connect(self._on_set_channel, type=Qt.ConnectionType.QueuedConnection)
-        self.set_pause_receive_requested.connect(self._on_set_paused, type=Qt.ConnectionType.QueuedConnection)
-        self.set_power_output_requested.connect(self._on_set_power, type=Qt.ConnectionType.QueuedConnection)
-        self.set_poll_interval_requested.connect(self._on_set_poll_interval, type=Qt.ConnectionType.QueuedConnection)
-        self.read_memory_requested.connect(self._on_read_memory, type=Qt.ConnectionType.QueuedConnection)
-        self.export_firmware_requested.connect(self._on_export_firmware, type=Qt.ConnectionType.QueuedConnection)
-        self.start_log_recording_requested.connect(self._on_start_log, type=Qt.ConnectionType.QueuedConnection)
-        self.stop_log_recording_requested.connect(self._on_stop_log, type=Qt.ConnectionType.QueuedConnection)
-        self.stop_requested.connect(self._on_stop, type=Qt.ConnectionType.QueuedConnection)
+        # 连接所有输入信号到本地槽（backend 已 moveToThread，AutoConnection = DirectConnection）
+        self.connect_requested.connect(self._on_connect)
+        self.disconnect_requested.connect(self._on_disconnect)
+        self.send_data_requested.connect(self._on_send_data)
+        self.reset_target_requested.connect(self._on_reset_target)
+        self.set_rtt_channel_requested.connect(self._on_set_channel)
+        self.set_pause_receive_requested.connect(self._on_set_paused)
+        self.set_power_output_requested.connect(self._on_set_power)
+        self.set_poll_interval_requested.connect(self._on_set_poll_interval)
+        self.read_memory_requested.connect(self._on_read_memory)
+        self.export_firmware_requested.connect(self._on_export_firmware)
+        self.start_log_recording_requested.connect(self._on_start_log)
+        self.stop_log_recording_requested.connect(self._on_stop_log)
+        self.stop_requested.connect(self._on_stop)
 
         self._ready = True
-        self.exec()
 
-    # ============================================================
-    # 状态查询（仅给测试 / 调试用，必须线程安全；Python 单赋值原子，简单读 OK）
-    # ============================================================
     def state_name(self) -> str:
         return self._state
 
@@ -137,6 +134,8 @@ class JLinkWorker(QThread):
         self._do_disconnect()
 
     def _do_disconnect(self) -> None:
+        # 守卫：避免 IDLE 状态下重复发 connection_state_changed(False, {})
+        was_active = self._state in (_STATE_CONNECTING, _STATE_CONNECTED)
         self._state = _STATE_DISCONNECTING
         if self._poll_timer is not None and self._poll_timer.isActive():
             self._poll_timer.stop()
@@ -154,7 +153,8 @@ class JLinkWorker(QThread):
             self._logger.warning(f"close 失败：{e}")
 
         self._state = _STATE_IDLE
-        self.connection_state_changed.emit(False, {})
+        if was_active:
+            self.connection_state_changed.emit(False, {})
 
     def _transition_to_idle(self) -> None:
         self._do_disconnect()
@@ -228,10 +228,11 @@ class JLinkWorker(QThread):
             self.command_result.emit("reset", False, {"error": "未连接"})
             return
         try:
-            self.jlink.reset(1, False)  # 正常重置，复位后运行
+            self.jlink.reset(1, False)
             self.command_result.emit("reset", True, {})
             self.log_message.emit("info", "目标设备已重置")
         except Exception as e:
+            self._logger.error(f"重置失败：{e}")
             self.command_result.emit("reset", False, {"error": str(e)})
 
     @Slot(int)
@@ -246,7 +247,7 @@ class JLinkWorker(QThread):
     @Slot(int)
     def _on_set_poll_interval(self, ms: int) -> None:
         if ms < 1:
-            ms = 20  # 防御性下限
+            ms = 20
         if self._poll_timer is not None:
             self._poll_timer.setInterval(ms)
         self.log_message.emit("info", f"RTT 轮询间隔设为 {ms} ms")
@@ -263,6 +264,7 @@ class JLinkWorker(QThread):
                 self.jlink.power_off(default=False)
             self.command_result.emit("power_output", True, {"enabled": enable})
         except Exception as e:
+            self._logger.error(f"控制电源失败：{e}")
             self.command_result.emit("power_output", False, {"error": str(e)})
 
     @Slot(int, int)
@@ -282,7 +284,6 @@ class JLinkWorker(QThread):
         if self._state != _STATE_CONNECTED:
             self.firmware_export_finished.emit(False, "", "未连接")
             return
-        # 导出期间停 RTT 读循环
         was_active = self._poll_timer.isActive()
         self._poll_timer.stop()
         try:
@@ -339,8 +340,35 @@ class JLinkWorker(QThread):
     # ============================================================
     @Slot()
     def _on_stop(self) -> None:
-        """主线程发 stop_requested → worker 自己清理 + quit。"""
+        """worker 线程内自清理 + 退出 QThread 事件循环。"""
         self._do_disconnect()
         if self._poll_timer is not None:
             self._poll_timer.stop()
-        self.quit()  # 让 run() 的 exec() 返回
+        # 在 worker 线程内调 quit() 让 exec() 返回
+        thread = QThread.currentThread()
+        if thread is not None:
+            thread.quit()
+
+
+class JLinkWorker(QThread):
+    """瘦壳 QThread：持有 JLinkBackend，moveToThread，转发属性访问。
+
+    历史原因：测试和 UI 代码用 `worker.connect_requested.emit(...)` /
+    `worker.state_name()` / `worker._channel` 等接口。本类用 __getattr__
+    把所有访问转发给 backend，保持兼容。
+    """
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.backend = JLinkBackend()
+        self.backend.moveToThread(self)
+        # QThread.started 在 worker 线程 emit，AutoConnection 到 backend.initialize
+        # （backend 已 moveToThread）→ initialize 在 worker 线程跑
+        self.started.connect(self.backend.initialize)
+
+    def __getattr__(self, name: str):
+        """转发属性/信号/方法访问到 backend。仅在常规属性查找失败时调用。"""
+        # 避免无限递归：访问 self.backend 失败时直接 raise
+        if name == "backend":
+            raise AttributeError(name)
+        return getattr(self.backend, name)

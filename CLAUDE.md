@@ -188,12 +188,17 @@ if at_bottom and self.chk_auto_scroll.isChecked():
 
 ---
 
-## 启动时不要做 main thread → worker QTimer.singleShot 信号转发
+## QThread 子类反模式：slots 实际在主线程跑
 
-**现象**：日志出现 `QObject::startTimer: Timers cannot be started from another thread`，窗口关闭时 worker 不响应 stop_requested，主线程 wait 超时强制 terminate。
+**现象**：日志反复出现 `QObject::startTimer: Timers cannot be started from another thread`（实测 11 次）。J-Link 连接成功（设备信息正确填充），但 RTT 显示区始终空白；窗口关闭时 worker 卡住强制 terminate（~3 秒）。
 
-**原因**：曾在 `MainWindow.__init__` 用 `QTimer.singleShot(500, lambda: worker.signal.emit())` 给 worker 投递初始化配置。singleShot 在主线程触发，emit 触发 worker 内部 `_on_set_poll_interval` 调 `self._poll_timer.setInterval(ms)`，而此时 worker 的 run() 可能尚未完成初始化，_poll_timer 状态不一致；后续退出时 worker 事件循环无法正常响应 stop_requested。
+**原因**：曾用 `class JLinkWorker(QThread)` + override `run()` 模式。但 QThread 实例的 thread affinity 是**创建它的线程**（主线程），不是 `run()` 内执行的新线程。即使用 `Qt.QueuedConnection` 连接槽，slot 仍在主线程跑——而在 `run()` 内创建的 `QTimer` 在 worker 线程。结果：所有 `_poll_timer.start()/stop()/setInterval()` 都是 cross-thread 调用，Qt 静默不生效；poll 不真正发生 → 没有 rtt_data_received signal → 显示区永远空白。
 
-**处理**：删除 main thread 到 worker 的 startup signal 转发；worker 以 `run()` 内的默认值（20 ms）运行。用户在设置页改 SpinBox 时才 emit，届时各 timer 已稳定。
+**处理**：用标准的 `QObject + moveToThread` 模式：
+- `JLinkBackend(QObject)` 拥有所有状态 / 信号 / 槽
+- `JLinkWorker(QThread)` 是瘦壳，`__init__` 里 `backend.moveToThread(self)` + `self.started.connect(backend.initialize)`
+- `backend.initialize()` 在 worker 线程跑（started 是从 worker 线程发出的，AutoConnection 同线程 = DirectConnection），在那里创建 JLink/QTimer/IncrementalDecoder
+- 所有槽 + timer 都在同一个 worker 线程，无 cross-thread 警告
+- `JLinkWorker` 用 `__getattr__` 转发属性到 backend，保持测试和 UI 接口兼容
 
-参考：`src/ui/main_window.py` `__init__`
+参考：`src/core/jlink_worker.py`。**永远不要 override QThread.run() 把业务逻辑放进去**。
