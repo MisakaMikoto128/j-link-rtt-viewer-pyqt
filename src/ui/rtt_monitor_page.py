@@ -37,6 +37,17 @@ _FONT_SIZE_MIN = 8
 _FONT_SIZE_MAX = 32
 
 
+def _human_bytes(n: int) -> str:
+    """1234 → '1.2 KB'；< 1024 不缩。"""
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    return f"{n / (1024 * 1024 * 1024):.2f} GB"
+
+
 _ANSI_COLOR_MAP = {
     "black": "#000000",
     "red": "#cc0000",
@@ -76,6 +87,17 @@ class RTTMonitorPage(QWidget):
         self._match_count_timer.setSingleShot(True)
         self._match_count_timer.setInterval(200)
         self._match_count_timer.timeout.connect(self._do_update_match_count)
+
+        # 状态栏统计：1s 一次从 worker 同步取吞吐，UI 端算 delta 显示字节/秒
+        self._stats_prev_bytes = 0
+        self._stats_prev_lines = 0
+        self._stats_timer = QTimer(self)
+        self._stats_timer.setInterval(1000)
+        self._stats_timer.timeout.connect(self._update_stats)
+        self._stats_timer.start()
+        # 初始化编码状态显示
+        self._update_encoding_label(cfg.get("rtt_encoding") or "utf-8")
+        cfg.rtt_encoding_changed.connect(self._update_encoding_label)
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -124,8 +146,8 @@ class RTTMonitorPage(QWidget):
         self.sp_channel.setValue(self._cfg.get("rtt_channel"))
         ctrl.addWidget(self.sp_channel)
 
-        self.btn_connect = PrimaryPushButton("连接", self)
-        self.btn_reset = PushButton("重置目标", self)
+        self.btn_connect = PrimaryPushButton(FluentIcon.LINK, "连接", self)
+        self.btn_reset = PushButton(FluentIcon.SYNC, "重置目标", self)
         self.btn_reset.setEnabled(False)
         ctrl.addWidget(self.btn_connect)
         ctrl.addWidget(self.btn_reset)
@@ -249,17 +271,40 @@ class RTTMonitorPage(QWidget):
 
         # ---- 发送栏 ----
         send = QHBoxLayout()
-        from qfluentwidgets import LineEdit
-        self.le_send = LineEdit(self)
+        # EditableComboBox 复用 cfg.send_history（最近 50 条）下拉快速重发
+        self.le_send = EditableComboBox(self)
         self.le_send.setPlaceholderText("输入要发送的数据 (Hex 模式下用 16 进制字符)")
+        # 加载历史（倒序：最新在最前）
+        history = list(self._cfg.get("send_history") or [])
+        if history:
+            self.le_send.addItems(list(reversed(history)))
+            self.le_send.setCurrentText("")  # 不预选任何项
         self.chk_hex = CheckBox("Hex")
         self.chk_hex.setChecked(self._cfg.get("hex_send_mode"))
-        self.btn_send = PushButton("发送", self)
+        self.btn_send = PushButton(FluentIcon.SEND, "发送", self)
         self.btn_send.setEnabled(False)
         send.addWidget(self.le_send, 1)
         send.addWidget(self.chk_hex)
         send.addWidget(self.btn_send)
         root.addLayout(send)
+
+        # ---- 底部状态栏 ----
+        status = QHBoxLayout()
+        status.setContentsMargins(0, 0, 0, 0)
+        self.lbl_status_state = BodyLabel("● 未连接")
+        self.lbl_status_state.setStyleSheet("color: #888888;")
+        self.lbl_status_state.setMinimumWidth(120)
+        self.lbl_status_rate = BodyLabel("")
+        self.lbl_status_rate.setMinimumWidth(160)
+        self.lbl_status_total = BodyLabel("")
+        self.lbl_status_total.setMinimumWidth(200)
+        self.lbl_status_encoding = BodyLabel("")
+        status.addWidget(self.lbl_status_state)
+        status.addWidget(self.lbl_status_rate)
+        status.addWidget(self.lbl_status_total)
+        status.addStretch(1)
+        status.addWidget(self.lbl_status_encoding)
+        root.addLayout(status)
 
     # ------------------------------------------------------------------
     # 信号接线
@@ -351,18 +396,22 @@ class RTTMonitorPage(QWidget):
         self._worker.set_rtt_channel_requested.emit(ch)
 
     def _on_send_clicked(self) -> None:
-        text = self.le_send.text()
+        text = self.le_send.currentText()
         if not text:
             return
         self._worker.send_data_requested.emit(text, self.chk_hex.isChecked())
-        # 加入历史
+        # 加入历史（去重 + 末尾追加）
         hist = list(self._cfg.get("send_history"))
         if text in hist:
             hist.remove(text)
         hist.append(text)
         self._cfg.set("send_history", hist)
-        # 发送后清空输入框，避免 Enter+Enter 误重发
+        # 同步刷新下拉项：最新在最前
+        self.le_send.blockSignals(True)
         self.le_send.clear()
+        self.le_send.addItems(list(reversed(hist)))
+        self.le_send.setCurrentText("")
+        self.le_send.blockSignals(False)
 
     def _on_state_changed(self, connected: bool) -> None:
         if connected:
@@ -375,6 +424,7 @@ class RTTMonitorPage(QWidget):
     def _set_connected_ui(self, info: dict) -> None:
         self.btn_connect.setEnabled(True)
         self.btn_connect.setText("断开")
+        self.btn_connect.setIcon(FluentIcon.CLOSE)
         self.btn_reset.setEnabled(True)
         self.btn_send.setEnabled(True)
         self.chk_power.setEnabled(True)
@@ -382,15 +432,60 @@ class RTTMonitorPage(QWidget):
             lbl.setText(str(info.get(key, "-")))
         # 设备信息卡片保持当前折叠/展开状态，不自动展开
         # （用户可以点击右上 ⌄ 按钮手动展开）
+        # 状态栏：绿色圆点 + 设备摘要
+        target = info.get("target_device", "—")
+        iface = info.get("interface", "—")
+        speed = info.get("speed_khz", "—")
+        self.lbl_status_state.setText(f"● 已连接 {target}")
+        self.lbl_status_state.setStyleSheet("color: #2ecc71;")
+        # 卡片标题加摘要
+        self.gb_info.setTitle(f"设备信息 — {target} / {iface} / {speed} kHz")
 
     def _set_disconnected_ui(self) -> None:
         self.btn_connect.setEnabled(True)
         self.btn_connect.setText("连接")
+        self.btn_connect.setIcon(FluentIcon.LINK)
         self.btn_reset.setEnabled(False)
         self.btn_send.setEnabled(False)
         self.chk_power.setEnabled(False)
         for lbl in self._info_labels.values():
             lbl.setText("-")
+        # 状态栏复位
+        self.lbl_status_state.setText("● 未连接")
+        self.lbl_status_state.setStyleSheet("color: #888888;")
+        self.lbl_status_rate.setText("")
+        self.lbl_status_total.setText("")
+        self.gb_info.setTitle("设备信息")
+        # 清除上次统计 delta 基线
+        self._stats_prev_bytes = 0
+        self._stats_prev_lines = 0
+
+    def _update_stats(self) -> None:
+        """1s 一次：从 worker 同步取吞吐，UI 端算 delta 显示。"""
+        if not hasattr(self, "lbl_status_rate"):
+            return
+        total_b, total_l, start_ts = self._worker.get_stats()
+        if start_ts == 0:
+            self.lbl_status_rate.setText("")
+            self.lbl_status_total.setText("")
+            self._stats_prev_bytes = 0
+            self._stats_prev_lines = 0
+            return
+        delta_b = max(0, total_b - self._stats_prev_bytes)
+        delta_l = max(0, total_l - self._stats_prev_lines)
+        self._stats_prev_bytes = total_b
+        self._stats_prev_lines = total_l
+        self.lbl_status_rate.setText(f"{_human_bytes(delta_b)}/s · {delta_l} 行/s")
+        # 总字节 + 会话时长
+        import time as _t
+        secs = int(_t.time() - start_ts) if start_ts > 0 else 0
+        hh, mm, ss = secs // 3600, (secs % 3600) // 60, secs % 60
+        duration = f"{hh:02d}:{mm:02d}:{ss:02d}"
+        self.lbl_status_total.setText(f"总 {_human_bytes(total_b)} · {total_l} 行 · {duration}")
+
+    def _update_encoding_label(self, encoding: str) -> None:
+        if hasattr(self, "lbl_status_encoding"):
+            self.lbl_status_encoding.setText(f"编码: {encoding}")
 
     def _on_rtt_data(self, text: str) -> None:
         """worker 已经 50ms 合并好，直接 insertText。"""
@@ -524,26 +619,48 @@ class RTTMonitorPage(QWidget):
         self._update_match_position(self.le_search.text())
 
     def _update_match_position(self, text: str) -> None:
-        """显示 "当前第 N 个 / 总数"（N=0 表示尚未定位）。"""
+        """显示 "当前第 N 个 / 总数"，并把全部匹配位置叠黄色 ExtraSelection。"""
         if not text:
             self.lbl_match.setText("0/0")
+            self.display.setExtraSelections([])
             return
         full = self.display.toPlainText()
         cnt = full.count(text)
         if cnt == 0:
             self.lbl_match.setText("0/0")
+            self.display.setExtraSelections([])
             return
-        # 用当前光标 absolute position 反推是第几个匹配
         cursor = self.display.textCursor()
         cur_pos = cursor.selectionStart()
-        # 数 cur_pos 之前出现的次数 + 1（如果当前位置正好选中该 pattern）
         before = full.count(text, 0, max(0, cur_pos))
-        # selection 当前就是一个 hit → before + 1；否则下一个 hit 算 before+1
         if cursor.hasSelection() and full[cursor.selectionStart():cursor.selectionEnd()] == text:
             idx = before + 1
         else:
-            idx = before  # 0 表示当前位置之后才是第 1 个
+            idx = before
         self.lbl_match.setText(f"{idx}/{cnt}")
+        self._highlight_all_matches(text, full, limit=500)
+
+    def _highlight_all_matches(self, needle: str, full: str, limit: int = 500) -> None:
+        """所有匹配位置叠浅黄色背景。超过 limit 截断（500 个足够直观，再多无意义）。"""
+        from PySide6.QtWidgets import QTextEdit
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor(255, 235, 100, 140))
+        selections: list = []
+        pos = 0
+        nlen = len(needle)
+        while len(selections) < limit:
+            i = full.find(needle, pos)
+            if i < 0:
+                break
+            c = QTextCursor(self.display.document())
+            c.setPosition(i)
+            c.setPosition(i + nlen, QTextCursor.KeepAnchor)
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = c
+            sel.format = fmt
+            selections.append(sel)
+            pos = i + nlen
+        self.display.setExtraSelections(selections)
 
     # 命令内部名 → 用户可读标题
     _CMD_TITLES = {

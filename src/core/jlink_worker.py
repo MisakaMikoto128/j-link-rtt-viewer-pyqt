@@ -52,6 +52,7 @@ class JLinkWorker(QObject):
     set_poll_interval_requested = Signal(int)
     set_encoding_requested = Signal(str)
     read_memory_requested = Signal(int, int)
+    write_memory_requested = Signal(int, bytes)
     export_firmware_requested = Signal(str, int, int)
     start_log_recording_requested = Signal(str)
     stop_log_recording_requested = Signal()
@@ -102,6 +103,12 @@ class JLinkWorker(QObject):
         self._device_info: dict = {}
         self._info_lock = threading.Lock()
 
+        # 数据吞吐统计：read_thread 写入，UI 1s 一次同步读取（GIL + lock 保护）
+        self._stats_lock = threading.Lock()
+        self._total_bytes: int = 0
+        self._total_lines: int = 0
+        self._session_start_ts: float = 0.0   # 0 = 未开始会话
+
     # ============================================================
     # worker 线程初始化（由外部 QThread.started 触发）
     # ============================================================
@@ -133,6 +140,7 @@ class JLinkWorker(QObject):
         self.set_poll_interval_requested.connect(self._on_set_poll_interval)
         self.set_encoding_requested.connect(self._on_set_encoding)
         self.read_memory_requested.connect(self._on_read_memory)
+        self.write_memory_requested.connect(self._on_write_memory)
         self.export_firmware_requested.connect(self._on_export_firmware)
         self.start_log_recording_requested.connect(self._on_start_log)
         self.stop_log_recording_requested.connect(self._on_stop_log)
@@ -160,6 +168,13 @@ class JLinkWorker(QObject):
         """
         with self._info_lock:
             return dict(self._device_info)
+
+    def get_stats(self) -> tuple[int, int, float]:
+        """同步取吞吐统计 (total_bytes, total_lines, session_start_ts)。
+        session_start_ts == 0 表示尚未开始 / 已断开。
+        """
+        with self._stats_lock:
+            return self._total_bytes, self._total_lines, self._session_start_ts
 
     # ============================================================
     # 连接 / 断开
@@ -194,6 +209,11 @@ class JLinkWorker(QObject):
                 info = self._collect_device_info(target, iface, speed)
                 with self._info_lock:
                     self._device_info = info
+                # 重置统计：每次新连接是一个新会话
+                with self._stats_lock:
+                    self._total_bytes = 0
+                    self._total_lines = 0
+                    self._session_start_ts = time.time()
                 self._logger.info(f"已连接 {target} ({iface} {speed}kHz, RTT ch{channel})")
                 self.connection_state_changed.emit(True)
                 # 启动读线程
@@ -312,10 +332,14 @@ class JLinkWorker(QObject):
                 if self._state == _STATE_CONNECTED and not self._paused and self.jlink is not None:
                     data = self.jlink.rtt_read(self._channel, 4096)
                     if data:
+                        raw_len = len(data)
                         decoded = self._decoder.decode(bytes(data))
                         if decoded:
                             with self._rtt_drain_lock:
                                 self._rtt_drain_buffer.append(decoded)
+                            with self._stats_lock:
+                                self._total_bytes += raw_len
+                                self._total_lines += decoded.count("\n")
                             self._write_log_file(decoded)
             except Exception as e:
                 # 不 emit log_message——避免 native thread 跨线程 emit。
@@ -426,6 +450,20 @@ class JLinkWorker(QObject):
         except Exception as e:
             self._logger.error(f"读内存失败：{e}")
             self.command_result.emit("read_memory", False, str(e))
+
+    @Slot(int, bytes)
+    def _on_write_memory(self, addr: int, data: bytes) -> None:
+        """写内存：高风险操作（可能 brick 目标），UI 已做二次确认。"""
+        if self._state != _STATE_CONNECTED:
+            self.command_result.emit("write_memory", False, "未连接")
+            return
+        try:
+            written = memory_service.write_memory(self.jlink, addr, data)
+            self._logger.info(f"写内存 0x{addr:08X}，{len(data)} 字节")
+            self.command_result.emit("write_memory", True, f"已写入 {written} 字节")
+        except Exception as e:
+            self._logger.error(f"写内存失败：{e}")
+            self.command_result.emit("write_memory", False, str(e))
 
     @Slot(str, int, int)
     def _on_export_firmware(self, path: str, start_addr: int, size: int) -> None:

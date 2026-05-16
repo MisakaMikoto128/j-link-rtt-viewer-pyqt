@@ -25,6 +25,26 @@ def read_memory(jlink, addr: int, size: int) -> bytes:
     return bytes(out[:size])
 
 
+def write_memory(jlink, addr: int, data: bytes) -> int:
+    """写 bytes 到 MCU 内存（按 32-bit 字写入）。返回成功写入的字节数。
+
+    **高风险**：写错地址可能让目标 MCU 失去响应直到下次复位。
+    调用方（UI）必须先做用户确认。
+
+    实现：pylink.memory_write32(addr, [word_list])。不足 4 字节末尾用 0xFF 补齐。
+    """
+    if not data:
+        return 0
+    # 补齐到 4 字节边界（高位补 0xFF，常见 flash 默认值）
+    padded = bytes(data) + b"\xff" * ((-len(data)) % 4)
+    words = []
+    for i in range(0, len(padded), 4):
+        w = padded[i] | (padded[i+1] << 8) | (padded[i+2] << 16) | (padded[i+3] << 24)
+        words.append(w)
+    jlink.memory_write32(addr, words)
+    return len(data)
+
+
 def export_firmware(
     jlink,
     save_path: str,

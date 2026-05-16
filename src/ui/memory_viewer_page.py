@@ -292,9 +292,37 @@ class MemoryViewerPage(QWidget):
         ex_root.addLayout(bottom)
         root.addWidget(export_card)
 
+        # ---- 写内存卡片（⚠ 高风险：写错地址可能 brick 目标）----
+        write_card = CardWidget(self)
+        wr_root = QVBoxLayout(write_card)
+        wr_header = QHBoxLayout()
+        wr_header.addWidget(StrongBodyLabel("写内存 ⚠"))
+        warn_lbl = BodyLabel("写错地址可能让 MCU 失去响应直到复位。仅在确认安全地址（如 SRAM）时使用。")
+        warn_lbl.setStyleSheet("color: #d04040;")
+        warn_lbl.setWordWrap(True)
+        wr_header.addWidget(warn_lbl, 1)
+        wr_root.addLayout(wr_header)
+
+        wr_row = QHBoxLayout()
+        wr_row.addWidget(BodyLabel("地址"))
+        self.le_write_addr = LineEdit(self)
+        self.le_write_addr.setText("0x20000000")
+        self.le_write_addr.setMaximumWidth(140)
+        wr_row.addWidget(self.le_write_addr)
+        wr_row.addWidget(BodyLabel("Hex 数据"))
+        self.le_write_data = LineEdit(self)
+        self.le_write_data.setPlaceholderText("AA BB CC DD")
+        wr_row.addWidget(self.le_write_data, 1)
+        self.btn_write = PushButton("写入…", self)
+        self.btn_write.setEnabled(False)
+        wr_row.addWidget(self.btn_write)
+        wr_root.addLayout(wr_row)
+        root.addWidget(write_card)
+
         # 控件初始 disabled 状态（启动时未连接）
         self.btn_read.setEnabled(False)
         self.btn_export.setEnabled(False)
+        self.btn_write.setEnabled(False)
         self.chk_auto_refresh.setEnabled(False)
 
         # Hover tooltip：在 hex 字节字符上悬停时显示 LE/BE 解析
@@ -324,6 +352,7 @@ class MemoryViewerPage(QWidget):
         self.btn_copy_ascii.clicked.connect(self._on_copy_ascii)
         self.btn_copy_carray.clicked.connect(self._on_copy_carray)
         self.btn_save_bin.clicked.connect(self._on_save_bin)
+        self.btn_write.clicked.connect(self._on_write_clicked)
 
         # 字号 ± 按钮：走 cfg → memory_font_size_changed → _apply_font
         self.btn_font_minus.clicked.connect(lambda: self._adjust_font_size(-1))
@@ -350,6 +379,7 @@ class MemoryViewerPage(QWidget):
         self._connected = connected
         self.btn_read.setEnabled(connected)
         self.btn_export.setEnabled(connected and bool(self._save_path))
+        self.btn_write.setEnabled(connected)
         self.chk_auto_refresh.setEnabled(connected)
         if not connected:
             # 断开时主动停止自动刷新——但不弹 InfoBar，避免 N 次断开 N 个噪音
@@ -712,6 +742,49 @@ class MemoryViewerPage(QWidget):
     def _on_command_result(self, cmd: str, ok: bool, msg: str) -> None:
         if cmd == "read_memory" and not ok:
             _infobar.err(self, "读取失败", msg or "")
+        elif cmd == "write_memory":
+            if ok:
+                _infobar.ok(self, "写入成功", msg or "")
+            else:
+                _infobar.err(self, "写入失败", msg or "")
+
+    def _on_write_clicked(self) -> None:
+        """点 "写入…" → 二次确认 → emit write_memory_requested。"""
+        if not self._connected:
+            _infobar.warn(self, "未连接", "请先连接 J-Link")
+            return
+        try:
+            addr = _parse_int(self.le_write_addr.text())
+        except ValueError as e:
+            _infobar.warn(self, "地址格式错误", str(e))
+            return
+        try:
+            data = _parse_hex_pattern(self.le_write_data.text())
+        except ValueError as e:
+            _infobar.warn(self, "Hex 数据格式错误", str(e))
+            return
+        if not data:
+            _infobar.warn(self, "无数据", "请输入要写入的 Hex 字节")
+            return
+        # 二次确认（高风险）
+        from PySide6.QtWidgets import QMessageBox
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Warning)
+        msg_box.setWindowTitle("⚠ 确认写入内存")
+        preview = data[:16].hex(" ").upper() + (" ..." if len(data) > 16 else "")
+        msg_box.setText(
+            f"即将向地址 <b>0x{addr:08X}</b> 写入 <b>{len(data)}</b> 字节：<br/>"
+            f"<code>{preview}</code><br/><br/>"
+            f"<span style='color:#d04040;'>⚠ 写错地址可能让 MCU 失去响应！</span><br/>"
+            f"请确认地址是可写区域（SRAM/外设寄存器，<b>不要写 Flash 控制器</b>）"
+        )
+        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
+        msg_box.setDefaultButton(QMessageBox.Cancel)
+        msg_box.button(QMessageBox.Yes).setText("确认写入")
+        msg_box.button(QMessageBox.Cancel).setText("取消")
+        if msg_box.exec() != QMessageBox.Yes:
+            return
+        self._worker.write_memory_requested.emit(addr, data)
 
     # ------------------------------------------------------------------
     # 字体 / 字号
