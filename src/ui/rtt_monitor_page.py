@@ -1,7 +1,7 @@
 """RTT 监控页：控制栏 + 选项栏 + 显示区 + 搜索栏 + 发送栏。"""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QEnterEvent,
@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -36,6 +35,7 @@ from qfluentwidgets import (
     SpinBox,
     StrongBodyLabel,
     TransparentToolButton,
+    themeColor,
 )
 
 from core.ansi_parser import AnsiAttrs, parse_ansi
@@ -43,6 +43,7 @@ from core.config_service import ConfigService
 from core.jlink_worker import JLinkWorker
 
 from . import _infobar
+from ._scroll_helpers import make_transparent_scroll
 
 
 _FONT_SIZE_MIN = 8
@@ -110,13 +111,12 @@ class _VResizeHandle(QFrame):
         self.update()
         super().enterEvent(e)
 
-    def leaveEvent(self, e) -> None:
+    def leaveEvent(self, e: QEvent) -> None:
         self._hover = False
         self.update()
         super().leaveEvent(e)
 
     def paintEvent(self, _e: QPaintEvent) -> None:
-        from qfluentwidgets import themeColor
         p = QPainter(self)
         w, h = self.width(), self.height()
         if self._dragging or self._hover:
@@ -191,28 +191,11 @@ class RTTMonitorPage(QWidget):
     # UI 构建
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        # 最外层：ScrollArea；窗口高度 < 内容自然高度时出现垂直滚动条。
-        # 同 ac439e9 给内存页加的套路，保持两页一致。
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        self._scroll = QScrollArea(self)
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        # 三层透明：ScrollArea / viewport / inner —— 让 FluentWindow 背景透下来，
-        # 避免叠 base color 后泛 cream 的视觉脏。objectName 选择器确保只命中
-        # 这三个 wrapper，不污染 CardWidget/PlainTextEdit 等子控件样式。
-        self._scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-        vp = self._scroll.viewport()
-        vp.setObjectName("rtt_scroll_viewport")
-        vp.setStyleSheet("QWidget#rtt_scroll_viewport { background: transparent; }")
+        self._scroll, inner = make_transparent_scroll(self, "rtt")
         outer.addWidget(self._scroll)
-        inner = QWidget()
-        inner.setObjectName("rtt_scroll_inner")
-        inner.setStyleSheet("QWidget#rtt_scroll_inner { background: transparent; }")
-        self._scroll.setWidget(inner)
         root = QVBoxLayout(inner)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(8)
@@ -419,6 +402,8 @@ class RTTMonitorPage(QWidget):
         self.resize_handle.heightChanged.connect(
             lambda h: self._cfg.set("rtt_display_height", h)
         )
+        # 用户在设置页换主题色 → handle 立刻重绘成新颜色（不必等下次 hover）
+        self._cfg.theme_color_changed.connect(lambda _c: self.resize_handle.update())
         root.addWidget(self.resize_handle)
 
         root.addLayout(srch)

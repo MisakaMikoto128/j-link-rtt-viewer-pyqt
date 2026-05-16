@@ -16,12 +16,10 @@ from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QFileDialog,
-    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QProgressBar,
-    QScrollArea,
     QSplitter,
     QTextEdit,
     QToolTip,
@@ -46,6 +44,7 @@ from core.jlink_worker import JLinkWorker
 from core.memory_service import format_as_c_array, format_hex_dump, parse_value
 
 from . import _infobar
+from ._scroll_helpers import make_transparent_scroll
 
 
 _SIZE_PRESETS = [
@@ -115,27 +114,12 @@ class MemoryViewerPage(QWidget):
     # UI 构建
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        # 外层只放 QScrollArea；所有卡片放进 scroll 的 widget()。
-        # 这样窗口压扁时整页可垂直滚动，而不是把 hex 显示区 / 写内存卡压成 1 像素。
+        # 整页 ScrollArea：窗口压扁时纵向滚动，而不是把 hex 显示区 / 写内存卡压成 1 像素。
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        self._scroll = QScrollArea(self)
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        # 三层透明：避免 ScrollArea 默认 base color 叠在 FluentWindow 上泛 cream。
-        # 跟 RTT 页保持一致。objectName 选择器确保不污染 CardWidget 等子控件样式。
-        self._scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-        vp = self._scroll.viewport()
-        vp.setObjectName("mem_scroll_viewport")
-        vp.setStyleSheet("QWidget#mem_scroll_viewport { background: transparent; }")
+        self._scroll, inner = make_transparent_scroll(self, "mem")
         outer.addWidget(self._scroll)
-
-        inner = QWidget()
-        inner.setObjectName("mem_scroll_inner")
-        inner.setStyleSheet("QWidget#mem_scroll_inner { background: transparent; }")
-        self._scroll.setWidget(inner)
         root = QVBoxLayout(inner)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)

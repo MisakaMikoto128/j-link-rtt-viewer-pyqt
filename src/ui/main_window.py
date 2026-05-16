@@ -62,11 +62,13 @@ class MainWindow(FluentWindow):
 
         # 6. 窗口属性
         self.setWindowTitle("J-Link RTT Viewer")
-        # 显式 setWindowIcon 触发 FluentTitleBar 的 windowIconChanged 信号 →
-        # 标题栏左上角才会显示。app.setWindowIcon 只影响任务栏，不触发该信号。
-        app_icon = QApplication.instance().windowIcon() if QApplication.instance() else QIcon()
-        if not app_icon.isNull():
-            self.setWindowIcon(app_icon)
+        # 直接从文件加载 icon —— 不依赖 app.setWindowIcon 调用顺序，
+        # 避免 caller 顺序变就静默丢图标。setWindowIcon 触发 FluentTitleBar
+        # 的 windowIconChanged 信号，标题栏左上角才会刷新。
+        from core._paths import find_app_icon
+        icon_path = find_app_icon()
+        if icon_path is not None:
+            self.setWindowIcon(QIcon(str(icon_path)))
         # 显式约束最小尺寸，让窗口在 Windows 任务栏占据底部时仍能完整显示底部
         # 控件（搜索栏/发送栏）。子控件 sizeHint 累积过大会让 Qt 计算出
         # 1500+ px 的 mintrack，结果窗口被 Windows 强制压扁导致底部被任务栏遮挡。
