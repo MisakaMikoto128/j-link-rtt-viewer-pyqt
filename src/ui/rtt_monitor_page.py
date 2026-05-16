@@ -146,7 +146,7 @@ class RTTMonitorPage(QWidget):
         self.sp_channel.setValue(self._cfg.get("rtt_channel"))
         ctrl.addWidget(self.sp_channel)
 
-        self.btn_connect = PrimaryPushButton(FluentIcon.LINK, "连接", self)
+        self.btn_connect = PrimaryPushButton(FluentIcon.PLAY, "连接", self)
         self.btn_reset = PushButton(FluentIcon.SYNC, "重置目标", self)
         self.btn_reset.setEnabled(False)
         ctrl.addWidget(self.btn_connect)
@@ -424,7 +424,7 @@ class RTTMonitorPage(QWidget):
     def _set_connected_ui(self, info: dict) -> None:
         self.btn_connect.setEnabled(True)
         self.btn_connect.setText("断开")
-        self.btn_connect.setIcon(FluentIcon.CLOSE)
+        self.btn_connect.setIcon(FluentIcon.PAUSE)
         self.btn_reset.setEnabled(True)
         self.btn_send.setEnabled(True)
         self.chk_power.setEnabled(True)
@@ -444,7 +444,7 @@ class RTTMonitorPage(QWidget):
     def _set_disconnected_ui(self) -> None:
         self.btn_connect.setEnabled(True)
         self.btn_connect.setText("连接")
-        self.btn_connect.setIcon(FluentIcon.LINK)
+        self.btn_connect.setIcon(FluentIcon.PLAY)
         self.btn_reset.setEnabled(False)
         self.btn_send.setEnabled(False)
         self.chk_power.setEnabled(False)

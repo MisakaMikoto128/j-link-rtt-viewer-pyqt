@@ -16,10 +16,12 @@ from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QFileDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QProgressBar,
+    QScrollArea,
     QSplitter,
     QTextEdit,
     QToolTip,
@@ -113,7 +115,20 @@ class MemoryViewerPage(QWidget):
     # UI 构建
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        # 外层只放 QScrollArea；所有卡片放进 scroll 的 widget()。
+        # 这样窗口压扁时整页可垂直滚动，而不是把 hex 显示区 / 写内存卡压成 1 像素。
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._scroll = QScrollArea(self)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        outer.addWidget(self._scroll)
+
+        inner = QWidget()
+        self._scroll.setWidget(inner)
+        root = QVBoxLayout(inner)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
 
@@ -251,6 +266,9 @@ class MemoryViewerPage(QWidget):
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([700, 280])
+        # 给 splitter 一个最小高度——窗口压扁时 QScrollArea 的 viewport 不足，
+        # 整页向下滚动出现；而不是把 hex 显示区压成 80px 看不清。
+        splitter.setMinimumHeight(320)
         root.addWidget(splitter, 1)
 
         # ---- 导出固件卡片（保留原功能）----
