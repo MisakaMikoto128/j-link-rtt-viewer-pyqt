@@ -48,10 +48,6 @@ class ConfigService(QObject):
         "rtt_encoding": "utf-8",       # RTT 解码编码：utf-8 / gbk / utf-16-le / latin-1 / ascii
         "log_dir": "",              # 空 → 用默认 %APPDATA%/JLinkRTTViewer/logs
         "window_geometry": "",      # base64 of QByteArray
-        # QSplitter.saveState() 的 base64 编码——拖动 splitter 后立即持久化，
-        # 关窗重启位置保持。空字符串 → 用代码默认 setStretchFactor 比例。
-        "rtt_splitter_state": "",     # RTT 页 display vs (search+send) 垂直 splitter
-        "memory_splitter_state": "",  # 内存页 (hex+side) vs export_card 垂直 splitter
         "hex_send_mode": False,
         "auto_scroll": True,
         "power_output": False,

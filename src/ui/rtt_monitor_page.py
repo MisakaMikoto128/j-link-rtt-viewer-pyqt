@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
-    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -34,7 +33,6 @@ from core.config_service import ConfigService
 from core.jlink_worker import JLinkWorker
 
 from . import _infobar
-from . import _splitter_persist
 
 
 _FONT_SIZE_MIN = 8
@@ -106,12 +104,6 @@ class RTTMonitorPage(QWidget):
         # 自动滚动状态：True 表示 sb.setValue 由程序触发（autoscroll 跟新数据），
         # False 表示用户手动滚动。区分两者用来同步 chk_auto_scroll 复选框。
         self._programmatic_scroll = False
-
-        # 恢复并连接 splitter 状态持久化（必须在 _build_ui 之后；
-        # _build_ui 已 setStretchFactor 默认 3:1，restoreState 空字符串就 no-op）
-        from core.logger import get_logger
-        _splitter_persist.restore(self.splitter, self._cfg, "rtt_splitter_state", get_logger())
-        _splitter_persist.wire(self.splitter, self._cfg, "rtt_splitter_state")
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -273,9 +265,9 @@ class RTTMonitorPage(QWidget):
         self.display.setMaximumBlockCount(self._cfg.get("max_display_lines"))
         # 固定宽度按窗口宽度换行（超过窗宽自动 wrap，便于阅读长行日志）
         self.display.setLineWrapMode(PlainTextEdit.WidgetWidth)
-        # display 最小高度 80px：避免子控件 sizeHint 累积导致主窗口 mintrack 过大
-        # （Windows 最大化时底部被任务栏遮挡 → 搜索栏/发送栏看不见）
-        self.display.setMinimumHeight(80)
+        # 默认最小高度：保证窗口压扁时 ScrollArea 出滚动条而不是把日志区压成 1 行
+        self.display.setMinimumHeight(240)
+        root.addWidget(self.display, 1)
 
         # ---- 搜索栏 ----
         try:
@@ -329,28 +321,9 @@ class RTTMonitorPage(QWidget):
         status.addStretch(1)
         status.addWidget(self.lbl_status_encoding)
 
-        # 底栏 container：搜索 + 发送 + 状态栏 一起进 splitter 下半。
-        # 用 QWidget 包，便于设 minimumHeight 防止误拖到 0。
-        bottom = QWidget()
-        bottom_lay = QVBoxLayout(bottom)
-        bottom_lay.setContentsMargins(0, 0, 0, 0)
-        bottom_lay.setSpacing(8)
-        bottom_lay.addLayout(srch)
-        bottom_lay.addLayout(send)
-        bottom_lay.addLayout(status)
-        # 60px：让 splitter 能把 display 拉得更高（拖到极限时状态栏可能被
-        # 部分裁掉，可接受）。Qt 自身 sizeHint 还会做下保护；setChildrenCollapsible(False)
-        # 也防止误拖到 0。
-        bottom.setMinimumHeight(60)
-
-        # 垂直 splitter：display | 底栏。拖动 handle 调比例，状态进 user_prefs。
-        self.splitter = QSplitter(Qt.Vertical, self)
-        self.splitter.setChildrenCollapsible(False)
-        self.splitter.addWidget(self.display)
-        self.splitter.addWidget(bottom)
-        self.splitter.setStretchFactor(0, 3)  # display 默认占 3/4
-        self.splitter.setStretchFactor(1, 1)
-        root.addWidget(self.splitter, 1)
+        root.addLayout(srch)
+        root.addLayout(send)
+        root.addLayout(status)
 
     # ------------------------------------------------------------------
     # 信号接线
