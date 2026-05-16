@@ -16,6 +16,7 @@ from qfluentwidgets import (
     CheckBox,
     ComboBox,
     EditableComboBox,
+    FluentIcon,
     HeaderCardWidget,
     InfoBar,
     InfoBarPosition,
@@ -24,6 +25,7 @@ from qfluentwidgets import (
     PushButton,
     SpinBox,
     StrongBodyLabel,
+    TransparentToolButton,
 )
 
 from core.ansi_parser import AnsiAttrs, parse_ansi
@@ -117,11 +119,18 @@ class RTTMonitorPage(QWidget):
         ctrl.addStretch(1)
         root.addLayout(ctrl)
 
-        # ---- 设备信息卡片（HeaderCardWidget）----
+        # ---- 设备信息卡片（可展开/收起）----
         self.gb_info = HeaderCardWidget(self)
         self.gb_info.setTitle("设备信息")
-        info_container = QWidget(self.gb_info)
-        info_grid = QGridLayout(info_container)
+
+        # 在标题栏右侧加展开/收起按钮
+        self.btn_info_toggle = TransparentToolButton(FluentIcon.CHEVRON_DOWN_MED, self.gb_info)
+        self.gb_info.headerLayout.addStretch(1)
+        self.gb_info.headerLayout.addWidget(self.btn_info_toggle)
+
+        # 内容容器
+        self._info_container = QWidget(self.gb_info)
+        info_grid = QGridLayout(self._info_container)
         info_grid.setHorizontalSpacing(16)
         info_grid.setVerticalSpacing(6)
         self._info_labels: dict[str, StrongBodyLabel] = {}
@@ -142,7 +151,16 @@ class RTTMonitorPage(QWidget):
             lbl = StrongBodyLabel("-")
             self._info_labels[key] = lbl
             info_grid.addWidget(lbl, r, c * 2 + 1)
-        self.gb_info.viewLayout.addWidget(info_container)
+        self.gb_info.viewLayout.addWidget(self._info_container)
+
+        # 默认收起：隐藏内容容器、分隔线和 view
+        self._info_container.setVisible(False)
+        self.gb_info.separator.setVisible(False)
+        self.gb_info.view.setVisible(False)
+
+        # 点击按钮切换展开/收起
+        self.btn_info_toggle.clicked.connect(self._toggle_info_card)
+
         root.addWidget(self.gb_info)
 
         # ---- 选项栏 ----
@@ -240,6 +258,17 @@ class RTTMonitorPage(QWidget):
     # ------------------------------------------------------------------
     # 槽函数
     # ------------------------------------------------------------------
+    def _toggle_info_card(self) -> None:
+        self._set_info_expanded(not self._info_container.isVisible())
+
+    def _set_info_expanded(self, expanded: bool) -> None:
+        self._info_container.setVisible(expanded)
+        self.gb_info.separator.setVisible(expanded)
+        self.gb_info.view.setVisible(expanded)
+        self.btn_info_toggle.setIcon(
+            FluentIcon.UP if expanded else FluentIcon.CHEVRON_DOWN_MED
+        )
+
     def _on_connect_clicked(self) -> None:
         if self.btn_connect.text() == "连接":
             target = self.cb_target.currentText().strip()
@@ -283,6 +312,9 @@ class RTTMonitorPage(QWidget):
         if connected:
             for key, lbl in self._info_labels.items():
                 lbl.setText(str(info.get(key, "-")))
+            # 连接成功后自动展开设备信息卡片
+            if not self._info_container.isVisible():
+                self._set_info_expanded(True)
         else:
             for lbl in self._info_labels.values():
                 lbl.setText("-")
