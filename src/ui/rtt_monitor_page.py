@@ -214,6 +214,9 @@ class RTTMonitorPage(QWidget):
         self.display.setMaximumBlockCount(self._cfg.get("max_display_lines"))
         # 固定宽度按窗口宽度换行（超过窗宽自动 wrap，便于阅读长行日志）
         self.display.setLineWrapMode(PlainTextEdit.WidgetWidth)
+        # 允许压缩到 80px，避免子控件 sizeHint 累积导致主窗口 mintrack 过大
+        # （Windows 最大化时底部被任务栏遮挡 → 搜索栏/发送栏看不见）
+        self.display.setMinimumHeight(80)
         root.addWidget(self.display, 1)
 
         # ---- 搜索栏 ----

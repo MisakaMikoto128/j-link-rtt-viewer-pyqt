@@ -55,6 +55,9 @@ _SIZE_PRESETS = [
 
 _BYTES_PER_ROW_OPTIONS = [8, 16, 32]
 _DTYPES = ["u8", "i8", "u16", "i16", "u32", "i32", "float", "double"]
+# format_hex_dump 每行 hex 区起始列：0x{8 hex}: + "  " = 11 + 2 = 13
+# 测试 test_format_hex_dump_row_layout_contract 保护此契约
+_HEX_START_COL = 13
 
 
 def _parse_int(text: str) -> int:
@@ -183,6 +186,8 @@ class MemoryViewerPage(QWidget):
         self.display = PlainTextEdit(self)
         self.display.setReadOnly(True)
         self.display.setLineWrapMode(PlainTextEdit.NoWrap)
+        # 同 RTT 页：压缩底线 80px，避免 Windows 任务栏遮挡底部固件导出卡片
+        self.display.setMinimumHeight(80)
         splitter.addWidget(self.display)
 
         # 右：数据类型解析面板
@@ -412,8 +417,9 @@ class MemoryViewerPage(QWidget):
         """根据文本光标在 hex dump 中的位置反推 buffer 字节偏移。
 
         format_hex_dump 每行：``0xAAAAAAAA:  HH HH HH HH  HH HH HH HH ...`` →
-        块头长度 12 字符（``0x12345678:``）+ 2 空格 = 14。每字节 ``HH ``= 3 字符，
-        每 4 字节末加一个额外空格。
+        地址前缀 11 字符（``0x12345678:``）+ 2 空格 = **13** 起始 hex 区。
+        每字节 ``HH `` = 3 字符，每 4 字节末加一个分组空格。
+        硬契约由 test_format_hex_dump_row_layout_contract 保护。
         """
         if not self._buffer:
             return -1
@@ -424,8 +430,7 @@ class MemoryViewerPage(QWidget):
         line_offset = block_num * bpr
         if line_offset >= len(self._buffer):
             return -1
-        # 14 = 0x + 8 hex + : + 2 spaces
-        hex_start = 14
+        hex_start = _HEX_START_COL
         if col < hex_start:
             return line_offset  # 光标在地址列，定位行首
         # 找到属于第几个字节：每字节 3 字符（"HH "），每 4 字节后多 1 个空格
@@ -502,8 +507,8 @@ class MemoryViewerPage(QWidget):
         bpr = self._bytes_per_row
         row = byte_offset // bpr
         col_in_row = byte_offset % bpr
-        # 反推列：地址列 14 字符 + col_in_row * 3 + (col_in_row // 4) * 1
-        col = 14 + col_in_row * 3 + (col_in_row // 4) * 1
+        # 反推列：hex 起始 13 + col_in_row * 3 + (col_in_row // 4) * 1
+        col = _HEX_START_COL + col_in_row * 3 + (col_in_row // 4) * 1
         cursor = self.display.textCursor()
         cursor.movePosition(QTextCursor.Start)
         cursor.movePosition(QTextCursor.Down, QTextCursor.MoveAnchor, row)

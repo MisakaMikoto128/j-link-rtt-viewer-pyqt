@@ -90,3 +90,143 @@ def test_export_firmware_handles_partial_chunk(tmp_path):
         progress_cb=lambda c, t: None,
     )
     assert out_file.stat().st_size == 4096 + 1000
+
+
+# ----------------------------------------------------------------------------
+# format_hex_dump — bytes_per_row 行布局契约（被内存页 _cursor_byte_offset 依赖）
+# ----------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bpr", [8, 16, 32])
+def test_format_hex_dump_row_layout_contract(bpr):
+    """每行结构：``0xAAAAAAAA:  HH HH HH HH  HH HH ... |ascii|``
+
+    地址前缀 ``0x{addr:08X}:`` = 11 字符，再加 ``  ``（2 空格）→ hex 区起始 col 13。
+    每字节 ``HH `` = 3 字符（join 后 stride 3），每 4 字节后追加 1 个分组空格。
+    **这是 _cursor_byte_offset / _select_buffer_range 反推位置的硬契约——
+    一旦此测失败，必须同步修源代码里的 hex_start 常量。**
+    """
+    data = bytes(range(bpr))
+    out = memory_service.format_hex_dump(data, base_addr=0x10000000, bytes_per_row=bpr)
+    line = out.splitlines()[0]
+    assert line.startswith("0x10000000:  "), f"地址前缀必须 0x{'AAAAAAAA'}:<两空格> (line: {line!r})"
+    # hex 区起始位置硬约束 — col 13
+    hex_start = 13
+    assert line[hex_start:hex_start + 2] == "00"
+    # 第一字节后是空格，第 4 字节后是双空格（分组）
+    assert line[hex_start + 2] == " "
+    # byte_chars * 4 = 12 处应为分组空格（紧跟第 4 字节后的额外空格）
+    assert line[hex_start + 11] == " "
+    assert line[hex_start + 12] == " "
+    # ASCII 列 | 应在结尾
+    assert "|" in line and line.rstrip().endswith("|")
+
+
+def test_format_hex_dump_bytes_per_row_8():
+    data = bytes(range(16))
+    out = memory_service.format_hex_dump(data, base_addr=0, bytes_per_row=8)
+    lines = out.splitlines()
+    assert len(lines) == 2  # 8 + 8
+
+
+def test_format_hex_dump_bytes_per_row_32():
+    data = bytes(range(64))
+    out = memory_service.format_hex_dump(data, base_addr=0, bytes_per_row=32)
+    lines = out.splitlines()
+    assert len(lines) == 2
+
+
+def test_format_hex_dump_invalid_bytes_per_row_falls_back_to_16():
+    data = bytes(range(16))
+    out = memory_service.format_hex_dump(data, base_addr=0, bytes_per_row=7)
+    # 落回 16 → 16 字节一行
+    assert len(out.splitlines()) == 1
+
+
+# ----------------------------------------------------------------------------
+# format_as_c_array
+# ----------------------------------------------------------------------------
+
+def test_format_as_c_array_basic():
+    out = memory_service.format_as_c_array(bytes([0x12, 0x34, 0x56, 0x78]), name="sample", bytes_per_row=8)
+    assert "uint8_t sample[4] = {" in out
+    assert "0x12, 0x34, 0x56, 0x78" in out
+    assert out.endswith("};")
+
+
+def test_format_as_c_array_multi_row():
+    data = bytes(range(20))
+    out = memory_service.format_as_c_array(data, name="buf", bytes_per_row=8)
+    lines = out.splitlines()
+    # 头 + 3 行内容（8+8+4）+ 尾
+    assert len(lines) == 5
+    assert lines[0] == "uint8_t buf[20] = {"
+    # 中间行除最后一行外尾必须有逗号
+    assert lines[1].endswith(",")
+    assert lines[2].endswith(",")
+    assert not lines[3].endswith(",")  # 最后一组无逗号
+    assert lines[-1] == "};"
+
+
+def test_format_as_c_array_empty():
+    out = memory_service.format_as_c_array(b"", name="x")
+    assert out == "uint8_t x[0] = {};"
+
+
+# ----------------------------------------------------------------------------
+# parse_value — 8 dtypes × 2 endians + 边界条件
+# ----------------------------------------------------------------------------
+
+def test_parse_value_u32_le_be():
+    data = bytes.fromhex("78563412")
+    assert memory_service.parse_value(data, 0, "u32", little_endian=True) == "305419896 (0x12345678)"
+    assert memory_service.parse_value(data, 0, "u32", little_endian=False) == "2018915346 (0x78563412)"
+
+
+def test_parse_value_i32_negative():
+    # 0xFFFFFFFF LE = -1 (signed 32-bit)
+    data = bytes.fromhex("FFFFFFFF")
+    assert memory_service.parse_value(data, 0, "i32", little_endian=True) == "-1"
+
+
+def test_parse_value_u16_i16():
+    data = bytes.fromhex("00FF")  # LE: 0xFF00 = 65280 unsigned, -256 signed
+    assert memory_service.parse_value(data, 0, "u16", little_endian=True) == "65280 (0xFF00)"
+    assert memory_service.parse_value(data, 0, "i16", little_endian=True) == "-256"
+
+
+def test_parse_value_u8_i8():
+    data = bytes([0x80])
+    assert memory_service.parse_value(data, 0, "u8", little_endian=True) == "128 (0x80)"
+    assert memory_service.parse_value(data, 0, "i8", little_endian=True) == "-128"
+
+
+def test_parse_value_float():
+    # 1.0f IEEE 754 = 0x3F800000
+    data = bytes.fromhex("0000803F")  # LE
+    result = memory_service.parse_value(data, 0, "float", little_endian=True)
+    assert result.startswith("1")
+
+
+def test_parse_value_double():
+    # 1.0 IEEE 754 = 0x3FF0000000000000
+    data = bytes.fromhex("000000000000F03F")  # LE
+    result = memory_service.parse_value(data, 0, "double", little_endian=True)
+    assert result.startswith("1")
+
+
+def test_parse_value_out_of_bounds():
+    """offset + sizeof(dtype) > len(data) → "—" (em dash)."""
+    data = bytes([0x12, 0x34])
+    assert memory_service.parse_value(data, 0, "u32", True) == "—"
+    assert memory_service.parse_value(data, 1, "u16", True) == "—"
+
+
+def test_parse_value_offset_at_boundary():
+    """正好 fits 的边界 offset 可以解析。"""
+    data = bytes.fromhex("00112233")
+    assert memory_service.parse_value(data, 0, "u32", True) != "—"
+    assert memory_service.parse_value(data, 2, "u16", True) != "—"
+
+
+def test_parse_value_unknown_dtype():
+    assert memory_service.parse_value(b"\x00\x00\x00\x00", 0, "u64", True) == "—"
