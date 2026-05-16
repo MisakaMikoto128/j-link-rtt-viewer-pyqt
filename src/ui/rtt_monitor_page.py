@@ -5,9 +5,12 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QTextCharFormat, QTextCursor, QColor
 from PySide6.QtWidgets import (
     QCompleter,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +34,7 @@ from core.config_service import ConfigService
 from core.jlink_worker import JLinkWorker
 
 from . import _infobar
+from . import _splitter_persist
 
 
 _FONT_SIZE_MIN = 8
@@ -99,11 +103,30 @@ class RTTMonitorPage(QWidget):
         self._update_encoding_label(cfg.get("rtt_encoding") or "utf-8")
         cfg.rtt_encoding_changed.connect(self._update_encoding_label)
 
+        # 恢复并连接 splitter 状态持久化（必须在 _build_ui 之后；
+        # _build_ui 已 setStretchFactor 默认 3:1，restoreState 空字符串就 no-op）
+        from core.logger import get_logger
+        _splitter_persist.restore(self.splitter, self._cfg, "rtt_splitter_state", get_logger())
+        _splitter_persist.wire(self.splitter, self._cfg, "rtt_splitter_state")
+
     # ------------------------------------------------------------------
     # UI 构建
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        # 最外层：ScrollArea；窗口高度 < 内容自然高度时出现垂直滚动条。
+        # 同 ac439e9 给内存页加的套路，保持两页一致。
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._scroll = QScrollArea(self)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        outer.addWidget(self._scroll)
+        inner = QWidget()
+        self._scroll.setWidget(inner)
+        root = QVBoxLayout(inner)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(8)
 
@@ -246,10 +269,9 @@ class RTTMonitorPage(QWidget):
         self.display.setMaximumBlockCount(self._cfg.get("max_display_lines"))
         # 固定宽度按窗口宽度换行（超过窗宽自动 wrap，便于阅读长行日志）
         self.display.setLineWrapMode(PlainTextEdit.WidgetWidth)
-        # 允许压缩到 80px，避免子控件 sizeHint 累积导致主窗口 mintrack 过大
+        # display 最小高度 80px：避免子控件 sizeHint 累积导致主窗口 mintrack 过大
         # （Windows 最大化时底部被任务栏遮挡 → 搜索栏/发送栏看不见）
         self.display.setMinimumHeight(80)
-        root.addWidget(self.display, 1)
 
         # ---- 搜索栏 ----
         try:
@@ -267,7 +289,6 @@ class RTTMonitorPage(QWidget):
         srch.addWidget(self.btn_prev)
         srch.addWidget(self.btn_next)
         srch.addWidget(self.lbl_match)
-        root.addLayout(srch)
 
         # ---- 发送栏 ----
         send = QHBoxLayout()
@@ -286,7 +307,6 @@ class RTTMonitorPage(QWidget):
         send.addWidget(self.le_send, 1)
         send.addWidget(self.chk_hex)
         send.addWidget(self.btn_send)
-        root.addLayout(send)
 
         # ---- 底部状态栏 ----
         status = QHBoxLayout()
@@ -304,7 +324,27 @@ class RTTMonitorPage(QWidget):
         status.addWidget(self.lbl_status_total)
         status.addStretch(1)
         status.addWidget(self.lbl_status_encoding)
-        root.addLayout(status)
+
+        # 底栏 container：搜索 + 发送 + 状态栏 一起进 splitter 下半。
+        # 用 QWidget 包，便于设 minimumHeight 防止误拖到 0。
+        bottom = QWidget()
+        bottom_lay = QVBoxLayout(bottom)
+        bottom_lay.setContentsMargins(0, 0, 0, 0)
+        bottom_lay.setSpacing(8)
+        bottom_lay.addLayout(srch)
+        bottom_lay.addLayout(send)
+        bottom_lay.addLayout(status)
+        # 三行控件 + 间距：合计约 120px 起跳，给 20px 余量
+        bottom.setMinimumHeight(120)
+
+        # 垂直 splitter：display | 底栏。拖动 handle 调比例，状态进 user_prefs。
+        self.splitter = QSplitter(Qt.Vertical, self)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.addWidget(self.display)
+        self.splitter.addWidget(bottom)
+        self.splitter.setStretchFactor(0, 3)  # display 默认占 3/4
+        self.splitter.setStretchFactor(1, 1)
+        root.addWidget(self.splitter, 1)
 
     # ------------------------------------------------------------------
     # 信号接线
