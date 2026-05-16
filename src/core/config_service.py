@@ -52,8 +52,8 @@ class ConfigService(QObject):
         "auto_scroll": True,
         "power_output": False,
         "log_recording": False,
-        # RTT 页 display 与底部控件（搜索/发送/状态）之间的垂直 splitter 状态
-        "rtt_splitter_state": "",
+        # RTT 页 display 的固定高度（px）；用户拖 _VResizeHandle 时持久化更新
+        "rtt_display_height": 500,
     }
 
     SEND_HISTORY_MAX = 50

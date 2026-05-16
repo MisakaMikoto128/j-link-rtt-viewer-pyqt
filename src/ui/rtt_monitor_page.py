@@ -1,10 +1,8 @@
 """RTT 监控页：控制栏 + 选项栏 + 显示区 + 搜索栏 + 发送栏。"""
 from __future__ import annotations
 
-import base64
-
-from PySide6.QtCore import QByteArray, Qt, QTimer
-from PySide6.QtGui import QFont, QFontDatabase, QTextCharFormat, QTextCursor, QColor
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QFont, QFontDatabase, QMouseEvent, QTextCharFormat, QTextCursor, QColor
 from PySide6.QtWidgets import (
     QCompleter,
     QFrame,
@@ -12,7 +10,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
-    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -71,6 +68,55 @@ _ANSI_COLOR_MAP = {
     "bright_cyan": "#55ffff",
     "bright_white": "#ffffff",
 }
+
+
+class _VResizeHandle(QFrame):
+    """display 下方的水平拖动条。拖动 → 改 target 的 fixedHeight。
+
+    为什么不用 QSplitter？QSplitter 在 QScrollArea 里只能在 viewport 内
+    重新分配两个 children 的高度，display 永远拖不到比 viewport 大——
+    无法触发整页 ScrollArea 滚动。这里直接改 display 的 setFixedHeight，
+    inner widget 的 sizeHint 跟着长高，ScrollArea 自然出滚条。
+    """
+
+    heightChanged = Signal(int)  # 拖动结束 emit 最终高度（持久化用）
+
+    _MIN_TARGET_H = 120
+
+    def __init__(self, target: QWidget, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._target = target
+        self._dragging = False
+        self._start_y = 0.0
+        self._start_h = 0
+        self.setFixedHeight(8)
+        self.setCursor(Qt.SizeVerCursor)
+        self.setObjectName("rtt_resize_handle")
+        # 视觉：默认半透明灰条，hover 时主题蓝高亮——模仿 splitter handle。
+        self.setStyleSheet(
+            "#rtt_resize_handle { background: rgba(128, 128, 128, 50); border-radius: 2px; }"
+            "#rtt_resize_handle:hover { background: rgba(40, 175, 233, 120); }"
+        )
+
+    def mousePressEvent(self, e: QMouseEvent) -> None:
+        if e.button() == Qt.LeftButton:
+            self._dragging = True
+            self._start_y = e.globalPosition().y()
+            self._start_h = self._target.height()
+            e.accept()
+
+    def mouseMoveEvent(self, e: QMouseEvent) -> None:
+        if self._dragging:
+            dy = int(e.globalPosition().y() - self._start_y)
+            new_h = max(self._MIN_TARGET_H, self._start_h + dy)
+            self._target.setFixedHeight(new_h)
+            e.accept()
+
+    def mouseReleaseEvent(self, e: QMouseEvent) -> None:
+        if self._dragging:
+            self._dragging = False
+            self.heightChanged.emit(self._target.height())
+            e.accept()
 
 
 class RTTMonitorPage(QWidget):
@@ -277,8 +323,10 @@ class RTTMonitorPage(QWidget):
         self.display.setMaximumBlockCount(self._cfg.get("max_display_lines"))
         # 固定宽度按窗口宽度换行（超过窗宽自动 wrap，便于阅读长行日志）
         self.display.setLineWrapMode(PlainTextEdit.WidgetWidth)
-        # display 最小 120 / bottom 最小 60：splitter handle 可在两者间自由拖动；
-        # 真正的"默认观感"由下面 splitter.setSizes([500, 160]) 给出。
+        # display 高度由用户拖 _VResizeHandle 控制；fixedHeight 让 inner widget
+        # 的 sizeHint 跟着长高，ScrollArea 自动判断溢出 → 整页滚条。
+        saved_h = int(self._cfg.get("rtt_display_height") or 500)
+        self.display.setFixedHeight(max(120, saved_h))
 
         # ---- 搜索栏 ----
         try:
@@ -332,47 +380,20 @@ class RTTMonitorPage(QWidget):
         status.addStretch(1)
         status.addWidget(self.lbl_status_encoding)
 
-        # ---- 垂直 splitter：display（上） + 底部控件（下，搜索/发送/状态）----
-        # 用户拖 handle 调 display 高度；状态持久化到 cfg.rtt_splitter_state
-        bottom = QWidget(inner)
-        bot_lay = QVBoxLayout(bottom)
-        bot_lay.setContentsMargins(0, 0, 0, 0)
-        bot_lay.setSpacing(8)
-        bot_lay.addLayout(srch)
-        bot_lay.addLayout(send)
-        bot_lay.addLayout(status)
-        bottom.setMinimumHeight(60)
-        self.display.setMinimumHeight(120)
-
-        self.splitter = QSplitter(Qt.Vertical, inner)
-        self.splitter.setChildrenCollapsible(False)
-        self.splitter.addWidget(self.display)
-        self.splitter.addWidget(bottom)
-        self.splitter.setStretchFactor(0, 3)
-        self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([500, 160])
-        # 关键：QSplitter 不会把 children 的 setMinimumHeight 自动聚合成
-        # 自己的 minimumSizeHint —— 不显式设的话 splitter 只声明 ~50px 最小
-        # ScrollArea 永远不觉得 inner 超 viewport → 整页滚不出来。这里硬
-        # 设 = display(120) + bottom(60) + handle，强制 splitter 至少这么
-        # 高，ScrollArea 才会在窗口压扁时给整页出滚条。
-        self.splitter.setMinimumHeight(120 + 60 + 10)
-        root.addWidget(self.splitter, 1)
-
-        # splitter 状态持久化（内联，不另起模块——单处使用 + Occam's razor）
-        state_b64 = self._cfg.get("rtt_splitter_state")
-        if state_b64:
-            try:
-                self.splitter.restoreState(QByteArray(base64.b64decode(state_b64)))
-            except Exception:
-                pass  # 旧版数据格式 / base64 损坏 — 忽略，用默认 sizes
-        self.splitter.splitterMoved.connect(self._save_splitter_state)
-
-    def _save_splitter_state(self, *_args) -> None:
-        self._cfg.set(
-            "rtt_splitter_state",
-            base64.b64encode(bytes(self.splitter.saveState())).decode("ascii"),
+        # display 加入布局 → 拖动 handle → 底部控件按自然高度排
+        root.addWidget(self.display)
+        self.resize_handle = _VResizeHandle(self.display, inner)
+        self.resize_handle.heightChanged.connect(
+            lambda h: self._cfg.set("rtt_display_height", h)
         )
+        root.addWidget(self.resize_handle)
+
+        root.addLayout(srch)
+        root.addLayout(send)
+        root.addLayout(status)
+        # 窗口比内容高时：stretch 吸收剩余空间，避免最后一个 layout 被布局
+        # 引擎拉长走样；窗口比内容矮时：ScrollArea 自动出整页滚条。
+        root.addStretch(1)
 
     # ------------------------------------------------------------------
     # 信号接线
