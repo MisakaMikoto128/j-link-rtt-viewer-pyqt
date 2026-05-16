@@ -351,8 +351,12 @@ class RTTMonitorPage(QWidget):
         self.splitter.setStretchFactor(0, 3)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setSizes([500, 160])
-        # 整页纵向 ScrollArea 兜底：inner 最小高度 = 顶部固定区 ~250 + splitter
-        # 两子最小 (120 + 60) + spacing ≈ 440。窗口高度低于该值时整页可滚。
+        # 关键：QSplitter 不会把 children 的 setMinimumHeight 自动聚合成
+        # 自己的 minimumSizeHint —— 不显式设的话 splitter 只声明 ~50px 最小
+        # ScrollArea 永远不觉得 inner 超 viewport → 整页滚不出来。这里硬
+        # 设 = display(120) + bottom(60) + handle，强制 splitter 至少这么
+        # 高，ScrollArea 才会在窗口压扁时给整页出滚条。
+        self.splitter.setMinimumHeight(120 + 60 + 10)
         root.addWidget(self.splitter, 1)
 
         # splitter 状态持久化（内联，不另起模块——单处使用 + Occam's razor）
