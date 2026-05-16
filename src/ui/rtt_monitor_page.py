@@ -4,9 +4,10 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QFontDatabase, QTextCharFormat, QTextCursor, QColor
 from PySide6.QtWidgets import (
+    QCompleter,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPlainTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -15,11 +16,14 @@ from qfluentwidgets import (
     CheckBox,
     ComboBox,
     EditableComboBox,
+    HeaderCardWidget,
     InfoBar,
     InfoBarPosition,
+    PlainTextEdit,
     PrimaryPushButton,
     PushButton,
     SpinBox,
+    StrongBodyLabel,
 )
 
 from core.ansi_parser import AnsiAttrs, parse_ansi
@@ -70,11 +74,17 @@ class RTTMonitorPage(QWidget):
         ctrl = QHBoxLayout()
         ctrl.addWidget(BodyLabel("目标设备"))
         self.cb_target = EditableComboBox(self)
-        self.cb_target.addItems(self._cfg.get_chip_list())
+        chip_list = self._cfg.get_chip_list()
+        self.cb_target.addItems(chip_list)
         last_mcu = self._cfg.get("target_mcu")
         if last_mcu:
             self.cb_target.setCurrentText(last_mcu)
         self.cb_target.setMinimumWidth(180)
+        # 自动补全：不区分大小写、子串匹配
+        completer = QCompleter(chip_list, self)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        self.cb_target.setCompleter(completer)
         ctrl.addWidget(self.cb_target)
 
         ctrl.addWidget(BodyLabel("接口"))
@@ -107,13 +117,14 @@ class RTTMonitorPage(QWidget):
         ctrl.addStretch(1)
         root.addLayout(ctrl)
 
-        # ---- 设备信息折叠组（用 QGroupBox.setCheckable 实现简易折叠）----
-        from PySide6.QtWidgets import QGroupBox, QGridLayout
-        self.gb_info = QGroupBox("设备信息", self)
-        self.gb_info.setCheckable(True)
-        self.gb_info.setChecked(False)
-        info_grid = QGridLayout(self.gb_info)
-        self._info_labels: dict[str, QLabel] = {}
+        # ---- 设备信息卡片（HeaderCardWidget）----
+        self.gb_info = HeaderCardWidget(self)
+        self.gb_info.setTitle("设备信息")
+        info_container = QWidget(self.gb_info)
+        info_grid = QGridLayout(info_container)
+        info_grid.setHorizontalSpacing(16)
+        info_grid.setVerticalSpacing(6)
+        self._info_labels: dict[str, StrongBodyLabel] = {}
         rows = [
             ("固件版本", "jlink_firmware"),
             ("硬件版本", "jlink_hardware"),
@@ -127,10 +138,11 @@ class RTTMonitorPage(QWidget):
         ]
         for i, (text, key) in enumerate(rows):
             r, c = divmod(i, 3)
-            info_grid.addWidget(QLabel(f"{text}:"), r, c * 2)
-            lbl = QLabel("-")
+            info_grid.addWidget(BodyLabel(f"{text}:"), r, c * 2)
+            lbl = StrongBodyLabel("-")
             self._info_labels[key] = lbl
             info_grid.addWidget(lbl, r, c * 2 + 1)
+        self.gb_info.viewLayout.addWidget(info_container)
         root.addWidget(self.gb_info)
 
         # ---- 选项栏 ----
@@ -152,11 +164,11 @@ class RTTMonitorPage(QWidget):
         opt.addWidget(self.btn_save)
         root.addLayout(opt)
 
-        # ---- 显示区 ----
-        self.display = QPlainTextEdit(self)
+        # ---- 显示区（qfluentwidgets PlainTextEdit 自动适应主题）----
+        self.display = PlainTextEdit(self)
         self.display.setReadOnly(True)
         self.display.setMaximumBlockCount(self._cfg.get("max_display_lines"))
-        self.display.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.display.setLineWrapMode(PlainTextEdit.NoWrap)
         root.addWidget(self.display, 1)
 
         # ---- 搜索栏 ----
@@ -271,7 +283,6 @@ class RTTMonitorPage(QWidget):
         if connected:
             for key, lbl in self._info_labels.items():
                 lbl.setText(str(info.get(key, "-")))
-            self.gb_info.setChecked(True)
         else:
             for lbl in self._info_labels.values():
                 lbl.setText("-")

@@ -175,3 +175,25 @@ if at_bottom and self.chk_auto_scroll.isChecked():
 ## TODO：发版前敲定作者信息
 
 `src/ui/about_page.py` 顶部的 `AUTHOR_NAME = "待定"` 和 `AUTHOR_GITHUB = "https://github.com/"` 在 0.1.0 发版前需要替换为真实信息。
+
+---
+
+## RTT 通道选错时显示区无内容
+
+**现象**：J-Link 连接成功、设备信息填充正确，但 RTT 显示区一直空白。
+
+**原因**：UI 的 RTT 通道（SpinBox 0-15）和 MCU 端 `SEGGER_RTT_printf(N, "...")` 必须一致。MCU 默认在通道 0 发送，UI 默认通道也是 0，但 user_prefs.json 会保存用户上次选择——切到 1 后重启仍保持 1。
+
+**处理**：连接前确认 SpinBox 通道与 MCU 端代码一致。如果不确定，先切到 0 试试。如需重置偏好，删除 `%APPDATA%\JLinkRTTViewer\user_prefs.json`。
+
+---
+
+## 启动时不要做 main thread → worker QTimer.singleShot 信号转发
+
+**现象**：日志出现 `QObject::startTimer: Timers cannot be started from another thread`，窗口关闭时 worker 不响应 stop_requested，主线程 wait 超时强制 terminate。
+
+**原因**：曾在 `MainWindow.__init__` 用 `QTimer.singleShot(500, lambda: worker.signal.emit())` 给 worker 投递初始化配置。singleShot 在主线程触发，emit 触发 worker 内部 `_on_set_poll_interval` 调 `self._poll_timer.setInterval(ms)`，而此时 worker 的 run() 可能尚未完成初始化，_poll_timer 状态不一致；后续退出时 worker 事件循环无法正常响应 stop_requested。
+
+**处理**：删除 main thread 到 worker 的 startup signal 转发；worker 以 `run()` 内的默认值（20 ms）运行。用户在设置页改 SpinBox 时才 emit，届时各 timer 已稳定。
+
+参考：`src/ui/main_window.py` `__init__`
