@@ -1,0 +1,50 @@
+=== pylink °æ±¾£º1.6.0 ===
+
+--- step 1: connected emulators ---
+  found: serial=695456910, nickname='Flasher PRO'
+
+--- step 2: open ---
+  opened OK, serial_number=695456910
+  firmware_version='J-Link V9 compiled May  7 2021 16:26:12'
+  hardware_version='9.40'
+
+--- step 3: close + reopen with serial ---
+  reopened OK with serial 695456910
+
+--- step 4: rtt_start (before connect) ---
+  rtt_start OK
+
+--- step 5: set_tif + set_speed ---
+  set_tif=SWD, set_speed=4000 kHz OK
+
+--- step 6: connect target STM32H750VB ---
+  connect OK, connected=True
+  core_name=Cortex-M7, core_id=0x6ba02477
+
+--- step 7: scan RTT channels ---
+  up buffers (target¡úhost)=3, down buffers (host¡útarget)=3
+  up[0]: name='Terminal', size=1024, flags=1
+  up[1]: name='', size=0, flags=0
+  up[2]: name='', size=0, flags=0
+
+--- step 8: poll rtt_read on channels 0..3 for 3s each ---
+
+  >>> channel 0:
+      got 1023 bytes, raw[:40]=b'2000.01.02 23:38:04  [INFO]: [PrimMod] l', decoded='2000.01.02 23:38:04  [INFO]: [PrimMod] lift.conn=-1 gbt.conn=-1 capv.conn=-1 relay={T=-1 A=-1 M=-1 thr=0.00} vcap=0.00 vbms=0.00 tx=0 rx=0 timeout=0\n2000.01.02 23:38:05  [INFO]: [PrimMod] lift.conn=-1 gbt.conn=-1 capv.conn=-1 relay={T=-1 A=-1 M=-1 thr=0.00} vcap=0.00 vbms=0.00 tx=0 rx=0 timeout=0\n2000.01.02 23:38:06  [INFO]: [PrimMod] lift.conn=-1 gbt.conn=-1 capv.conn=-1 relay={T=-1 A=-1 M=-1 thr=0.00} vcap=0.00 vbms=0.00 tx=0 rx=0 timeout=0\n2000.01.02 23:38:07  [INFO]: [PrimMod] lift.conn=-1 gbt.conn=-1 capv.conn=-1 relay={T=-1 A=-1 M=-1 thr=0.00} vcap=0.00 vbms=0.00 tx=0 rx=0 timeout=0\n2000.01.02 23:38:08  [INFO]: [PrimMod] lift.conn=-1 gbt.conn=-1 capv.conn=-1 relay={T=-1 A=-1 M=-1 thr=0.00} vcap=0.00 vbms=0.00 tx=0 rx=0 timeout=0\n2000.01.02 23:38:09  [INFO]: [PrimMod] lift.conn=-1 gbt.conn=-1 capv.conn=-1 relay={T=-1 A=-1 M=-1 thr=0.00} vcap=0.00 vbms=0.00 tx=0 rx=0 timeout=0\n2000.01.02 23:38:10  [INFO]: [PrimMod] lift.conn=-1 gbt.conn=-1 capv.conn=-1 relay={T=-1 A=-1 M=-1 thr=0.00} vcap=0.00 vbms=0.00 '
+      got 149 bytes, raw[:40]=b'2000.01.02 23:38:13  [INFO]: [PrimMod] l', decoded='2000.01.02 23:38:13  [INFO]: [PrimMod] lift.conn=-1 gbt.conn=-1 capv.conn=-1 relay={T=-1 A=-1 M=-1 thr=0.00} vcap=0.00 vbms=0.00 tx=0 rx=0 timeout=0\n'
+      got 149 bytes, raw[:40]=b'2000.01.02 23:38:14  [INFO]: [PrimMod] l', decoded='2000.01.02 23:38:14  [INFO]: [PrimMod] lift.conn=-1 gbt.conn=-1 capv.conn=-1 relay={T=-1 A=-1 M=-1 thr=0.00} vcap=0.00 vbms=0.00 tx=0 rx=0 timeout=0\n'
+      got 149 bytes, raw[:40]=b'2000.01.02 23:38:15  [INFO]: [PrimMod] l', decoded='2000.01.02 23:38:15  [INFO]: [PrimMod] lift.conn=-1 gbt.conn=-1 capv.conn=-1 relay={T=-1 A=-1 M=-1 thr=0.00} vcap=0.00 vbms=0.00 tx=0 rx=0 timeout=0\n'
+      total 1470 bytes on channel 0
+
+  >>> channel 1:
+      total 0 bytes on channel 1
+
+  >>> channel 2:
+      total 0 bytes on channel 2
+
+  >>> channel 3:
+      total 0 bytes on channel 3
+
+--- step 9: cleanup ---
+  rtt_stop OK
+  close OK
