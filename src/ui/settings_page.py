@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
+    QCompleter,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -97,6 +98,11 @@ class SettingsPage(QWidget):
         self.cb_rtt_font.addItems(families)
         self.cb_rtt_font.setMinimumWidth(220)
         self.cb_rtt_font.setCurrentText(self._cfg.get("font_family") or "Consolas")
+        # 自动补全：不区分大小写、子串匹配（输入"yahei"能找到"Microsoft YaHei"）
+        completer_rtt = QCompleter(families, self)
+        completer_rtt.setCaseSensitivity(Qt.CaseInsensitive)
+        completer_rtt.setFilterMode(Qt.MatchContains)
+        self.cb_rtt_font.setCompleter(completer_rtt)
         self.cb_rtt_font.currentTextChanged.connect(self._on_rtt_family_changed)
         rtt_font_row.addWidget(self.cb_rtt_font)
         self.sp_font_size = SpinBox(self)
@@ -117,6 +123,11 @@ class SettingsPage(QWidget):
         self.cb_ui_font.setMinimumWidth(220)
         cur_ui_family = self._cfg.get("ui_font_family")
         self.cb_ui_font.setCurrentText(cur_ui_family if cur_ui_family else "（系统默认）")
+        # 自动补全（只补全 families，不含"系统默认"占位符）
+        completer_ui = QCompleter(families, self)
+        completer_ui.setCaseSensitivity(Qt.CaseInsensitive)
+        completer_ui.setFilterMode(Qt.MatchContains)
+        self.cb_ui_font.setCompleter(completer_ui)
         self.cb_ui_font.currentTextChanged.connect(self._on_ui_family_changed)
         ui_font_row.addWidget(self.cb_ui_font)
         self.sp_ui_font_size = SpinBox(self)
