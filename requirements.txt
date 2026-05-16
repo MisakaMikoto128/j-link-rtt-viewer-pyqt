@@ -1,6 +1,6 @@
 PySide6>=6.6,<7
 PySide6-Fluent-Widgets>=1.6,<2.0
-pylink-square>=1.6.0
+pylink-square==1.6.0   # 必须用 1.6.0；2.x 有 breaking API change，RTT 不工作
 
 # dev / build
 pytest>=8.0

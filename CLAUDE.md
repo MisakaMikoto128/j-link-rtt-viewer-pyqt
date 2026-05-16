@@ -4,31 +4,15 @@
 
 ---
 
-## pylink `close()` 在未连接时抛 `JLinkException`
+## pylink `close()` / `rtt_stop()` 抛 `JLinkException` 不致命
 
-**现象**：调用 `jlink.close()` 抛 `pylink.errors.JLinkException: There is no connected JLink.`
+**现象**：调用 `jlink.close()` 或 `jlink.rtt_stop()` 抛 `pylink.errors.JLinkException`（如 "There is no connected JLink."）。
 
-**原因**：pylink 把"没 open 过"和"open 过但已 close"都当成"无连接"，再次 close() 直接抛异常。原 PyWebView 项目里没有守卫，断开成功后稍微再点一次断开就报错。
+**原因**：pylink 在某些内部状态下（如已经 close、或 rtt 未 start）调清理方法会抛异常。
 
-**处理**：close 前必须 `if jlink.opened():`；同理 rtt_stop 前必须 `if jlink.connected():`。守卫语句应该把整个 close/rtt_stop 块各自包一层 try/except，except 内 `log_message.emit('warning', ...)`，不要让单一次清理失败阻断退出路径。
+**处理**：用 try/except 包裹每个清理调用，except 内 `_logger.warning(...)` 即可，不要让单次清理失败阻断整个退出路径。**不要**用 `jlink.opened()` / `jlink.connected()` 做守卫——pylink 1.6.0 下这类守卫会因内部状态时序问题误判，反而可能跳过必要的清理。直接调 + try/except 更健壮。
 
 参考：`src/core/jlink_worker.py` `_do_disconnect`
-
----
-
-## 不要做 "open → 取 serial → close → 再 open" 双开
-
-**现象**：原项目 `jlink_service.connect()` 里有这样的代码：
-```python
-self.jlink.open()
-ser_num = self.jlink.serial_number
-self.jlink.close()
-self.jlink.open(str(ser_num))
-```
-
-**原因**：本意可能是想"显式按序列号打开"，但 pylink 1.6.0 的 `open()` 不传 serial_no 时本来就会选第一个可用 J-Link。多余的 close 引入了线程时序窗口（read thread 可能还在用 jlink 句柄），是后续 close 死锁的根因之一。
-
-**处理**：直接一次 `if not jlink.opened(): jlink.open()` 即可，不再传 serial_no 也不再双开。如果未来要支持多 J-Link 选择，加一个"选择序列号"对话框，把选中的 serial 传给 `open(serial_no=...)`，而不是先 open 再 close 再 open。
 
 ---
 
@@ -204,3 +188,39 @@ if at_bottom and self.chk_auto_scroll.isChecked():
 - 不要用 `__getattr__` 转发签名——会让 PySide6 元对象系统出现 cross-thread 参与对象。
 
 参考：`src/core/jlink_worker.py`、`src/ui/main_window.py`、`tests/test_jlink_worker.py` fixture。
+
+---
+
+## pylink 必须用 1.6.0，2.x 不工作
+
+**现象**：J-Link 连接成功（`connected()` 返回 True，设备信息正常回填），但 `rtt_read(channel, 4096)` 永远返回空，RTT 显示区一直空白。
+
+**原因**：pylink-square 在 2.0.0 有 breaking API change（rtt_start/rtt_read 内部行为变化）。我们之前 pip install 时没锁版本，装了 2.0.1，结果 RTT 通道不工作。参考项目 `Charging_Pile/RTT_Viewer/RTT-T` 用 1.6.0 稳定运行。
+
+**处理**：`requirements.txt` 锁定 `pylink-square==1.6.0`。如果之前已经装了 2.x，强制降级：`pip install pylink-square==1.6.0`。
+
+参考：`requirements.txt`、`src/core/jlink_worker.py`
+
+---
+
+## pylink 1.6.0 连接顺序：必须 open → close → open(serial) → rtt_start → set_tif → set_speed → connect
+
+**现象**：单次 `open()` 后直接 `set_tif → set_speed → connect → rtt_start` 这个看起来更简洁的顺序，在 pylink 1.6.0 上会导致 RTT 永远没数据（虽然 `connected()` 返回 True）。
+
+**原因**：pylink 1.6.0 的 `rtt_start()` 必须在某个特定时机调用——参考项目的实践是双开后立即 `rtt_start()`，然后才设接口/速度/目标。这是 pylink 1.6.0 + J-Link DLL 内部状态机的硬性要求。
+
+**处理**：连接序列严格按参考项目：
+```python
+if not jlink.opened():
+    jlink.open()
+    ser = jlink.serial_number
+    jlink.close()
+    jlink.open(str(ser))
+    jlink.rtt_start()  # 必须这里
+jlink.set_tif(SWD or JTAG)
+jlink.set_speed(int(speed))
+jlink.connect(target)
+# 这之后 rtt_read 才真正能收到数据
+```
+
+参考：`src/core/jlink_worker.py` `_on_connect`、参考项目 `RTT-T/src/services/jlink_service.py` `connect`

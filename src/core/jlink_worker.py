@@ -120,19 +120,32 @@ class JLinkWorker(QObject):
         self._channel = channel
         try:
             if not self.jlink.opened():
+                # 参考项目的双开模式（pylink 1.6.0 稳定工作的关键模式）：
+                # 先 open() 一次取 serial，close，再 open(serial)，然后 rtt_start
+                # 注意：rtt_start 必须在 connect(target) 之前调用
                 self.jlink.open()
+                ser_num = self.jlink.serial_number
+                self.jlink.close()
+                self.jlink.open(str(ser_num))
+                self.jlink.rtt_start()
+
             tif = pylink.enums.JLinkInterfaces.SWD if iface == "SWD" \
                 else pylink.enums.JLinkInterfaces.JTAG
             self.jlink.set_tif(tif)
             self.jlink.set_speed(int(speed))
             self.jlink.connect(target)
-            self.jlink.rtt_start()
             self._reset_utf8_decoder()
-            self._state = _STATE_CONNECTED
-            info = self._collect_device_info(target, iface, speed)
-            self._logger.info(f"已连接 {target} ({iface} {speed}kHz, RTT ch{channel})")
-            self.connection_state_changed.emit(True, info)
-            self._poll_timer.start()
+
+            if self.jlink.connected():
+                self._state = _STATE_CONNECTED
+                info = self._collect_device_info(target, iface, speed)
+                self._logger.info(f"已连接 {target} ({iface} {speed}kHz, RTT ch{channel})")
+                self.connection_state_changed.emit(True, info)
+                self._poll_timer.start()
+            else:
+                self._logger.error("connect(target) 后 connected() 仍为 False")
+                self.log_message.emit("error", "连接目标失败")
+                self._transition_to_idle()
         except Exception as e:
             self._logger.error(f"连接失败：{e}")
             self.log_message.emit("error", f"连接失败：{e}")
@@ -149,14 +162,14 @@ class JLinkWorker(QObject):
             self._poll_timer.stop()
         self._close_log_file()
 
+        # 参考项目的断开模式（pylink 1.6.0 直接调，不做 connected()/opened() 守卫——
+        # 守卫反而是噪音，pylink 1.6.0 在已断开状态下调 rtt_stop/close 不会致命）
         try:
-            if self.jlink is not None and self.jlink.connected():
-                self.jlink.rtt_stop()
+            self.jlink.rtt_stop()
         except Exception as e:
             self._logger.warning(f"rtt_stop 失败：{e}")
         try:
-            if self.jlink is not None and self.jlink.opened():
-                self.jlink.close()
+            self.jlink.close()
         except Exception as e:
             self._logger.warning(f"close 失败：{e}")
 

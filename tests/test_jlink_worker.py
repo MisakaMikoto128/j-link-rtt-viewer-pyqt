@@ -73,7 +73,7 @@ def test_connect_sequence(worker):
     w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
     _drain_events(1.0)
 
-    # 调用顺序：open() → set_tif() → set_speed() → connect() → rtt_start()
+    # 调用顺序（pylink 1.6.0）：open() → close() → open(serial) → rtt_start() → set_tif() → set_speed() → connect()
     assert jl.open.called
     assert jl.set_tif.called
     assert jl.set_speed.called
@@ -112,9 +112,10 @@ def test_disconnect_sequence_with_guards(worker):
     assert w.state_name() == "IDLE"
 
 
-def test_disconnect_skips_close_if_not_opened(worker):
+def test_disconnect_always_calls_cleanup(worker):
+    """pylink 1.6.0 断开模式：rtt_stop/close 无条件调用，异常只 warning 不阻断。"""
     w, jl = worker
-    # 连接然后让 opened/connected 都变 false
+    # 连接然后让 opened/connected 都变 false（模拟中途掉线）
     jl.opened.return_value = True
     jl.connected.return_value = True
     w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
@@ -122,13 +123,19 @@ def test_disconnect_skips_close_if_not_opened(worker):
 
     jl.opened.return_value = False
     jl.connected.return_value = False
+    # 让 rtt_stop/close 抛异常——断开不应因此失败
+    import pylink.errors
+    jl.rtt_stop.side_effect = pylink.errors.JLinkException(-1)
+    jl.close.side_effect = pylink.errors.JLinkException(-1)
 
     w.disconnect_requested.emit()
     _drain_events(0.5)
 
-    # 守卫生效：connected() False → rtt_stop 不调；opened() False → close 不调
-    jl.rtt_stop.assert_not_called()
-    jl.close.assert_not_called()
+    # 无条件调用，即使内部状态是"未连接"
+    jl.rtt_stop.assert_called()
+    jl.close.assert_called()
+    # 状态回到 IDLE
+    assert w.state_name() == "IDLE"
 
 
 def test_reconnect_after_disconnect(worker):
