@@ -18,6 +18,7 @@ from qfluentwidgets import (
     BodyLabel,
     CardWidget,
     ComboBox,
+    EditableComboBox,
     InfoBar,
     InfoBarPosition,
     PushButton,
@@ -28,7 +29,6 @@ from qfluentwidgets import (
     setThemeColor,
 )
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import QFontDialog
 
 from core.config_service import ConfigService
 from core.logger import get_log_dir
@@ -85,48 +85,52 @@ class SettingsPage(QWidget):
         wrap.setLayout(color_row)
         app_lay.addWidget(wrap)
 
-        # RTT 显示字体
-        font_row = QHBoxLayout()
-        font_row.addWidget(BodyLabel("RTT 显示字体"), 1)
-        self.lbl_font = QLabel(f"{self._cfg.get('font_family')} {self._cfg.get('font_size')}pt")
-        font_row.addWidget(self.lbl_font)
-        self.btn_font = PushButton("选择…", self)
-        self.btn_font.clicked.connect(self._on_pick_font)
-        font_row.addWidget(self.btn_font)
-        wrap2 = QWidget(self)
-        wrap2.setLayout(font_row)
-        app_lay.addWidget(wrap2)
+        # 系统字体列表（推荐字体置顶）
+        families = self._build_font_family_list()
 
-        # RTT 字体大小（SpinBox 快速调整）
+        # RTT 显示字体：EditableComboBox（family） + SpinBox（size）
+        # 改用内嵌选择而非 QFontDialog——后者在 fluent 主题下会因 "MS Sans Serif"
+        # DirectWrite 失败、字号返回 -1 等问题卡死/污染配置
+        rtt_font_row = QHBoxLayout()
+        rtt_font_row.addWidget(BodyLabel("RTT 显示字体"), 1)
+        self.cb_rtt_font = EditableComboBox(self)
+        self.cb_rtt_font.addItems(families)
+        self.cb_rtt_font.setMinimumWidth(220)
+        self.cb_rtt_font.setCurrentText(self._cfg.get("font_family") or "Consolas")
+        self.cb_rtt_font.currentTextChanged.connect(self._on_rtt_family_changed)
+        rtt_font_row.addWidget(self.cb_rtt_font)
         self.sp_font_size = SpinBox(self)
         self.sp_font_size.setRange(8, 32)
-        self.sp_font_size.setValue(self._cfg.get("font_size"))
+        self.sp_font_size.setValue(max(8, int(self._cfg.get("font_size") or 13)))
+        self.sp_font_size.setSuffix(" pt")
         self.sp_font_size.valueChanged.connect(self._on_font_size_changed)
-        app_lay.addWidget(_SettingRow("RTT 字体大小", self.sp_font_size))
+        rtt_font_row.addWidget(self.sp_font_size)
+        wrap2 = QWidget(self)
+        wrap2.setLayout(rtt_font_row)
+        app_lay.addWidget(wrap2)
 
-        # UI 界面字体（侧边栏/按钮/标签等所有 fluent 控件）
+        # UI 界面字体：EditableComboBox + SpinBox + 恢复默认
         ui_font_row = QHBoxLayout()
         ui_font_row.addWidget(BodyLabel("UI 界面字体"), 1)
-        ui_family = self._cfg.get("ui_font_family") or "（系统默认）"
-        ui_size = self._cfg.get("ui_font_size") or 9
-        self.lbl_ui_font = QLabel(f"{ui_family} {ui_size}pt")
-        ui_font_row.addWidget(self.lbl_ui_font)
-        self.btn_ui_font = PushButton("选择…", self)
-        self.btn_ui_font.clicked.connect(self._on_pick_ui_font)
+        self.cb_ui_font = EditableComboBox(self)
+        self.cb_ui_font.addItems(["（系统默认）"] + families)
+        self.cb_ui_font.setMinimumWidth(220)
+        cur_ui_family = self._cfg.get("ui_font_family")
+        self.cb_ui_font.setCurrentText(cur_ui_family if cur_ui_family else "（系统默认）")
+        self.cb_ui_font.currentTextChanged.connect(self._on_ui_family_changed)
+        ui_font_row.addWidget(self.cb_ui_font)
+        self.sp_ui_font_size = SpinBox(self)
+        self.sp_ui_font_size.setRange(8, 24)
+        self.sp_ui_font_size.setValue(max(8, int(self._cfg.get("ui_font_size") or 9)))
+        self.sp_ui_font_size.setSuffix(" pt")
+        self.sp_ui_font_size.valueChanged.connect(self._on_ui_font_size_changed)
+        ui_font_row.addWidget(self.sp_ui_font_size)
         self.btn_ui_font_reset = PushButton("恢复默认", self)
         self.btn_ui_font_reset.clicked.connect(self._on_reset_ui_font)
-        ui_font_row.addWidget(self.btn_ui_font)
         ui_font_row.addWidget(self.btn_ui_font_reset)
         wrap_ui = QWidget(self)
         wrap_ui.setLayout(ui_font_row)
         app_lay.addWidget(wrap_ui)
-
-        # UI 字号 SpinBox 快速调整（独立 family 不变）
-        self.sp_ui_font_size = SpinBox(self)
-        self.sp_ui_font_size.setRange(8, 24)
-        self.sp_ui_font_size.setValue(ui_size)
-        self.sp_ui_font_size.valueChanged.connect(self._on_ui_font_size_changed)
-        app_lay.addWidget(_SettingRow("UI 字体大小", self.sp_ui_font_size))
 
         root.addWidget(appearance)
 
@@ -193,46 +197,53 @@ class SettingsPage(QWidget):
             f"background: {hex_str}; padding: 2px 8px; color: white; border-radius: 4px;"
         )
 
-    def _on_pick_font(self) -> None:
-        cur = QFont(self._cfg.get("font_family"), self._cfg.get("font_size"))
-        ok, font = QFontDialog.getFont(cur, self, "选择字体")
-        if not ok:
+    @staticmethod
+    def _build_font_family_list() -> list[str]:
+        """系统字体列表，常用编程/中文字体置顶。"""
+        all_families = sorted({f for f in QFontDatabase.families() if f and not f.startswith("@")})
+        preferred = [
+            "Consolas", "Cascadia Code", "Cascadia Mono", "JetBrains Mono",
+            "Source Code Pro", "Fira Code", "Courier New",
+            "Microsoft YaHei", "Microsoft YaHei UI", "Source Han Sans CN",
+            "Noto Sans CJK SC", "Segoe UI", "Arial", "Times New Roman",
+        ]
+        head = [f for f in preferred if f in all_families]
+        tail = [f for f in all_families if f not in head]
+        return head + tail
+
+    def _on_rtt_family_changed(self, family: str) -> None:
+        family = (family or "").strip()
+        if not family:
             return
-        self._cfg.set("font_family", font.family())
-        self._cfg.set("font_size", font.pointSize())
-        self.sp_font_size.setValue(font.pointSize())
-        self.lbl_font.setText(f"{font.family()} {font.pointSize()}pt")
+        self._cfg.set("font_family", family)
 
     def _on_font_size_changed(self, v: int) -> None:
-        self._cfg.set("font_size", v)
-        self.lbl_font.setText(f"{self._cfg.get('font_family')} {v}pt")
-
-    def _on_pick_ui_font(self) -> None:
-        cur_family = self._cfg.get("ui_font_family") or "Segoe UI"
-        cur_size = self._cfg.get("ui_font_size") or 9
-        cur = QFont(cur_family, cur_size)
-        ok, font = QFontDialog.getFont(cur, self, "选择 UI 界面字体")
-        if not ok:
+        if v <= 0:
             return
-        self._cfg.set("ui_font_family", font.family())
-        self._cfg.set("ui_font_size", font.pointSize())
-        self.sp_ui_font_size.blockSignals(True)
-        self.sp_ui_font_size.setValue(font.pointSize())
-        self.sp_ui_font_size.blockSignals(False)
-        self.lbl_ui_font.setText(f"{font.family()} {font.pointSize()}pt")
+        self._cfg.set("font_size", v)
+
+    def _on_ui_family_changed(self, family: str) -> None:
+        family = (family or "").strip()
+        if family in ("", "（系统默认）"):
+            self._cfg.set("ui_font_family", "")
+        else:
+            self._cfg.set("ui_font_family", family)
 
     def _on_ui_font_size_changed(self, v: int) -> None:
+        if v <= 0:
+            return
         self._cfg.set("ui_font_size", v)
-        family = self._cfg.get("ui_font_family") or "（系统默认）"
-        self.lbl_ui_font.setText(f"{family} {v}pt")
 
     def _on_reset_ui_font(self) -> None:
         self._cfg.set("ui_font_family", "")
         self._cfg.set("ui_font_size", 0)
+        # 同步控件显示（block signals 避免再次触发 cfg.set）
+        self.cb_ui_font.blockSignals(True)
+        self.cb_ui_font.setCurrentText("（系统默认）")
+        self.cb_ui_font.blockSignals(False)
         self.sp_ui_font_size.blockSignals(True)
         self.sp_ui_font_size.setValue(9)
         self.sp_ui_font_size.blockSignals(False)
-        self.lbl_ui_font.setText("（系统默认） 9pt")
         InfoBar.success("已恢复默认", "UI 界面字体已重置", parent=self,
                         position=InfoBarPosition.TOP, duration=2000)
 

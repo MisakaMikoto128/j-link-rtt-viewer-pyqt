@@ -93,6 +93,8 @@ class MemoryViewerPage(QWidget):
 
         self._build_ui()
         self._wire_signals()
+        # 应用初始字体（family 沿用 RTT 字体，size 独立 memory_font_size）
+        self._apply_font(self._cfg.get("font_family"), int(self._cfg.get("memory_font_size")))
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -157,6 +159,19 @@ class MemoryViewerPage(QWidget):
         r2.addWidget(self.le_search)
         r2.addWidget(self.btn_find_next)
         r2.addStretch(1)
+        # 字号 ± 按钮（同 RTT 监控页的方案）
+        self.btn_font_minus = PushButton("A−", self)
+        self.btn_font_minus.setFixedWidth(36)
+        self.btn_font_minus.setToolTip("Hex 字号 −1")
+        self.lbl_font_size = BodyLabel(str(self._cfg.get("memory_font_size")))
+        self.lbl_font_size.setAlignment(Qt.AlignCenter)
+        self.lbl_font_size.setFixedWidth(28)
+        self.btn_font_plus = PushButton("A+", self)
+        self.btn_font_plus.setFixedWidth(36)
+        self.btn_font_plus.setToolTip("Hex 字号 +1")
+        r2.addWidget(self.btn_font_minus)
+        r2.addWidget(self.lbl_font_size)
+        r2.addWidget(self.btn_font_plus)
         read_outer.addLayout(r2)
 
         root.addWidget(read_card)
@@ -164,12 +179,10 @@ class MemoryViewerPage(QWidget):
         # ---- 主体：左 Hex dump + 右 解析面板（QSplitter）----
         splitter = QSplitter(Qt.Horizontal, self)
 
-        # 左：hex dump
+        # 左：hex dump（字体由 _apply_font 在构造末尾应用）
         self.display = PlainTextEdit(self)
         self.display.setReadOnly(True)
         self.display.setLineWrapMode(PlainTextEdit.NoWrap)
-        font = QFont("Consolas", 12)
-        self.display.setFont(font)
         splitter.addWidget(self.display)
 
         # 右：数据类型解析面板
@@ -287,6 +300,13 @@ class MemoryViewerPage(QWidget):
         self.btn_copy_ascii.clicked.connect(self._on_copy_ascii)
         self.btn_copy_carray.clicked.connect(self._on_copy_carray)
         self.btn_save_bin.clicked.connect(self._on_save_bin)
+
+        # 字号 ± 按钮：走 cfg → memory_font_size_changed → _apply_font
+        self.btn_font_minus.clicked.connect(lambda: self._adjust_font_size(-1))
+        self.btn_font_plus.clicked.connect(lambda: self._adjust_font_size(+1))
+        # cfg 信号：family 跟 RTT 共用，size 独立
+        self._cfg.font_changed.connect(lambda fam, _sz: self._apply_font(fam, None))
+        self._cfg.memory_font_size_changed.connect(lambda sz: self._apply_font(None, sz))
 
         self.display.cursorPositionChanged.connect(self._refresh_types)
 
@@ -619,3 +639,23 @@ class MemoryViewerPage(QWidget):
         if cmd == "read_memory" and not ok:
             InfoBar.error("读取失败", msg or "", parent=self,
                           position=InfoBarPosition.TOP, duration=3000)
+
+    # ------------------------------------------------------------------
+    # 字体 / 字号
+    # ------------------------------------------------------------------
+    def _apply_font(self, family: str | None, size: int | None) -> None:
+        """family/size 任意一者传 None 表示沿用 cfg 当前值。"""
+        if family is None:
+            family = self._cfg.get("font_family") or "Consolas"
+        if size is None or size <= 0:
+            size = int(self._cfg.get("memory_font_size") or 12)
+        font = QFont(family, size)
+        self.display.setFont(font)
+        if hasattr(self, "lbl_font_size"):
+            self.lbl_font_size.setText(str(size))
+
+    def _adjust_font_size(self, delta: int) -> None:
+        cur = int(self._cfg.get("memory_font_size") or 12)
+        new = max(8, min(32, cur + delta))
+        if new != cur:
+            self._cfg.set("memory_font_size", new)

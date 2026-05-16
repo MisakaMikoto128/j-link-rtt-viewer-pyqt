@@ -23,6 +23,7 @@ class ConfigService(QObject):
     theme_color_changed = Signal(str)       # hex e.g. "#28afe9"
     font_changed = Signal(str, int)         # (family, size) — RTT 显示区字体
     ui_font_changed = Signal(str, int)      # (family, size) — UI 界面字体（QApplication.setFont）
+    memory_font_size_changed = Signal(int)  # 内存页 hex dump 字号（family 与 RTT 共用 font_family）
     max_display_lines_changed = Signal(int) # new max block count for QPlainTextEdit
     rtt_poll_interval_changed = Signal(int) # poll timer interval in ms
 
@@ -36,6 +37,8 @@ class ConfigService(QObject):
         "theme_color": "#28afe9",
         "font_family": "Consolas",
         "font_size": 13,
+        # 内存页 hex dump 字号（family 沿用 font_family）
+        "memory_font_size": 12,
         # UI 界面字体（侧边栏/按钮/标签）。空 family 或 size=0 表示使用 fluent 默认
         "ui_font_family": "",
         "ui_font_size": 0,
@@ -101,6 +104,12 @@ class ConfigService(QObject):
                 disk["rtt_poll_interval_ms"] = int(disk["rx_timeout_ms"]) or 100
             except (TypeError, ValueError):
                 disk["rtt_poll_interval_ms"] = 100
+        # 修复历史脏数据：QFontDialog 返回的 font.pointSize() 在某些情况下为 -1，
+        # 会被旧版 _on_pick_font 直接 set 进 cfg → 下次启动 setPointSize 报错
+        if disk.get("font_size", 1) <= 0:
+            disk["font_size"] = 13
+        if disk.get("memory_font_size", 1) <= 0:
+            disk["memory_font_size"] = 12
         for key, default in self.DEFAULTS.items():
             if key not in disk:
                 continue
@@ -142,6 +151,8 @@ class ConfigService(QObject):
             self.font_changed.emit(self._data["font_family"], self._data["font_size"])
         elif key in ("ui_font_family", "ui_font_size"):
             self.ui_font_changed.emit(self._data["ui_font_family"], self._data["ui_font_size"])
+        elif key == "memory_font_size":
+            self.memory_font_size_changed.emit(self._data["memory_font_size"])
         elif key == "max_display_lines":
             self.max_display_lines_changed.emit(value)
         elif key == "rtt_poll_interval_ms":
