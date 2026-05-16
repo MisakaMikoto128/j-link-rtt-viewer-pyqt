@@ -387,13 +387,43 @@ class JLinkWorker(QObject):
         if self._state != _STATE_CONNECTED:
             self.command_result.emit("reset", False, "未连接")
             return
+
+        # 1. 暂停读线程：pylink/SEGGER DLL 不支持 reset / rtt_stop / rtt_start
+        #    期间还有 rtt_read 在跑（同 disconnect 的模式，避免句柄抢占）。
+        self._stop_read = True
+        if self._read_thread is not None and self._read_thread.is_alive():
+            self._read_thread.join(timeout=2.0)
+        self._read_thread = None
+
+        ok = True
+        err_msg = ""
         try:
             self.jlink.reset(1, False)
-            self.command_result.emit("reset", True, "")
-            self.log_message.emit("info", "目标设备已重置")
+            # MCU 重启 + 重新初始化 _SEGGER_RTT 控制块需要时间。
+            # 100ms 是 STM32 / nRF 类 boot 时间的上限经验值。
+            time.sleep(0.1)
+            # 关键：reset 后 pylink 缓存的 RTT 控制块地址过期，rtt_read 永远空。
+            # 必须 stop + start 让 pylink 重新搜索控制块——这就是 "重置后必须
+            # 断开重连才有数据" bug 的根因。
+            self.jlink.rtt_stop()
+            self.jlink.rtt_start()
+            self._reset_decoder()  # 解码器残留半字节也清掉
         except Exception as e:
+            ok = False
+            err_msg = str(e)
             self._logger.error(f"重置失败：{e}")
-            self.command_result.emit("reset", False, str(e))
+        finally:
+            # 无论成败都重启读线程（成功路径继续收数据；失败路径若 jlink 仍
+            # 可用，下次 rtt_read 也能尝试；真坏了 read 失败会自然停）。
+            self._stop_read = False
+            self._read_thread = threading.Thread(
+                target=self._read_loop, name="JLinkReadThread", daemon=True
+            )
+            self._read_thread.start()
+
+        self.command_result.emit("reset", ok, err_msg)
+        if ok:
+            self.log_message.emit("info", "目标设备已重置")
 
     @Slot(int)
     def _on_set_channel(self, channel: int) -> None:

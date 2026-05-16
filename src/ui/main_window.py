@@ -4,7 +4,7 @@ from __future__ import annotations
 import base64
 
 from PySide6.QtCore import QByteArray, QThread
-from PySide6.QtGui import QCloseEvent, QFont, QIcon, QShowEvent
+from PySide6.QtGui import QCloseEvent, QFont, QIcon, QKeySequence, QShortcut, QShowEvent
 from PySide6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, NavigationItemPosition
@@ -60,7 +60,13 @@ class MainWindow(FluentWindow):
         self._cfg.ui_font_changed.connect(self._apply_ui_font)
         self._apply_ui_font(self._cfg.get("ui_font_family"), self._cfg.get("ui_font_size"))
 
-        # 6. 窗口属性
+        # 6. 全局快捷键 —— 不依赖当前页面焦点，F2/F3/F4 在任意子页都生效。
+        # 路由到 rtt_page 的方法，由方法自己根据按钮状态判断是否执行（幂等）。
+        QShortcut(QKeySequence("F2"), self, self.rtt_page.on_shortcut_connect)
+        QShortcut(QKeySequence("F3"), self, self.rtt_page.on_shortcut_disconnect)
+        QShortcut(QKeySequence("F4"), self, self.rtt_page.on_shortcut_reset)
+
+        # 7. 窗口属性
         self.setWindowTitle("J-Link RTT Viewer")
         # 直接从文件加载 icon —— 不依赖 app.setWindowIcon 调用顺序，
         # 避免 caller 顺序变就静默丢图标。setWindowIcon 触发 FluentTitleBar

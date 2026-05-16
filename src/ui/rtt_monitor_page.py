@@ -240,7 +240,9 @@ class RTTMonitorPage(QWidget):
         ctrl.addWidget(self.sp_channel)
 
         self.btn_connect = PrimaryPushButton(FluentIcon.PLAY, "连接", self)
+        self.btn_connect.setToolTip("F2 连接 / F3 断开")
         self.btn_reset = PushButton(FluentIcon.SYNC, "重置目标", self)
+        self.btn_reset.setToolTip("F4 重置目标")
         self.btn_reset.setEnabled(False)
         ctrl.addWidget(self.btn_connect)
         ctrl.addWidget(self.btn_reset)
@@ -474,6 +476,20 @@ class RTTMonitorPage(QWidget):
         self.btn_info_toggle.setIcon(
             FluentIcon.UP if expanded else FluentIcon.CHEVRON_DOWN_MED
         )
+
+    # ---- 快捷键路由（F2/F3/F4，由 MainWindow 的 QShortcut 调用）----
+    # 三个都用按钮当前 enabled+text 当 gate，没连接时按 F4 / 已连接按 F2 都是 no-op
+    def on_shortcut_connect(self) -> None:
+        if self.btn_connect.isEnabled() and self.btn_connect.text() == "连接":
+            self.btn_connect.click()
+
+    def on_shortcut_disconnect(self) -> None:
+        if self.btn_connect.isEnabled() and self.btn_connect.text() == "断开":
+            self.btn_connect.click()
+
+    def on_shortcut_reset(self) -> None:
+        if self.btn_reset.isEnabled():
+            self.btn_reset.click()
 
     def _on_connect_clicked(self) -> None:
         if self.btn_connect.text() == "连接":
