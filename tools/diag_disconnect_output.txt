@@ -1,0 +1,43 @@
+2026-05-16 13:55:07,413 INFO  jlink_rtt_viewer | JLinkWorker initialized in worker thread
+2026-05-16 13:55:07,617 INFO  jlink_rtt_viewer | 已连接 STM32H750VB (SWD 4000kHz, RTT ch0)
+2026-05-16 13:55:10,661 INFO  jlink_rtt_viewer | 已断开 J-Link
+2026-05-16 13:55:11,794 INFO  jlink_rtt_viewer | 已连接 STM32H750VB (SWD 4000kHz, RTT ch0)
+2026-05-16 13:55:14,835 INFO  jlink_rtt_viewer | 已断开 J-Link
+2026-05-16 13:55:15,970 INFO  jlink_rtt_viewer | 已连接 STM32H750VB (SWD 4000kHz, RTT ch0)
+2026-05-16 13:55:19,006 INFO  jlink_rtt_viewer | 已断开 J-Link
+2026-05-16 13:55:20,036 WARNING jlink_rtt_viewer | rtt_stop 失败：J-Link DLL is not open.
+[init] 启动 worker + QThread
+[init] worker ready in 32 ms
+
+=========== cycle 1 ===========
+[c1] [t=0.000] emit connect_requested
+[c1] [t=0.200s] connection_state_changed(True) received
+[c1] [t=3.213s] 收到 4 段 rtt_data
+[c1] [t=3.213s] emit disconnect_requested
+[c1] [t=3.244s] connection_state_changed(False) received — disconnect 耗时 32 ms
+[c1] 完整 state log:
+  t=0.197s connected=True
+  t=3.240s connected=False
+
+=========== cycle 2 ===========
+[c2] [t=0.000] emit connect_requested
+[c2] [t=0.116s] connection_state_changed(True) received
+[c2] [t=3.126s] 收到 4 段 rtt_data
+[c2] [t=3.126s] emit disconnect_requested
+[c2] [t=3.157s] connection_state_changed(False) received — disconnect 耗时 31 ms
+[c2] 完整 state log:
+  t=0.110s connected=True
+  t=3.150s connected=False
+
+=========== cycle 3 ===========
+[c3] [t=0.000] emit connect_requested
+[c3] [t=0.114s] connection_state_changed(True) received
+[c3] [t=3.126s] 收到 4 段 rtt_data
+[c3] [t=3.126s] emit disconnect_requested
+[c3] [t=3.158s] connection_state_changed(False) received — disconnect 耗时 32 ms
+[c3] 完整 state log:
+  t=0.111s connected=True
+  t=3.148s connected=False
+
+=========== final stop ===========
+thread 在 10 ms 内干净退出
