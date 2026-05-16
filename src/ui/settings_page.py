@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel,
     CardWidget,
+    CheckBox,
     ComboBox,
     EditableComboBox,
     PushButton,
@@ -189,6 +190,54 @@ class SettingsPage(QWidget):
         rtt_lay.addWidget(wrap3)
 
         root.addWidget(rtt_card)
+
+        # ---- 标记与重置 ----
+        mark_card = CardWidget(self)
+        mark_lay = QVBoxLayout(mark_card)
+        mark_lay.addWidget(SubtitleLabel("标记与重置"))
+
+        # 标记颜色（用户插入标记 + 自动标记都用）
+        mark_color_row = QHBoxLayout()
+        mark_color_row.addWidget(BodyLabel("标记颜色"), 1)
+        self.lbl_mark_color = QLabel(self._cfg.get("mark_color"))
+        self.lbl_mark_color.setStyleSheet(
+            f"background: {self._cfg.get('mark_color')}; padding: 2px 8px; color: #222; border-radius: 4px;"
+        )
+        mark_color_row.addWidget(self.lbl_mark_color)
+        self.btn_mark_color = PushButton("选择…", self)
+        self.btn_mark_color.clicked.connect(self._on_pick_mark_color)
+        mark_color_row.addWidget(self.btn_mark_color)
+        wrap_mc = QWidget(self)
+        wrap_mc.setLayout(mark_color_row)
+        mark_lay.addWidget(wrap_mc)
+
+        # 自动标记开关
+        self.chk_auto_mark_connect = CheckBox("连接时自动插入标记")
+        self.chk_auto_mark_connect.setChecked(self._cfg.get("auto_mark_on_connect"))
+        self.chk_auto_mark_connect.toggled.connect(
+            lambda v: self._cfg.set("auto_mark_on_connect", v)
+        )
+        mark_lay.addWidget(self.chk_auto_mark_connect)
+
+        self.chk_auto_mark_disconnect = CheckBox("断开时自动插入标记")
+        self.chk_auto_mark_disconnect.setChecked(self._cfg.get("auto_mark_on_disconnect"))
+        self.chk_auto_mark_disconnect.toggled.connect(
+            lambda v: self._cfg.set("auto_mark_on_disconnect", v)
+        )
+        mark_lay.addWidget(self.chk_auto_mark_disconnect)
+
+        # 重置模式
+        self.cb_reset_mode = ComboBox(self)
+        # index 0 = normal, 1 = auto_reconnect
+        self.cb_reset_mode.addItems(["正常（仅重置目标 MCU）", "自动重连（断开+重连）"])
+        cur_mode = self._cfg.get("reset_mode")
+        self.cb_reset_mode.setCurrentIndex(1 if cur_mode == "auto_reconnect" else 0)
+        self.cb_reset_mode.currentIndexChanged.connect(
+            lambda i: self._cfg.set("reset_mode", "auto_reconnect" if i == 1 else "normal")
+        )
+        mark_lay.addWidget(_SettingRow("重置按钮行为", self.cb_reset_mode))
+
+        root.addWidget(mark_card)
         root.addStretch(1)
 
     def _on_theme_changed(self, idx: int) -> None:
@@ -216,6 +265,22 @@ class SettingsPage(QWidget):
         self.lbl_color.setText(hex_str)
         self.lbl_color.setStyleSheet(
             f"background: {hex_str}; padding: 2px 8px; color: white; border-radius: 4px;"
+        )
+
+    def _on_pick_mark_color(self) -> None:
+        from qfluentwidgets import ColorDialog
+        cur = QColor(self._cfg.get("mark_color"))
+        dlg = ColorDialog(cur, "选择标记颜色", self, enableAlpha=False)
+        dlg.colorChanged.connect(self._apply_mark_color)
+        dlg.exec()
+
+    def _apply_mark_color(self, color: QColor) -> None:
+        hex_str = color.name()
+        self._cfg.set("mark_color", hex_str)
+        self.lbl_mark_color.setText(hex_str)
+        # 文字深色（标记颜色通常很亮，深字看得清）
+        self.lbl_mark_color.setStyleSheet(
+            f"background: {hex_str}; padding: 2px 8px; color: #222; border-radius: 4px;"
         )
 
     @staticmethod

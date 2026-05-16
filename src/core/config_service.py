@@ -27,6 +27,7 @@ class ConfigService(QObject):
     max_display_lines_changed = Signal(int) # new max block count for QPlainTextEdit
     rtt_poll_interval_changed = Signal(int) # poll timer interval in ms
     rtt_encoding_changed = Signal(str)      # RTT 解码编码（utf-8 / gbk / utf-16-le / ...）
+    reset_mode_changed = Signal(str)        # "normal" / "auto_reconnect" — RTT 页用来更新按钮文字
 
     DEFAULTS: dict[str, Any] = {
         "target_mcu": "",
@@ -54,6 +55,15 @@ class ConfigService(QObject):
         "log_recording": False,
         # RTT 页 display 的固定高度（px）；用户拖 _VResizeHandle 时持久化更新
         "rtt_display_height": 500,
+        # 会话标记颜色（用户插入标记 + 连接/断开自动标记共用）；hex string
+        "mark_color": "#ffff55",
+        # 连接 / 断开时自动在 RTT 显示区插入一条分隔标记（便于会话分段）
+        "auto_mark_on_connect": False,
+        "auto_mark_on_disconnect": False,
+        # 重置按钮行为：
+        #   "normal"         → jlink.reset + rtt_stop/start（默认；适合大多数 MCU）
+        #   "auto_reconnect" → 重置 = 断开+重连（更可靠，但有 ~1s 延迟）
+        "reset_mode": "normal",
     }
 
     SEND_HISTORY_MAX = 50
@@ -163,6 +173,8 @@ class ConfigService(QObject):
             self.max_display_lines_changed.emit(value)
         elif key == "rtt_poll_interval_ms":
             self.rtt_poll_interval_changed.emit(value)
+        elif key == "reset_mode":
+            self.reset_mode_changed.emit(value)
 
     def flush(self) -> None:
         self._flush_timer.stop()

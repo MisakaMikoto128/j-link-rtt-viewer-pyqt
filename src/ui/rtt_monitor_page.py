@@ -187,6 +187,14 @@ class RTTMonitorPage(QWidget):
         # False 表示用户手动滚动。区分两者用来同步 chk_auto_scroll 复选框。
         self._programmatic_scroll = False
 
+        # 重置 = 自动重连（reset_mode 配置）的待办标志：点击重置 → 触发 disconnect
+        # → 收到 connection_state_changed(False) 时检查该标志，重新连接
+        self._pending_auto_reconnect = False
+
+        # 按当前 reset_mode 设置按钮文字 + 订阅 cfg 变化实时刷新
+        self._apply_reset_mode_to_button(cfg.get("reset_mode"))
+        cfg.reset_mode_changed.connect(self._apply_reset_mode_to_button)
+
     # ------------------------------------------------------------------
     # UI 构建
     # ------------------------------------------------------------------
@@ -420,7 +428,7 @@ class RTTMonitorPage(QWidget):
     # ------------------------------------------------------------------
     def _wire_signals(self) -> None:
         self.btn_connect.clicked.connect(self._on_connect_clicked)
-        self.btn_reset.clicked.connect(self._worker.reset_target_requested.emit)
+        self.btn_reset.clicked.connect(self._on_reset_clicked)
         self.btn_clear.clicked.connect(self.display.clear)
         self.chk_pause.toggled.connect(self._worker.set_pause_receive_requested.emit)
         self.chk_power.toggled.connect(self._worker.set_power_output_requested.emit)
@@ -517,6 +525,39 @@ class RTTMonitorPage(QWidget):
             self._set_disconnected_ui()
             self._worker.disconnect_requested.emit()
 
+    def _apply_reset_mode_to_button(self, mode: str) -> None:
+        """按 cfg.reset_mode 刷新 btn_reset 文字 + tooltip。"""
+        if mode == "auto_reconnect":
+            self.btn_reset.setText("重置(重连)")
+            self.btn_reset.setToolTip("F4 重置目标 — 当前模式：断开+重连（更可靠）")
+        else:
+            self.btn_reset.setText("重置目标")
+            self.btn_reset.setToolTip("F4 重置目标 — 当前模式：仅重置 MCU")
+
+    def _on_reset_clicked(self) -> None:
+        """两种模式：normal → 让 worker 走 5 步快速重置；
+        auto_reconnect → 走断开 + 重连流程（标记走 _pending_auto_reconnect）。
+        """
+        if self._cfg.get("reset_mode") == "auto_reconnect":
+            # UI 立即反馈
+            self._set_disconnected_ui()
+            self._pending_auto_reconnect = True
+            self._worker.disconnect_requested.emit()
+        else:
+            self._worker.reset_target_requested.emit()
+
+    def _reconnect_with_saved_params(self) -> None:
+        """从 cfg 读上次连接参数 + 触发新一轮连接。供自动重连使用。"""
+        target = self._cfg.get("target_mcu")
+        if not target:
+            return  # 没有保存的参数，放弃静默重连
+        iface = self._cfg.get("interface")
+        speed = int(self._cfg.get("speed_khz"))
+        channel = int(self._cfg.get("rtt_channel"))
+        self.btn_connect.setEnabled(False)
+        self.btn_connect.setText("连接中…")
+        self._worker.connect_requested.emit(target, iface, speed, channel)
+
     def _on_channel_changed(self, ch: int) -> None:
         self._cfg.set("rtt_channel", ch)
         self._worker.set_rtt_channel_requested.emit(ch)
@@ -540,12 +581,24 @@ class RTTMonitorPage(QWidget):
         self.le_send.blockSignals(False)
 
     def _on_state_changed(self, connected: bool) -> None:
+        from datetime import datetime
         if connected:
             # 同步从 worker 取 device_info（lock 保护，不走跨线程 dict signal）
             info = self._worker.get_device_info()
             self._set_connected_ui(info)
+            if self._cfg.get("auto_mark_on_connect"):
+                target = info.get("target_device", "—")
+                ts = datetime.now().strftime("%H:%M:%S")
+                self._insert_mark_text(f"已连接 {target} @ {ts}")
         else:
             self._set_disconnected_ui()
+            if self._cfg.get("auto_mark_on_disconnect"):
+                ts = datetime.now().strftime("%H:%M:%S")
+                self._insert_mark_text(f"已断开 @ {ts}")
+            # 自动重连：reset_mode=auto_reconnect 且用户点了重置 → 触发重连
+            if self._pending_auto_reconnect:
+                self._pending_auto_reconnect = False
+                self._reconnect_with_saved_params()
 
     def _set_connected_ui(self, info: dict) -> None:
         self.btn_connect.setEnabled(True)
@@ -658,12 +711,31 @@ class RTTMonitorPage(QWidget):
             self.chk_auto_scroll.blockSignals(False)
             self._cfg.set("auto_scroll", False)
 
-    def _on_insert_mark(self) -> None:
-        """在显示区追加一行视觉分隔的会话标记。
+    def _insert_mark_text(self, text: str) -> None:
+        """在显示区追加一行视觉分隔的标记。颜色由 cfg.mark_color 决定。
 
-        格式：``──── 用户输入文本 ────`` 整行用 bright_yellow + bold。
-        不带时间戳（用户明确要求）。空输入时插入纯分隔行 ───────。
+        text="" → 插入纯分隔线 ──────。
+        被用户点 "插入标记" + 连接/断开自动标记共用。
         """
+        line = f"──── {text} ────" if text else "─" * 50
+        sb = self.display.verticalScrollBar()
+        at_bottom = sb.value() >= sb.maximum() - 4
+
+        cursor = self.display.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        if cursor.columnNumber() != 0:
+            cursor.insertText("\n")
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(self._cfg.get("mark_color") or "#ffff55"))
+        fmt.setFontWeight(QFont.Bold)
+        cursor.insertText(line + "\n", fmt)
+
+        if at_bottom:
+            self._programmatic_scroll = True
+            sb.setValue(sb.maximum())
+            self._programmatic_scroll = False
+
+    def _on_insert_mark(self) -> None:
         text = self.le_mark.currentText().strip()
         if text:
             if text in self._mark_history:
@@ -672,22 +744,7 @@ class RTTMonitorPage(QWidget):
             self._mark_history = self._mark_history[-10:]
             self.le_mark.clear()
             self.le_mark.addItems(reversed(self._mark_history))
-
-        line = f"──── {text} ────" if text else "─" * 50
-
-        sb = self.display.verticalScrollBar()
-        at_bottom = sb.value() >= sb.maximum() - 4
-
-        cursor = self.display.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        if cursor.columnNumber() != 0:
-            cursor.insertText("\n")
-        cursor.insertText(line + "\n", self._fmt(AnsiAttrs(fg="bright_yellow", bold=True)))
-
-        if at_bottom:
-            self._programmatic_scroll = True
-            sb.setValue(sb.maximum())
-            self._programmatic_scroll = False
+        self._insert_mark_text(text)
         # qfluentwidgets EditableComboBox 没有 clearEditText()——用 setCurrentText 替代
         self.le_mark.setCurrentText("")
 
