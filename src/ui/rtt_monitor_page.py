@@ -103,6 +103,10 @@ class RTTMonitorPage(QWidget):
         self._update_encoding_label(cfg.get("rtt_encoding") or "utf-8")
         cfg.rtt_encoding_changed.connect(self._update_encoding_label)
 
+        # 自动滚动状态：True 表示 sb.setValue 由程序触发（autoscroll 跟新数据），
+        # False 表示用户手动滚动。区分两者用来同步 chk_auto_scroll 复选框。
+        self._programmatic_scroll = False
+
         # 恢复并连接 splitter 状态持久化（必须在 _build_ui 之后；
         # _build_ui 已 setStretchFactor 默认 3:1，restoreState 空字符串就 no-op）
         from core.logger import get_logger
@@ -334,8 +338,10 @@ class RTTMonitorPage(QWidget):
         bottom_lay.addLayout(srch)
         bottom_lay.addLayout(send)
         bottom_lay.addLayout(status)
-        # 三行控件 + 间距：合计约 120px 起跳，给 20px 余量
-        bottom.setMinimumHeight(120)
+        # 60px：让 splitter 能把 display 拉得更高（拖到极限时状态栏可能被
+        # 部分裁掉，可接受）。Qt 自身 sizeHint 还会做下保护；setChildrenCollapsible(False)
+        # 也防止误拖到 0。
+        bottom.setMinimumHeight(60)
 
         # 垂直 splitter：display | 底栏。拖动 handle 调比例，状态进 user_prefs。
         self.splitter = QSplitter(Qt.Vertical, self)
@@ -356,7 +362,10 @@ class RTTMonitorPage(QWidget):
         self.chk_pause.toggled.connect(self._worker.set_pause_receive_requested.emit)
         self.chk_power.toggled.connect(self._worker.set_power_output_requested.emit)
         self.sp_channel.valueChanged.connect(self._on_channel_changed)
-        self.chk_auto_scroll.toggled.connect(lambda v: self._cfg.set("auto_scroll", v))
+        self.chk_auto_scroll.toggled.connect(self._on_auto_scroll_toggled)
+        # 用户手动滚动 → 取消 chk_auto_scroll 勾选；用 _programmatic_scroll 标志
+        # 区分程序性 setValue 和用户拖动
+        self.display.verticalScrollBar().valueChanged.connect(self._on_display_scrolled)
         self.chk_hex.toggled.connect(lambda v: self._cfg.set("hex_send_mode", v))
         self.btn_send.clicked.connect(self._on_send_clicked)
 
@@ -541,7 +550,36 @@ class RTTMonitorPage(QWidget):
             cursor.insertText(seg, self._fmt(attrs))
 
         if at_bottom and self.chk_auto_scroll.isChecked():
+            self._programmatic_scroll = True
             sb.setValue(sb.maximum())
+            self._programmatic_scroll = False
+
+    def _on_auto_scroll_toggled(self, checked: bool) -> None:
+        """checkbox 勾选/取消：持久化 + 勾选时立即跳到底并恢复跟踪。"""
+        self._cfg.set("auto_scroll", checked)
+        if checked:
+            sb = self.display.verticalScrollBar()
+            self._programmatic_scroll = True
+            sb.setValue(sb.maximum())
+            self._programmatic_scroll = False
+
+    def _on_display_scrolled(self, _value: int) -> None:
+        """display 滚动条 valueChanged：用户手动上滚 → 取消 chk_auto_scroll。
+
+        程序性 sb.setValue() 不触发此逻辑（_programmatic_scroll 标志位过滤）。
+        scrollbar.value() < maximum - 4 视为"不在底部"——和 _on_rtt_data 判断一致。
+        """
+        if self._programmatic_scroll:
+            return
+        if not self.chk_auto_scroll.isChecked():
+            return
+        sb = self.display.verticalScrollBar()
+        if sb.value() < sb.maximum() - 4:
+            # blockSignals 避免 toggled 信号反过来再触发 _on_auto_scroll_toggled
+            self.chk_auto_scroll.blockSignals(True)
+            self.chk_auto_scroll.setChecked(False)
+            self.chk_auto_scroll.blockSignals(False)
+            self._cfg.set("auto_scroll", False)
 
     def _on_insert_mark(self) -> None:
         """在显示区追加一行视觉分隔的会话标记。
@@ -570,8 +608,11 @@ class RTTMonitorPage(QWidget):
         cursor.insertText(line + "\n", self._fmt(AnsiAttrs(fg="bright_yellow", bold=True)))
 
         if at_bottom:
+            self._programmatic_scroll = True
             sb.setValue(sb.maximum())
-        self.le_mark.clearEditText()
+            self._programmatic_scroll = False
+        # qfluentwidgets EditableComboBox 没有 clearEditText()——用 setCurrentText 替代
+        self.le_mark.setCurrentText("")
 
     def _fmt(self, attrs: AnsiAttrs) -> QTextCharFormat:
         fmt = QTextCharFormat()
