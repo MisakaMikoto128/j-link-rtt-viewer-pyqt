@@ -203,3 +203,80 @@ def test_run_flash_post_action_reset_no_run(monkeypatch, qapp):
     qapp.processEvents()
     fake_jlink.reset.assert_called_with(halt=True)
     fake_jlink.restart.assert_not_called()
+
+
+# ============================================================
+# Task 7: _run_flash 错误路径测试
+# ============================================================
+
+def test_run_flash_connect_failure(monkeypatch, qapp):
+    """connect 抛异常 → flash_finished(False, ...) 且 _safe_disconnect 被调。"""
+    import pylink as _pylink
+    fake_jlink = MagicMock()
+    fake_jlink.opened.return_value = False
+    fake_jlink.connect.side_effect = _pylink.JLinkException("Could not connect")
+    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
+
+    w = FlashWorker()
+    w.initialize()
+    log = _collect_signals(w)
+    w._run_flash(_params_default())
+    qapp.processEvents()
+
+    assert log[-1][0] == "finished"
+    assert log[-1][1] is False
+    fake_jlink.close.assert_called()
+    # 不应该到达 program 阶段
+    stages = [e[1] for e in log if e[0] == "stage"]
+    assert STAGE_PROGRAM not in stages
+
+
+def test_run_flash_program_failure(monkeypatch, qapp):
+    """flash_file 抛异常 → finished(False) + 错误 log 已写。"""
+    import pylink as _pylink
+    fake_jlink = MagicMock()
+    fake_jlink.opened.return_value = True
+    fake_jlink.flash_file.side_effect = _pylink.JLinkException("Erase failed")
+    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
+
+    w = FlashWorker()
+    w.initialize()
+    log = _collect_signals(w)
+    w._run_flash(_params_default())
+    qapp.processEvents()
+
+    errors = [e for e in log if e[0] == "log" and e[1] == "error"]
+    assert any("Erase failed" in e[2] for e in errors)
+    assert log[-1] == ("finished", False, "Erase failed")
+    fake_jlink.close.assert_called()
+
+
+def test_safe_disconnect_swallows_jlink_exception(monkeypatch, qapp):
+    """_safe_disconnect 内 close 抛 JLinkException 不传播（参考 CLAUDE.md
+    'close/rtt_stop 抛异常不致命'）。"""
+    import pylink as _pylink
+    fake_jlink = MagicMock()
+    fake_jlink.close.side_effect = _pylink.JLinkException("not connected")
+    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
+    w = FlashWorker()
+    w.initialize()
+    log = _collect_signals(w)
+    w._safe_disconnect()  # 不应抛
+    qapp.processEvents()
+    warns = [e for e in log if e[0] == "log" and e[1] == "warn"]
+    assert any("close warn" in e[2] for e in warns)
+
+
+def test_on_stop_calls_safe_disconnect_and_quits_thread(monkeypatch, qapp):
+    """_on_stop 调 _safe_disconnect → thread.quit()。"""
+    fake_jlink = MagicMock()
+    fake_jlink.opened.return_value = True
+    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
+    w = FlashWorker()
+    w.initialize()
+    fake_thread = MagicMock()
+    # 替换 self.thread() —— QObject 没法直接 setattr 'thread' 方法，monkeypatch
+    monkeypatch.setattr(w, "thread", lambda: fake_thread)
+    w._on_stop()
+    fake_jlink.close.assert_called()
+    fake_thread.quit.assert_called()
