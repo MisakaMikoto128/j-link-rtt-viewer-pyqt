@@ -12,6 +12,7 @@ python -m nuitka ^
     --include-package-data=pylink ^
     --include-data-files=src\config.json=config.json ^
     --include-data-files=assets\icons\app_icon.ico=app_icon.ico ^
+    --include-data-files=assets\icons\app_icon_256.png=app_icon_256.png ^
     --output-dir=build ^
     --output-filename=JLinkRTTViewer.exe ^
     src\main.py

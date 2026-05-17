@@ -19,3 +19,16 @@ def find_app_icon() -> Path | None:
         if p.exists():
             return p
     return None
+
+
+def find_app_logo_png() -> Path | None:
+    """关于页 hero 区用的 256px PNG。Nuitka 打包未必拷贝 PNG，找不到返回 None，
+    调用方应回退到 .ico 或不显示 logo。"""
+    candidates = [
+        _REPO_ROOT / "assets" / "icons" / "app_icon_256.png",
+        Path(sys.executable).resolve().parent / "app_icon_256.png",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None

@@ -33,7 +33,14 @@ from PySide6.QtGui import QColor, QFont
 from . import _infobar
 
 from core.config_service import ConfigService
+from core.jlink_worker import RESET_MODE_AUTO_RECONNECT, RESET_MODE_NORMAL
 from core.logger import get_log_dir
+
+
+_RESET_MODE_LABELS = [
+    (RESET_MODE_NORMAL, "正常（仅重置目标 MCU）"),
+    (RESET_MODE_AUTO_RECONNECT, "自动重连（断开+重连）"),
+]
 
 
 class _SettingRow(QWidget):
@@ -226,14 +233,15 @@ class SettingsPage(QWidget):
         )
         mark_lay.addWidget(self.chk_auto_mark_disconnect)
 
-        # 重置模式
+        # 重置模式：数据驱动 — 加 / 调序模式只动 _RESET_MODE_LABELS 一处
         self.cb_reset_mode = ComboBox(self)
-        # index 0 = normal, 1 = auto_reconnect
-        self.cb_reset_mode.addItems(["正常（仅重置目标 MCU）", "自动重连（断开+重连）"])
+        for _, label in _RESET_MODE_LABELS:
+            self.cb_reset_mode.addItem(label)
         cur_mode = self._cfg.get("reset_mode")
-        self.cb_reset_mode.setCurrentIndex(1 if cur_mode == "auto_reconnect" else 0)
+        cur_idx = next((i for i, (m, _) in enumerate(_RESET_MODE_LABELS) if m == cur_mode), 0)
+        self.cb_reset_mode.setCurrentIndex(cur_idx)
         self.cb_reset_mode.currentIndexChanged.connect(
-            lambda i: self._cfg.set("reset_mode", "auto_reconnect" if i == 1 else "normal")
+            lambda i: self._cfg.set("reset_mode", _RESET_MODE_LABELS[i][0])
         )
         mark_lay.addWidget(_SettingRow("重置按钮行为", self.cb_reset_mode))
 

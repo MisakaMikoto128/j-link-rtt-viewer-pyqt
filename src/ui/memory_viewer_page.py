@@ -474,7 +474,7 @@ class MemoryViewerPage(QWidget):
             block = doc.findBlockByNumber(row)
             if not block.isValid():
                 continue
-            pos = block.position() + _HEX_START_COL + col_in_row * 3 + (col_in_row // 4)
+            pos = block.position() + self._byte_start_col(col_in_row)
             cursor = QTextCursor(doc)
             cursor.setPosition(pos)
             cursor.setPosition(pos + 2, QTextCursor.KeepAnchor)
@@ -544,6 +544,13 @@ class MemoryViewerPage(QWidget):
         little_endian = self.cb_endian.currentIndex() == 0
         for dt, lbl in self._type_labels.items():
             lbl.setText(parse_value(self._buffer, offset, dt, little_endian))
+
+    @staticmethod
+    def _byte_start_col(col_in_row: int) -> int:
+        """字节在行内的起始列（hex 区每字节 'HH ' 3 列，每 4 字节末加 1 列分组空格）。
+        是 _byte_offset_at 的正向映射，被 _highlight_diff + _select_buffer_range 共用。
+        """
+        return _HEX_START_COL + col_in_row * 3 + (col_in_row // 4)
 
     def _byte_offset_at(self, block_num: int, col: int) -> int:
         """根据 (block行号, 列位置) 反推 buffer 字节偏移；-1 表示越界。
@@ -629,10 +636,8 @@ class MemoryViewerPage(QWidget):
     def _select_buffer_range(self, byte_offset: int, byte_len: int) -> None:
         """把光标移到 byte_offset 对应的 hex 列位置。"""
         bpr = self._bytes_per_row
-        row = byte_offset // bpr
-        col_in_row = byte_offset % bpr
-        # 反推列：hex 起始 13 + col_in_row * 3 + (col_in_row // 4) * 1
-        col = _HEX_START_COL + col_in_row * 3 + (col_in_row // 4) * 1
+        row, col_in_row = divmod(byte_offset, bpr)
+        col = self._byte_start_col(col_in_row)
         cursor = self.display.textCursor()
         cursor.movePosition(QTextCursor.Start)
         cursor.movePosition(QTextCursor.Down, QTextCursor.MoveAnchor, row)

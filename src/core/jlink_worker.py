@@ -37,6 +37,10 @@ _STATE_CONNECTING = "CONNECTING"
 _STATE_CONNECTED = "CONNECTED"
 _STATE_DISCONNECTING = "DISCONNECTING"
 
+# reset_mode 公开常量：worker 派发 + UI 配置 + settings combo 三处都引用，避免散落硬字符串
+RESET_MODE_NORMAL = "normal"
+RESET_MODE_AUTO_RECONNECT = "auto_reconnect"
+
 
 class JLinkWorker(QObject):
     """J-Link 后台业务对象。**必须 moveToThread 到一个 QThread 后再用**。"""
@@ -185,6 +189,11 @@ class JLinkWorker(QObject):
     # ============================================================
     @Slot(str, str, int, int)
     def _on_connect(self, target: str, iface: str, speed: int, channel: int) -> None:
+        """connect_requested 信号槽。实现在 _do_connect，方便其他 worker 内部
+        路径（如 _reset_with_reconnect）以普通函数方式直接调，不走信号队列。"""
+        self._do_connect(target, iface, speed, channel)
+
+    def _do_connect(self, target: str, iface: str, speed: int, channel: int) -> None:
         if self._state == _STATE_CONNECTED:
             self.log_message.emit("warning", "已连接，先断开再切换设备")
             return
@@ -225,11 +234,11 @@ class JLinkWorker(QObject):
             else:
                 self._logger.error("connect(target) 后 connected() 仍为 False")
                 self.log_message.emit("error", "连接目标失败")
-                self._transition_to_idle()
+                self._do_disconnect()
         except Exception as e:
             self._logger.error(f"连接失败：{e}")
             self.log_message.emit("error", f"连接失败：{e}")
-            self._transition_to_idle()
+            self._do_disconnect()
 
     @Slot()
     def _on_disconnect(self) -> None:
@@ -240,16 +249,8 @@ class JLinkWorker(QObject):
         self._state = _STATE_DISCONNECTING
         self._logger.info("disconnect: 开始")
 
-        # 1. 通知读线程退出，join with timeout（参考项目模式）
-        self._stop_read = True
-        if self._read_thread is not None and self._read_thread.is_alive():
-            self._logger.info("disconnect: 等 read_thread join")
-            self._read_thread.join(timeout=2.0)
-            if self._read_thread.is_alive():
-                self._logger.warning("disconnect: read_thread join 超时（仍 alive）")
-            else:
-                self._logger.info("disconnect: read_thread 已退出")
-        self._read_thread = None
+        # 1. 停读线程（同 reset / export 共用 helper）
+        self._pause_read_thread()
 
         # 把 buffer 里残留的数据也 emit 出去，避免最后一帧丢失
         with self._rtt_drain_lock:
@@ -259,33 +260,26 @@ class JLinkWorker(QObject):
             self.rtt_data_received.emit(tail)
 
         self._close_log_file()
-        self._logger.info("disconnect: 日志文件已关")
 
         # 2. rtt_stop + close（无条件调用，pylink 1.6.0 直接调，
         #    异常只 warning 不阻断——守卫反而会因内部状态时序问题误判）
         try:
             self.jlink.rtt_stop()
-            self._logger.info("disconnect: rtt_stop 完成")
         except Exception as e:
             self._logger.warning(f"rtt_stop 失败：{e}")
         try:
             self.jlink.close()
-            self._logger.info("disconnect: close 完成")
         except Exception as e:
             self._logger.warning(f"close 失败：{e}")
 
         self._state = _STATE_IDLE
-        # 对称重置 _stop_read：让 flag 生命周期清晰，未来加 reconnect helper 不踩坑
+        # 对称重置 _stop_read：让 flag 生命周期清晰（契约：disconnect 完后是干净态）
         self._stop_read = False
         with self._info_lock:
             self._device_info = {}
         if was_active:
             self._logger.info("已断开 J-Link")
             self.connection_state_changed.emit(False)
-            self._logger.info("disconnect: connection_state_changed 已 emit")
-
-    def _transition_to_idle(self) -> None:
-        self._do_disconnect()
 
     def _collect_device_info(self, target: str, iface: str, speed: int) -> dict:
         try:
@@ -383,11 +377,13 @@ class JLinkWorker(QObject):
             self.command_result.emit("send_data", False, str(e))
 
     def _pause_read_thread(self) -> None:
-        """停 read_thread 并 join；做 jlink reset / rtt_stop_start 之类
-        阻断动作前必须调，pylink/SEGGER DLL 不支持读循环并发占句柄。"""
+        """停 read_thread 并 join；做 jlink reset / rtt_stop_start / export
+        之类阻断动作前必须调，pylink/SEGGER DLL 不支持读循环并发占句柄。"""
         self._stop_read = True
         if self._read_thread is not None and self._read_thread.is_alive():
             self._read_thread.join(timeout=2.0)
+            if self._read_thread.is_alive():
+                self._logger.warning("read_thread join 超时（仍 alive）")
         self._read_thread = None
 
     def _restart_read_thread(self) -> None:
@@ -411,7 +407,7 @@ class JLinkWorker(QObject):
         if self._state != _STATE_CONNECTED:
             self.command_result.emit("reset", False, "未连接")
             return
-        if mode == "auto_reconnect":
+        if mode == RESET_MODE_AUTO_RECONNECT:
             self._reset_with_reconnect()
         else:
             self._reset_in_place()
@@ -458,7 +454,7 @@ class JLinkWorker(QObject):
         time.sleep(0.3)
 
         # 4. 重连（会 emit connection_state_changed(True) + 设备信息回填）
-        self._on_connect(*params)
+        self._do_connect(*params)
 
         self.command_result.emit("reset", True, "")
         self.log_message.emit("info", "目标设备已重置（自动重连完成）")
@@ -538,9 +534,10 @@ class JLinkWorker(QObject):
         if self._state != _STATE_CONNECTED:
             self.firmware_export_finished.emit(False, "", "未连接")
             return
-        # 导出期间暂停 RTT 读循环
-        was_paused = self._paused
-        self._paused = True
+        # 导出期间停读线程：read_loop 的 rtt_read 和 export 的 memory_read 共享同
+        # 一个 jlink 实例；并发会抢句柄。用真停线程而非 _paused 标志（后者只是
+        # 让循环跳过 read，rtt_read 调用窗口仍可能和 memory_read 重叠）。
+        self._pause_read_thread()
         try:
             def cb(cur: int, total: int) -> None:
                 self.firmware_export_progress.emit(cur, total)
@@ -550,7 +547,7 @@ class JLinkWorker(QObject):
             self._logger.error(f"导出固件失败：{e}")
             self.firmware_export_finished.emit(False, path, str(e))
         finally:
-            self._paused = was_paused
+            self._restart_read_thread()
 
     @Slot(str)
     def _on_start_log(self, log_dir: str) -> None:

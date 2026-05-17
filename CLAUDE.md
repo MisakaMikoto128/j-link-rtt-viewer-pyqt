@@ -446,4 +446,109 @@ def _on_connect_clicked(self):
 
 **处理**：维护一个真实的 `_is_connected: bool` 字段（在 `_on_state_changed` 里更新），或从 worker 同步取状态。按钮文本只负责显示。
 
-参考：`src/ui/rtt_monitor_page.py` `_on_connect_clicked` / `on_shortcut_connect` / `on_shortcut_disconnect`（TODO：还没改完，全用 `btn_connect.text()` 做状态判断）。
+参考：`src/ui/rtt_monitor_page.py` `_on_connect_clicked` / `on_shortcut_connect` / `on_shortcut_disconnect`，维护 `self._is_connected` 真状态由 `_set_connected_ui` / `_set_disconnected_ui` 更新。
+
+---
+
+## 设计原则：模式 / 枚举字符串必须有常量，不能字面值散落
+
+**现象**：`"auto_reconnect"` 这个字符串散落在 4 个文件：worker `_on_reset` 派发、config DEFAULTS、settings combo handler、UI 按钮文字逻辑。改名要 grep + 心算每处别打错。
+
+**原因**：`Signal(str)` / `cfg.set("reset_mode", str)` 接口本身没强制类型，字面值就近写起来快，但散落后任意一处 typo 静默走默认分支。
+
+**处理**：在拥有权威定义的模块（这里是 worker）定义常量：
+```python
+RESET_MODE_NORMAL = "normal"
+RESET_MODE_AUTO_RECONNECT = "auto_reconnect"
+```
+其他模块 `from core.jlink_worker import RESET_MODE_AUTO_RECONNECT`。combo 用数据驱动列表 `_RESET_MODE_LABELS: list[tuple[str, str]]` 一次性生成 items + handler 查 index。
+
+参考：`src/core/jlink_worker.py` 顶部常量、`src/ui/settings_page.py` `_RESET_MODE_LABELS`、commit `<本轮>`。
+
+---
+
+## 设计原则：helper 抽了就在所有同形态处用，不要"抽了一半"
+
+**现象**：`_pause_read_thread` / `_restart_read_thread` 抽出后，`_do_disconnect` 仍内联同一段 `_stop_read=True + join + =None` 5 行；`_on_export_firmware` 还用 `_paused` 标志位假装锁（其实是抢句柄的 race）。
+
+**原因**：抽 helper 时只改了"想到的"调用点，其他历史路径忘了同步。下一个 bug 修复要在两份代码里都改一遍。
+
+**处理**：抽出 helper 后立刻 grep 同形态代码全部替换。`_do_disconnect` 改用 `_pause_read_thread`（仍保留 disconnect 自己的高层日志）；`_on_export_firmware` 改用 `_pause_read_thread + _restart_read_thread`（finally 保证恢复），删 `_paused` 标志位的 hack（`_paused` 字段仅留给用户主动按"暂停接收"按钮用）。
+
+参考：`src/core/jlink_worker.py` `_do_disconnect` / `_on_export_firmware` / `_reset_in_place` 三处都用同一对 helper。
+
+---
+
+## 设计原则：slot 作为方法被直接调用要明示，抽 non-slot 私有 helper
+
+**现象**：`_reset_with_reconnect` 内 `self._on_connect(*params)` 把 `@Slot()` 装饰过的方法当普通函数同步调。能跑（同线程同步），但读 `_on_connect` 的人看见装饰器会以为它只通过信号队列触发，那条同步路径完全不可见。
+
+**原因**：slot 是约定"只通过信号路径调"的契约，直接 `.method()` 调突破契约，产生隐藏路径。
+
+**处理**：抽 non-slot 私有 helper `_do_connect`，slot 退化成 1 行 wrapper：
+```python
+@Slot(str, str, int, int)
+def _on_connect(self, ...):
+    self._do_connect(...)
+
+def _do_connect(self, ...):
+    # 真正的实现，可被同模块内任意路径同步调
+```
+现在 `_reset_with_reconnect` 调 `_do_connect`，意图清晰，约定也没破。同时连接失败路径 `self._do_disconnect()`（不再叫 `_transition_to_idle` 这个无意义别名），UI 收到 `connection_state_changed(False)` 自动回正，不需要在 `_on_log_message` 兜底。
+
+参考：`src/core/jlink_worker.py` `_on_connect` / `_do_connect` / `_reset_with_reconnect`、commit `<本轮>`。
+
+---
+
+## 设计原则：跨方法 setter/reset 的 boilerplate 必须用 context manager 包
+
+**现象**：3 个不同方法 (`_on_rtt_data`, `_on_auto_scroll_toggled`, `_insert_mark_text`) 都重复写：
+```python
+self._programmatic_scroll = True
+sb.setValue(sb.maximum())
+self._programmatic_scroll = False
+```
+某次新加调用点忘了 reset = 自动滚动死亡。
+
+**处理**：用 `@contextmanager` 包：
+```python
+@contextmanager
+def _programmatic_scroll_guard(self):
+    self._programmatic_scroll = True
+    try:
+        yield
+    finally:
+        self._programmatic_scroll = False
+```
+调用点变成：
+```python
+with self._programmatic_scroll_guard():
+    sb.setValue(sb.maximum())
+```
+`finally` 保证异常路径也能 reset，少一类潜在 bug。
+
+参考：`src/ui/rtt_monitor_page.py` `_programmatic_scroll_guard`。
+
+---
+
+## 设计原则：状态恢复逻辑放回状态机本身，不要塞在不相关的 handler 兜底
+
+**现象**：`_on_log_message` 收到 `error` 日志时检查 `if btn_connect.text() == "连接中…": self._set_disconnected_ui()` —— 状态机的"卡 connecting 强制回滚"藏在日志 toast 处理器里，读 `_on_connect_clicked` 的人完全看不到 connecting → disconnected 还有这条恢复路径。
+
+**原因**：连接失败时如果只 emit `log_message("error", ...)` 没 emit `connection_state_changed(False)`，按钮就卡在"连接中…"。当年加这个兜底是因为不确定 worker 是否一定 emit state(False)。
+
+**处理**：保证 worker 在连接失败的**所有路径**上都 emit 状态变化（`_do_connect` 异常 / connected() 返回 False → 都走 `_do_disconnect`，里面有 `if was_active: emit(False)`，CONNECTING 算 active）。源头修好之后删兜底。
+
+恢复逻辑就该在产生状态变化的地方写，不能塞在日志 / 错误 toast 这类完全不相关的 handler。
+
+参考：`src/core/jlink_worker.py` `_do_connect` 失败路径走 `_do_disconnect`、`src/ui/rtt_monitor_page.py` `_on_log_message` 删 fallback。
+
+---
+
+## 设计原则：派生公式必须有单点真源，行 / 列 / 格式映射不允许多处重复
+
+**现象**：内存页 hex byte → 列位置的公式 `_HEX_START_COL + col_in_row * 3 + (col_in_row // 4)` 在 `_highlight_diff` 和 `_select_buffer_range` 两处独立写。如果格式改动（如改成 `0xHHHH:` 起始列变 15），改一处漏一处。
+
+**处理**：单点抽 `_byte_start_col(col_in_row) -> int` 静态方法，两处都调。同模块里和反向函数 `_byte_offset_at` 放一起，方便看正反映射的对称性。
+
+参考：`src/ui/memory_viewer_page.py` `_byte_start_col` + 用法。

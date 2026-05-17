@@ -1,6 +1,8 @@
 """RTT 监控页：控制栏 + 选项栏 + 显示区 + 搜索栏 + 发送栏。"""
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
@@ -185,11 +187,25 @@ class RTTMonitorPage(QWidget):
 
         # 自动滚动状态：True 表示 sb.setValue 由程序触发（autoscroll 跟新数据），
         # False 表示用户手动滚动。区分两者用来同步 chk_auto_scroll 复选框。
+        # 用法：with self._programmatic_scroll_guard(): sb.setValue(...)
         self._programmatic_scroll = False
+
+        # 真状态（worker 端的连接状态镜像）。按钮文字是呈现，不能当状态判断；
+        # 由 _on_state_changed 维护。
+        self._is_connected = False
 
         # 按当前 reset_mode 设置按钮文字 + 订阅 cfg 变化实时刷新
         self._apply_reset_mode_to_button(cfg.get("reset_mode"))
         cfg.reset_mode_changed.connect(self._apply_reset_mode_to_button)
+
+    @contextmanager
+    def _programmatic_scroll_guard(self):
+        """围栏：with 块内的 sb.setValue 不会触发 _on_display_scrolled 取消勾选。"""
+        self._programmatic_scroll = True
+        try:
+            yield
+        finally:
+            self._programmatic_scroll = False
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -482,13 +498,13 @@ class RTTMonitorPage(QWidget):
         )
 
     # ---- 快捷键路由（F2/F3/F4，由 MainWindow 的 QShortcut 调用）----
-    # 三个都用按钮当前 enabled+text 当 gate，没连接时按 F4 / 已连接按 F2 都是 no-op
+    # 用 _is_connected 真状态当 gate；按钮文字是呈现，不能当 state enum
     def on_shortcut_connect(self) -> None:
-        if self.btn_connect.isEnabled() and self.btn_connect.text() == "连接":
+        if self.btn_connect.isEnabled() and not self._is_connected:
             self.btn_connect.click()
 
     def on_shortcut_disconnect(self) -> None:
-        if self.btn_connect.isEnabled() and self.btn_connect.text() == "断开":
+        if self.btn_connect.isEnabled() and self._is_connected:
             self.btn_connect.click()
 
     def on_shortcut_reset(self) -> None:
@@ -496,7 +512,7 @@ class RTTMonitorPage(QWidget):
             self.btn_reset.click()
 
     def _on_connect_clicked(self) -> None:
-        if self.btn_connect.text() == "连接":
+        if not self._is_connected:
             target = self.cb_target.currentText().strip()
             if not target:
                 _infobar.warn(self, "提示", "请先选择目标芯片")
@@ -531,7 +547,6 @@ class RTTMonitorPage(QWidget):
             self.btn_reset.setToolTip("F4 重置目标 — 当前模式：仅重置 MCU")
 
     def _on_reset_clicked(self) -> None:
-        # 一行：发模式给 worker，worker 自己一条龙处理（normal=5 步 dance；
         # auto_reconnect=reset+disconnect+sleep+reconnect）
         self._worker.reset_requested.emit(self._cfg.get("reset_mode"))
 
@@ -574,6 +589,7 @@ class RTTMonitorPage(QWidget):
                 self._insert_mark_text(f"已断开 @ {ts}")
 
     def _set_connected_ui(self, info: dict) -> None:
+        self._is_connected = True
         self.btn_connect.setEnabled(True)
         self.btn_connect.setText("断开")
         self.btn_connect.setIcon(FluentIcon.PAUSE)
@@ -594,6 +610,7 @@ class RTTMonitorPage(QWidget):
         self.gb_info.setTitle(f"设备信息 — {target} / {iface} / {speed} kHz")
 
     def _set_disconnected_ui(self) -> None:
+        self._is_connected = False
         self.btn_connect.setEnabled(True)
         self.btn_connect.setText("连接")
         self.btn_connect.setIcon(FluentIcon.PLAY)
@@ -653,18 +670,16 @@ class RTTMonitorPage(QWidget):
             cursor.insertText(seg, self._fmt(attrs))
 
         if at_bottom and self.chk_auto_scroll.isChecked():
-            self._programmatic_scroll = True
-            sb.setValue(sb.maximum())
-            self._programmatic_scroll = False
+            with self._programmatic_scroll_guard():
+                sb.setValue(sb.maximum())
 
     def _on_auto_scroll_toggled(self, checked: bool) -> None:
         """checkbox 勾选/取消：持久化 + 勾选时立即跳到底并恢复跟踪。"""
         self._cfg.set("auto_scroll", checked)
         if checked:
             sb = self.display.verticalScrollBar()
-            self._programmatic_scroll = True
-            sb.setValue(sb.maximum())
-            self._programmatic_scroll = False
+            with self._programmatic_scroll_guard():
+                sb.setValue(sb.maximum())
 
     def _on_display_scrolled(self, _value: int) -> None:
         """display 滚动条 valueChanged：用户手动上滚 → 取消 chk_auto_scroll。
@@ -704,9 +719,8 @@ class RTTMonitorPage(QWidget):
         cursor.insertText(line + "\n", fmt)
 
         if at_bottom:
-            self._programmatic_scroll = True
-            sb.setValue(sb.maximum())
-            self._programmatic_scroll = False
+            with self._programmatic_scroll_guard():
+                sb.setValue(sb.maximum())
 
     def _on_insert_mark(self) -> None:
         text = self.le_mark.currentText().strip()
@@ -866,12 +880,12 @@ class RTTMonitorPage(QWidget):
         _infobar.warn(self, title, msg or "未知错误", duration=3000)
 
     def _on_log_message(self, level: str, msg: str) -> None:
-        """worker → UI 日志投递。level: error/warning/info。"""
+        """worker → UI 日志投递。level: error/warning/info。
+        连接路径异常 / 卡在"连接中…"不需要这里兜底——worker 失败路径会
+        走 _do_disconnect 并 emit connection_state_changed(False)，UI 自动回正。
+        """
         if level == "error":
             _infobar.err(self, "错误", msg)
-            # 兜底：连接路径异常时按钮可能卡在"连接中…"，这里强制恢复
-            if self.btn_connect.text() == "连接中…":
-                self._set_disconnected_ui()
         elif level == "warning":
             _infobar.warn(self, "警告", msg)
         # info 级别只进 logger 文件，不弹 toast——避免噪音
