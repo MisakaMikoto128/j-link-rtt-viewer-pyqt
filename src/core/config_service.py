@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -87,8 +88,14 @@ class ConfigService(QObject):
             Path(__file__).resolve().parent.parent / "config.json"
         )
         self._user_prefs_path = self._compute_user_prefs_path()
+        # 用户可编辑的 config.json 副本（用于扩展 chip_models / 改默认值等）
+        # 优先此路径，回退 bundled。首次启动若不存在则从 bundled seed 一份
+        # —— onefile 打包模式下 bundled 在临时解压目录里，每次升级被覆盖，
+        # 必须有可写副本才能让用户加自己的 MCU 而不需要重新打包
+        self._user_config_path = self._user_prefs_path.parent / "config.json"
         self._data: dict[str, Any] = dict(self.DEFAULTS)
         self._bundled: dict[str, Any] = {}
+        self._seed_user_config_if_missing()
         self._load_bundled()
         self._load_user_prefs()
 
@@ -104,13 +111,30 @@ class ConfigService(QObject):
         base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
         return base / "JLinkRTTViewer" / "user_prefs.json"
 
-    def _load_bundled(self) -> None:
+    def _seed_user_config_if_missing(self) -> None:
+        if self._user_config_path.exists():
+            return
+        if not self._bundled_path.exists():
+            return
         try:
-            with open(self._bundled_path, "r", encoding="utf-8") as f:
+            self._user_config_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(self._bundled_path, self._user_config_path)
+            self._logger.info(f"已 seed 用户可编辑 config.json → {self._user_config_path}")
+        except Exception as e:
+            self._logger.warning(f"seed 用户 config.json 失败：{e}")
+
+    def _load_bundled(self) -> None:
+        # 优先读用户副本（可编辑），回退 bundled
+        path = self._user_config_path if self._user_config_path.exists() else self._bundled_path
+        try:
+            with open(path, "r", encoding="utf-8") as f:
                 self._bundled = json.load(f)
         except Exception as e:
-            self._logger.warning(f"读取 bundled config.json 失败：{e}")
+            self._logger.warning(f"读取 config.json 失败：{e}（path={path}）")
             self._bundled = {}
+
+    def get_user_config_path(self) -> Path:
+        return self._user_config_path
 
     def _load_user_prefs(self) -> None:
         path = self._user_prefs_path

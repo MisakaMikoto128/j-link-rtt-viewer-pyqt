@@ -47,6 +47,7 @@
 1. zip 版：解压到任意目录后双击 `JLinkRTTViewer.exe`；onefile 版：直接双击 .exe
 2. 在 UI 顶部选目标 MCU、接口（SWD / JTAG）、速度、RTT 通道 → 点「连接」
 3. 用户偏好自动保存到 `%APPDATA%\JLinkRTTViewer\user_prefs.json`
+4. 想加自己的 MCU / 改默认速度档？编辑 `%APPDATA%\JLinkRTTViewer\config.json`（首次启动自动从内置版 seed 一份）
 
 > 不需要安装 Python，**目标机器只要装了 SEGGER J-Link 驱动就能跑**。
 > onefile 版首次启动会解压到 `%LOCALAPPDATA%\JLinkRTTViewer\Cache\<版本号>\`，删除该目录会触发下次启动重新解压。

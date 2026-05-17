@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-05-17
+
+### Fixes
+
+- **config.json 在 onefile 模式下不可编辑** — onefile 模式下 bundled `config.json` 解压到隐藏临时目录，每次升级被覆盖，用户没法加自己的 MCU
+  - 改为分层：首次启动从 bundled 自动 seed 一份到 `%APPDATA%\JLinkRTTViewer\config.json`，之后优先读用户副本；删了用户副本下次启动自动重 seed
+  - standalone 模式同样受益（不再需要去 `main.dist/config.json` 编辑，统一在 `%APPDATA%` 下）
+
 ## [0.2.2] — 2026-05-17
 
 ### Features
