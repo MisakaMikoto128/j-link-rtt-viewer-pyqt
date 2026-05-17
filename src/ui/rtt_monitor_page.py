@@ -682,22 +682,28 @@ class RTTMonitorPage(QWidget):
                 sb.setValue(sb.maximum())
 
     def _on_display_scrolled(self, _value: int) -> None:
-        """display 滚动条 valueChanged：用户手动上滚 → 取消 chk_auto_scroll。
-
-        程序性 sb.setValue() 不触发此逻辑（_programmatic_scroll 标志位过滤）。
-        scrollbar.value() < maximum - 4 视为"不在底部"——和 _on_rtt_data 判断一致。
+        """display 滚动条 valueChanged：双向同步 chk_auto_scroll。
+        - 已勾选 + 用户上滚离开底部 → 取消勾选（停止自动滚动）
+        - 未勾选 + 用户滚回底部 → 重新勾选（恢复自动滚动）
+        程序性 sb.setValue() 不触发（_programmatic_scroll_guard 过滤）。
         """
         if self._programmatic_scroll:
             return
-        if not self.chk_auto_scroll.isChecked():
-            return
         sb = self.display.verticalScrollBar()
-        if sb.value() < sb.maximum() - 4:
-            # blockSignals 避免 toggled 信号反过来再触发 _on_auto_scroll_toggled
-            self.chk_auto_scroll.blockSignals(True)
-            self.chk_auto_scroll.setChecked(False)
-            self.chk_auto_scroll.blockSignals(False)
-            self._cfg.set("auto_scroll", False)
+        at_bottom = sb.value() >= sb.maximum() - 4
+        is_checked = self.chk_auto_scroll.isChecked()
+        if is_checked and not at_bottom:
+            self._set_auto_scroll_silent(False)
+        elif not is_checked and at_bottom:
+            self._set_auto_scroll_silent(True)
+
+    def _set_auto_scroll_silent(self, checked: bool) -> None:
+        """改 checkbox + 落 cfg，但不触发 _on_auto_scroll_toggled 回调
+        （避免它再发起一次程序性 setValue 形成回环）。"""
+        self.chk_auto_scroll.blockSignals(True)
+        self.chk_auto_scroll.setChecked(checked)
+        self.chk_auto_scroll.blockSignals(False)
+        self._cfg.set("auto_scroll", checked)
 
     def _insert_mark_text(self, text: str) -> None:
         """在显示区追加一行视觉分隔的标记。颜色由 cfg.mark_color 决定。
