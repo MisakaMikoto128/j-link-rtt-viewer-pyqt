@@ -95,3 +95,111 @@ def test_do_connect_uses_jtag_enum_when_iface_jtag(monkeypatch):
     w._do_connect("STM32", "JTAG", 1000)
     set_tif_arg = fake_jlink.set_tif.call_args[0][0]
     assert set_tif_arg == _pylink.enums.JLinkInterfaces.JTAG
+
+
+# ============================================================
+# Task 6: _run_flash 成功路径测试
+# ============================================================
+
+def _params_default(**overrides):
+    base = dict(
+        file_path="C:/x.axf", file_format=FORMAT_ELF, bin_start_addr=0,
+        device_name="STM32", interface="SWD", speed_khz=4000,
+        erase_mode=ERASE_MODE_SECTOR, post_action=POST_ACTION_RESET_RUN,
+        extra_verify=False,
+    )
+    base.update(overrides)
+    return FlashParams(**base)
+
+
+def _collect_signals(worker):
+    """订阅 worker 输出信号，把每个 emit 记到列表。"""
+    log = []
+    worker.flash_started.connect(lambda: log.append(("started",)))
+    worker.flash_stage_changed.connect(lambda s: log.append(("stage", s)))
+    worker.flash_progress.connect(lambda c, t: log.append(("progress", c, t)))
+    worker.flash_log.connect(lambda lvl, m: log.append(("log", lvl, m)))
+    worker.flash_finished.connect(lambda ok, msg: log.append(("finished", ok, msg)))
+    return log
+
+
+def test_run_flash_success_elf_sector_reset_run(monkeypatch, qapp):
+    import pylink as _pylink
+    fake_jlink = MagicMock()
+    fake_jlink.opened.return_value = False
+    fake_jlink.serial_number = 851012345
+    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
+
+    w = FlashWorker()
+    w.initialize()
+    log = _collect_signals(w)
+
+    w._run_flash(_params_default())
+    qapp.processEvents()
+
+    stages = [e[1] for e in log if e[0] == "stage"]
+    assert stages == [STAGE_CONNECT, STAGE_PROGRAM, STAGE_RESET, STAGE_DISCONNECT]
+    # flash_file 调用时 addr=0（ELF 文件内带地址）
+    fake_jlink.flash_file.assert_called_once()
+    args = fake_jlink.flash_file.call_args[0]
+    assert args[1] == 0   # addr
+    fake_jlink.reset.assert_called()
+    fake_jlink.restart.assert_called()
+    # 完成
+    assert log[-1] == ("finished", True, "烧录成功")
+
+
+def test_run_flash_bin_uses_bin_start_addr(monkeypatch, qapp):
+    fake_jlink = MagicMock()
+    fake_jlink.opened.return_value = True
+    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
+    w = FlashWorker()
+    w.initialize()
+    p = _params_default(file_format=FORMAT_BIN, bin_start_addr=0x20000000)
+    w._run_flash(p)
+    qapp.processEvents()
+    args = fake_jlink.flash_file.call_args[0]
+    assert args[1] == 0x20000000
+
+
+def test_run_flash_chip_erase_calls_erase_before_program(monkeypatch, qapp):
+    fake_jlink = MagicMock()
+    fake_jlink.opened.return_value = True
+    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
+    w = FlashWorker()
+    w.initialize()
+    log = _collect_signals(w)
+    w._run_flash(_params_default(erase_mode=ERASE_MODE_CHIP))
+    qapp.processEvents()
+    stages = [e[1] for e in log if e[0] == "stage"]
+    assert STAGE_ERASE in stages
+    assert stages.index(STAGE_ERASE) < stages.index(STAGE_PROGRAM)
+    fake_jlink.erase.assert_called_once()
+
+
+def test_run_flash_post_action_none_no_reset(monkeypatch, qapp):
+    fake_jlink = MagicMock()
+    fake_jlink.opened.return_value = True
+    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
+    w = FlashWorker()
+    w.initialize()
+    log = _collect_signals(w)
+    w._run_flash(_params_default(post_action=POST_ACTION_NONE))
+    qapp.processEvents()
+    stages = [e[1] for e in log if e[0] == "stage"]
+    assert STAGE_RESET not in stages
+    fake_jlink.reset.assert_not_called()
+    fake_jlink.restart.assert_not_called()
+
+
+def test_run_flash_post_action_reset_no_run(monkeypatch, qapp):
+    """post_action=reset 调 reset(halt=True)，不调 restart。"""
+    fake_jlink = MagicMock()
+    fake_jlink.opened.return_value = True
+    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
+    w = FlashWorker()
+    w.initialize()
+    w._run_flash(_params_default(post_action=POST_ACTION_RESET))
+    qapp.processEvents()
+    fake_jlink.reset.assert_called_with(halt=True)
+    fake_jlink.restart.assert_not_called()
