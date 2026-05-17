@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-17
+
+### Features
+
+- **F2 / F3 / F4 全局快捷键**：连接 / 断开 / 重置目标，任意子页生效，幂等设计
+- **重置模式可配**：设置页选「正常」（5 步快速重置）或「自动重连」（断开+重连，更可靠），按钮文字与 tooltip 实时切换
+- **会话标记颜色可配**：默认亮黄 `#ffff55`，设置页 ColorDialog 选；用户手动插入 + 自动标记共用
+- **连接 / 断开自动插入标记**：两个独立开关，开启后每次状态切换自动在 RTT 显示区插入 ``──── 已连接 STM32H750VB @ HH:MM:SS ────`` 这样的分隔行，方便会话分段
+- **关于页重写**：Hero header（logo + 标题 + 版本 + 标语 + 项目链接 + Issue 链接）+ 3 卡片功能特性 + 作者卡 + 第三方依赖 + 页脚
+- **4 页统一透明 ScrollArea**：RTT / 内存 / 设置 / 关于全部用 `make_transparent_scroll` helper，窗口压扁时整页自然滚动，控件不再挤压
+- **可拖动 RTT display 高度**：6px 自定义 resize handle，hover/拖动跟随主题色，拖大超过窗口时整页自动出滚条
+- **标题栏左上角图标**：MainWindow 显式 setWindowIcon 触发 FluentTitleBar 刷新
+
+### Fixes
+
+- **重置后必须断开重连才有数据 bug**：pylink 缓存 RTT 控制块地址在 jlink.reset 后过期。`normal` 模式 5 步 dance（reset + rtt_stop/start + 重启读线程）原地修复；`auto_reconnect` 模式整个 J-Link 会话推倒重来保证 100% 可靠
+- **`EditableComboBox` 无 `clearEditText` AttributeError**：换成 `setCurrentText("")`
+- **手动上滚 RTT display 后自动滚动 checkbox 自动取消勾选**：UX 一致性
+- **`_paused` 标志在固件导出时是假锁**：read_loop 和 export 共享 jlink 实例会抢句柄，改用真停读线程
+
+### Refactor / Code quality
+
+- 重置流程从 4 方法跨方法状态机 → 单方法一条龙（worker 闭环编排，UI 一行 emit）
+- 信号 `reset_target_requested(bool)` → `reset_requested(str)`，避免 bool 反向心算
+- UI 不再用 `btn.text() == "连接"` 当 state enum，改 `_is_connected: bool` 字段
+- `_programmatic_scroll` 标志 3 处 boilerplate → `@contextmanager` 围栏
+- 抽 `_pause_read_thread` / `_restart_read_thread` / `_do_connect` / `_byte_start_col` / `_insert_mark_text` 等 helper 消除重复
+- 抽 `_scroll_helpers.make_transparent_scroll` / `_paths.find_app_icon|find_app_logo_png` 共享 helper
+- `RESET_MODE_NORMAL` / `RESET_MODE_AUTO_RECONNECT` 模块常量，避免字面值散落
+- 工程踩坑笔记（[CLAUDE.md](CLAUDE.md)）新增 9 条设计原则
+
 ## [0.1.0] — 2026-05-16
 
 首次公开发布。
@@ -27,5 +58,6 @@
 - 配置写盘 200ms 节流，关窗 flush，避免拖窗/调字号每帧刷盘
 - 详细工程踩坑笔记见 [CLAUDE.md](CLAUDE.md)
 
-[Unreleased]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/releases/tag/v0.1.0
