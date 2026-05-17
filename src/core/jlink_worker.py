@@ -45,7 +45,7 @@ class JLinkWorker(QObject):
     connect_requested = Signal(str, str, int, int)
     disconnect_requested = Signal()
     send_data_requested = Signal(str, bool)
-    reset_target_requested = Signal()
+    reset_target_requested = Signal(bool)  # reattach_rtt: True 走 5 步 dance；False 只发 reset 命令（auto_reconnect 模式用）
     set_rtt_channel_requested = Signal(int)
     set_pause_receive_requested = Signal(bool)
     set_power_output_requested = Signal(bool)
@@ -382,12 +382,36 @@ class JLinkWorker(QObject):
             self._logger.error(f"发送数据失败：{e}")
             self.command_result.emit("send_data", False, str(e))
 
-    @Slot()
-    def _on_reset_target(self) -> None:
+    @Slot(bool)
+    def _on_reset_target(self, reattach_rtt: bool) -> None:
+        """重置目标 MCU。
+
+        reattach_rtt=True（normal 模式）：reset + RTT 重新挂接（停读线程 → reset
+            → sleep 等 boot → rtt_stop/start → _reset_decoder → 重启读线程）。
+            是对 pylink 缓存控制块过期 bug 的"原地修复"尝试，对大多数 MCU 够用。
+
+        reattach_rtt=False（auto_reconnect 模式）：只发 reset 命令，**不动** RTT
+            读线程也**不**重挂接。UI 接着会 emit disconnect → 等 state(False) →
+            重连，整个 J-Link 会话被推倒重来——这条路 100% 解决 RTT 控制块过期
+            问题，慢一点但稳。
+        """
         if self._state != _STATE_CONNECTED:
             self.command_result.emit("reset", False, "未连接")
             return
 
+        if not reattach_rtt:
+            # 简化路径：只发 reset 命令让 MCU 重启。后续 disconnect+reconnect
+            # 由 UI 编排，这里既不停读线程也不动 RTT 通道。
+            try:
+                self.jlink.reset(1, False)
+                self.command_result.emit("reset", True, "")
+                self.log_message.emit("info", "目标设备已重置（等待重连）")
+            except Exception as e:
+                self._logger.error(f"重置失败：{e}")
+                self.command_result.emit("reset", False, str(e))
+            return
+
+        # ---- normal 模式：5 步 dance ----
         # 1. 暂停读线程：pylink/SEGGER DLL 不支持 reset / rtt_stop / rtt_start
         #    期间还有 rtt_read 在跑（同 disconnect 的模式，避免句柄抢占）。
         self._stop_read = True
@@ -404,7 +428,7 @@ class JLinkWorker(QObject):
             time.sleep(0.1)
             # 关键：reset 后 pylink 缓存的 RTT 控制块地址过期，rtt_read 永远空。
             # 必须 stop + start 让 pylink 重新搜索控制块——这就是 "重置后必须
-            # 断开重连才有数据" bug 的根因。
+            # 断开重连才有数据" bug 的根因（normal 模式的尝试性修复）。
             self.jlink.rtt_stop()
             self.jlink.rtt_start()
             self._reset_decoder()  # 解码器残留半字节也清掉

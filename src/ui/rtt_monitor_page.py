@@ -535,16 +535,23 @@ class RTTMonitorPage(QWidget):
             self.btn_reset.setToolTip("F4 重置目标 — 当前模式：仅重置 MCU")
 
     def _on_reset_clicked(self) -> None:
-        """两种模式：normal → 让 worker 走 5 步快速重置；
-        auto_reconnect → 走断开 + 重连流程（标记走 _pending_auto_reconnect）。
+        """两种模式：
+        - normal: 让 worker 走 5 步 dance（reset + rtt_stop/start + 重启读线程）
+        - auto_reconnect: worker 只发 reset 命令让 MCU 真重启；然后 UI 编排
+            disconnect → 等 state(False) → 延时让 MCU boot 完 → reconnect。
         """
         if self._cfg.get("reset_mode") == "auto_reconnect":
             # UI 立即反馈
             self._set_disconnected_ui()
             self._pending_auto_reconnect = True
+            # 1. 先发 reset：worker 调 jlink.reset 让 MCU 真重启（不动 RTT 通道）。
+            #    若漏了这步只走 disconnect+reconnect，MCU 根本没重启过。
+            self._worker.reset_target_requested.emit(False)
+            # 2. 紧跟着 disconnect：worker 顺序处理 queued 信号，reset 完才 disconnect。
             self._worker.disconnect_requested.emit()
         else:
-            self._worker.reset_target_requested.emit()
+            # normal 模式：5 步 dance，worker 内部完成 reset + rtt_stop/start
+            self._worker.reset_target_requested.emit(True)
 
     def _reconnect_with_saved_params(self) -> None:
         """从 cfg 读上次连接参数 + 触发新一轮连接。供自动重连使用。"""
@@ -598,9 +605,11 @@ class RTTMonitorPage(QWidget):
             # 自动重连：reset_mode=auto_reconnect 且用户点了重置 → 触发重连
             if self._pending_auto_reconnect:
                 self._pending_auto_reconnect = False
-                # 100ms 缓冲：让 J-Link DLL / pylink 完成内部清理（disconnect 后
-                # 紧跟着 connect 偶尔会撞到 close 还没完成的状态而连接失败）
-                QTimer.singleShot(100, self._reconnect_with_saved_params)
+                # 300ms 延时：等 MCU 完成 boot 后再重连。jlink.reset 触发后到
+                # 这里大概已经过去 100-200ms（reset + disconnect 串行执行），
+                # 再延 300ms 共 ~500ms，覆盖 STM32H7 (~200ms) / nRF52 (~80ms)
+                # 等典型 MCU 上电初始化时间，避免连接到还没 boot 完的 MCU。
+                QTimer.singleShot(300, self._reconnect_with_saved_params)
 
     def _set_connected_ui(self, info: dict) -> None:
         self.btn_connect.setEnabled(True)
