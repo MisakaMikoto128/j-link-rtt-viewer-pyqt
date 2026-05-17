@@ -77,6 +77,18 @@ class ConfigService(QObject):
         "mem_export_preset_idx": 0,
         "mem_export_custom_size": "",
         "mem_write_addr": "0x20000000",
+        # === 烧录页（v0.3.0 新增）===
+        # 独立持久化，不复用 RTT 页的 target_mcu / interface / speed_khz：
+        # 让烧录与 RTT 监控目标可以不同（同时维护多个项目）
+        "flash_device_name": "STM32H750VB",
+        "flash_interface": "SWD",
+        "flash_speed": 4000,
+        "flash_bin_address": 0x08000000,        # bin 模式的起始地址
+        "flash_erase_mode": "sector",           # "sector" | "chip"
+        "flash_post_action": "reset_run",       # "none" | "reset" | "reset_run"
+        "flash_verify": False,                  # extra byte-by-byte verify
+        "flash_recent_files": [],               # 最多 10 个，时间倒序
+        "flash_recent_files_mtime": {},         # path → mtime（float），用于变更提示
     }
 
     SEND_HISTORY_MAX = 50

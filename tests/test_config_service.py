@@ -124,3 +124,48 @@ def test_atomic_write_on_crash(cfg, qapp, tmp_path, monkeypatch):
 
     # 原文件未被破坏
     assert user_prefs.read_text(encoding="utf-8") == original
+
+
+def test_flash_defaults_present(tmp_path, monkeypatch):
+    """新增的 flash_* 偏好键必须出现在 DEFAULTS 里，并有正确默认值。"""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    bundled = tmp_path / "bundled_config.json"
+    bundled.write_text(json.dumps({
+        "chip_models": ["X", "Y"],
+        "default_interface": "SWD",
+        "default_speed_khz": 4000,
+        "speed_options_khz": [100, 4000, 8000],
+        "default_font_family": "Consolas",
+        "default_font_size": 13,
+        "default_rtt_channel": 0,
+    }), encoding="utf-8")
+    cfg = ConfigService(bundled_config_path=bundled, throttle_ms=50)
+    assert cfg.get("flash_device_name") == "STM32H750VB"
+    assert cfg.get("flash_interface") == "SWD"
+    assert cfg.get("flash_speed") == 4000
+    assert cfg.get("flash_bin_address") == 0x08000000
+    assert cfg.get("flash_erase_mode") == "sector"
+    assert cfg.get("flash_post_action") == "reset_run"
+    assert cfg.get("flash_verify") is False
+    assert cfg.get("flash_recent_files") == []
+    assert cfg.get("flash_recent_files_mtime") == {}
+
+
+def test_flash_set_persists_recent_files(tmp_path, monkeypatch):
+    """flash_recent_files 是 list，set 进去要保留。"""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    bundled = tmp_path / "bundled_config.json"
+    bundled.write_text(json.dumps({
+        "chip_models": ["X", "Y"],
+        "default_interface": "SWD",
+        "default_speed_khz": 4000,
+        "speed_options_khz": [100, 4000, 8000],
+        "default_font_family": "Consolas",
+        "default_font_size": 13,
+        "default_rtt_channel": 0,
+    }), encoding="utf-8")
+    cfg = ConfigService(bundled_config_path=bundled, throttle_ms=50)
+    cfg.set("flash_recent_files", ["C:/a.axf", "C:/b.hex"])
+    cfg.flush()
+    cfg2 = ConfigService(bundled_config_path=bundled, throttle_ms=50)
+    assert cfg2.get("flash_recent_files") == ["C:/a.axf", "C:/b.hex"]
