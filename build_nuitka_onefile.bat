@@ -7,7 +7,7 @@ REM   - Subsequent launches hit the cache, near standalone speed
 REM   - If you dislike first-launch extraction delay, use build_nuitka.bat (standalone) instead
 
 REM Keep PRODUCT_VERSION in sync with pyproject.toml / about_page.py
-set PRODUCT_VERSION=0.2.3
+set PRODUCT_VERSION=0.3.0
 set COMPANY_NAME=MisakaMikoto128
 set PRODUCT_NAME=JLinkRTTViewer
 

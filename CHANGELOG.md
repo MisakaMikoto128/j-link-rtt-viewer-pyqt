@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-17
+
+### Features
+
+- **新增固件烧录页**：支持 `.axf` / `.elf` / `.hex` / `.bin` 烧录到目标 MCU
+  - 独立 `FlashWorker` + 独立 `pylink` 会话 + 独立 `QThread`，不干涉 RTT/Memory 模块
+  - 拖放选文件、最近 10 个历史 + mtime 变更提示
+  - 擦除模式可选（扇区 / 整片），完成动作可选（仅烧录 / 复位 / 复位+运行）
+  - 详情面板（失败自动展开）+ "复制日志"按钮（含 app/OS/pylink 版本头，方便贴 issue）
+  - 文件解析层（`flash_file_parser`）零 Qt 依赖，独立单元测试覆盖 axf/hex/bin 解析 + 错误路径
+
+### Engineering
+
+- 新增依赖：`pyelftools` / `intelhex`，已加进 Nuitka 打包脚本
+
 ## [0.2.3] — 2026-05-17
 
 ### Fixes
@@ -88,6 +103,10 @@
 - 配置写盘 200ms 节流，关窗 flush，避免拖窗/调字号每帧刷盘
 - 详细工程踩坑笔记见 [CLAUDE.md](CLAUDE.md)
 
-[Unreleased]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.2.3...v0.3.0
+[0.2.3]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/releases/tag/v0.1.0
