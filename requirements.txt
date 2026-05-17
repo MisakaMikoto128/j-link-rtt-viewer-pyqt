@@ -5,3 +5,7 @@ pylink-square==1.6.0   # 必须用 1.6.0；2.x 有 breaking API change，RTT 不
 # dev / build
 pytest>=8.0
 nuitka>=2.0
+
+# firmware flashing
+pyelftools>=0.29
+intelhex>=2.3.0
