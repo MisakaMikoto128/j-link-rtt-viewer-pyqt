@@ -293,8 +293,19 @@ class FlashPage(QWidget):
         self.btn_toggle_log.clicked.connect(self._toggle_log)
         self.btn_copy_log.clicked.connect(self._copy_log)
 
-        # worker → ui（下一 Task 接）
+        # worker → ui（QueuedConnection 显式声明：CLAUDE.md 跨线程信号约定）
+        from PySide6.QtCore import Qt as _Qt
         self.btn_flash.clicked.connect(self._on_start_flash)
+        self._worker.flash_started.connect(
+            self._on_flash_started, _Qt.QueuedConnection)
+        self._worker.flash_stage_changed.connect(
+            self._on_stage_changed, _Qt.QueuedConnection)
+        self._worker.flash_progress.connect(
+            self._on_progress, _Qt.QueuedConnection)
+        self._worker.flash_log.connect(
+            self._on_log, _Qt.QueuedConnection)
+        self._worker.flash_finished.connect(
+            self._on_flash_finished, _Qt.QueuedConnection)
 
     def _on_bin_addr_changed(self) -> None:
         txt = self.edit_bin_addr.text().strip()
@@ -395,9 +406,104 @@ class FlashPage(QWidget):
         QApplication.clipboard().setText(header + self.txt_log.toPlainText())
         _infobar.info(self, "已复制日志到剪贴板", "")
 
-    # ---- 占位（下一 Task）----
     def _on_start_flash(self) -> None:
-        pass
+        if self._is_running:
+            return
+
+        path = self.cmb_file.currentText().strip()
+        if not path:
+            _infobar.warn(self, "未选择文件", "请先选择 .axf/.elf/.hex/.bin 文件")
+            return
+        if not os.path.exists(path):
+            _infobar.warn(self, "文件不存在", path)
+            return
+
+        from core import flash_file_parser as fp
+        try:
+            fmt = fp.detect_format(path)
+        except fp.FileParseError as e:
+            _infobar.error(self, "格式不支持", str(e))
+            return
+
+        try:
+            bin_addr = int(self.edit_bin_addr.text().strip(), 0)
+        except (ValueError, TypeError):
+            bin_addr = 0
+
+        device = self.cmb_device.currentText().strip()
+        if not device:
+            _infobar.warn(self, "未填 Device", "请填写目标设备名（如 STM32H750VB）")
+            return
+
+        iface = "SWD" if self.rb_swd.isChecked() else "JTAG"
+        speed = int(self.spin_speed.value())
+        erase_mode = _ERASE_LABELS[self.cmb_erase.currentIndex()][1]
+        post_action = _POST_LABELS[self.cmb_post.currentIndex()][1]
+        verify = self.chk_verify.isChecked()
+
+        params = FlashParams(
+            file_path=path, file_format=fmt, bin_start_addr=bin_addr,
+            device_name=device, interface=iface, speed_khz=speed,
+            erase_mode=erase_mode, post_action=post_action,
+            extra_verify=verify,
+        )
+        self._worker.set_pending_params(params)
+        self._worker.flash_requested.emit()
+
+    def _on_flash_started(self) -> None:
+        self._is_running = True
+        self._set_inputs_enabled(False)
+        self.btn_flash.setText("烧录中…")
+        self.txt_log.clear()
+        self.progress.setValue(0)
+        self.lbl_stage.setText("准备…")
+
+    def _on_stage_changed(self, stage: str) -> None:
+        label_map = {
+            "connect": "连接中…",
+            "erase": "擦除中…",
+            "program": "写入中…",
+            "verify": "校验中…",
+            "reset": "复位中…",
+            "disconnect": "断开中…",
+        }
+        self.lbl_stage.setText(label_map.get(stage, stage))
+
+    def _on_progress(self, current: int, total: int) -> None:
+        if total <= 0:
+            self.progress.setValue(0)
+            return
+        self.progress.setValue(int(current * 100 / total))
+
+    def _on_log(self, level: str, msg: str) -> None:
+        from datetime import datetime
+        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        prefix = {"info": "", "warn": "⚠ ", "error": "✖ "}.get(level, "")
+        self.txt_log.appendPlainText(f"[{ts}] {prefix}{msg}")
+
+    def _on_flash_finished(self, ok: bool, summary: str) -> None:
+        self._is_running = False
+        self._set_inputs_enabled(True)
+        self.btn_flash.setText("开始烧录")
+        if ok:
+            self.lbl_stage.setText("完成 ✓")
+            self.progress.setValue(100)
+            _infobar.success(self, "烧录成功", summary)
+        else:
+            self.lbl_stage.setText("失败 ✖")
+            # 失败时自动展开详情 + 写固定建议文案
+            if not self.txt_log.isVisible():
+                self._toggle_log()
+            self.txt_log.appendPlainText(
+                "⚠ Flash 已部分擦除/写入，建议下次用「整片擦除」重烧")
+            _infobar.error(self, "烧录失败", summary)
+
+    def _set_inputs_enabled(self, enabled: bool) -> None:
+        for w in (self.cmb_device, self.rb_swd, self.rb_jtag, self.spin_speed,
+                  self.cmb_file, self.btn_browse, self.edit_bin_addr,
+                  self.cmb_erase, self.cmb_post, self.chk_verify):
+            w.setEnabled(enabled)
+        self.btn_flash.setEnabled(enabled)
 
     # ---- 拖放（下一 Task 完善）----
     def dragEnterEvent(self, e: QDragEnterEvent) -> None:
