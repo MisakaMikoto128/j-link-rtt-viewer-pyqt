@@ -45,7 +45,8 @@ class JLinkWorker(QObject):
     connect_requested = Signal(str, str, int, int)
     disconnect_requested = Signal()
     send_data_requested = Signal(str, bool)
-    reset_target_requested = Signal(bool)  # reattach_rtt: True 走 5 步 dance；False 只发 reset 命令（auto_reconnect 模式用）
+    reset_target_requested = Signal()  # 完整：reset + rtt_stop/start + 重启读线程（normal 模式）
+    reset_only_requested = Signal()    # 仅发 reset 命令，不动 RTT（auto_reconnect 模式用，UI 接着 disconnect+reconnect）
     set_rtt_channel_requested = Signal(int)
     set_pause_receive_requested = Signal(bool)
     set_power_output_requested = Signal(bool)
@@ -134,6 +135,7 @@ class JLinkWorker(QObject):
         self.disconnect_requested.connect(self._on_disconnect)
         self.send_data_requested.connect(self._on_send_data)
         self.reset_target_requested.connect(self._on_reset_target)
+        self.reset_only_requested.connect(self._on_reset_only)
         self.set_rtt_channel_requested.connect(self._on_set_channel)
         self.set_pause_receive_requested.connect(self._on_set_paused)
         self.set_power_output_requested.connect(self._on_set_power)
@@ -216,12 +218,7 @@ class JLinkWorker(QObject):
                     self._session_start_ts = time.time()
                 self._logger.info(f"已连接 {target} ({iface} {speed}kHz, RTT ch{channel})")
                 self.connection_state_changed.emit(True)
-                # 启动读线程
-                self._stop_read = False
-                self._read_thread = threading.Thread(
-                    target=self._read_loop, name="JLinkReadThread", daemon=True
-                )
-                self._read_thread.start()
+                self._restart_read_thread()
             else:
                 self._logger.error("connect(target) 后 connected() 仍为 False")
                 self.log_message.emit("error", "连接目标失败")
@@ -382,72 +379,68 @@ class JLinkWorker(QObject):
             self._logger.error(f"发送数据失败：{e}")
             self.command_result.emit("send_data", False, str(e))
 
-    @Slot(bool)
-    def _on_reset_target(self, reattach_rtt: bool) -> None:
-        """重置目标 MCU。
-
-        reattach_rtt=True（normal 模式）：reset + RTT 重新挂接（停读线程 → reset
-            → sleep 等 boot → rtt_stop/start → _reset_decoder → 重启读线程）。
-            是对 pylink 缓存控制块过期 bug 的"原地修复"尝试，对大多数 MCU 够用。
-
-        reattach_rtt=False（auto_reconnect 模式）：只发 reset 命令，**不动** RTT
-            读线程也**不**重挂接。UI 接着会 emit disconnect → 等 state(False) →
-            重连，整个 J-Link 会话被推倒重来——这条路 100% 解决 RTT 控制块过期
-            问题，慢一点但稳。
-        """
-        if self._state != _STATE_CONNECTED:
-            self.command_result.emit("reset", False, "未连接")
-            return
-
-        if not reattach_rtt:
-            # 简化路径：只发 reset 命令让 MCU 重启。后续 disconnect+reconnect
-            # 由 UI 编排，这里既不停读线程也不动 RTT 通道。
-            try:
-                self.jlink.reset(1, False)
-                self.command_result.emit("reset", True, "")
-                self.log_message.emit("info", "目标设备已重置（等待重连）")
-            except Exception as e:
-                self._logger.error(f"重置失败：{e}")
-                self.command_result.emit("reset", False, str(e))
-            return
-
-        # ---- normal 模式：5 步 dance ----
-        # 1. 暂停读线程：pylink/SEGGER DLL 不支持 reset / rtt_stop / rtt_start
-        #    期间还有 rtt_read 在跑（同 disconnect 的模式，避免句柄抢占）。
+    def _pause_read_thread(self) -> None:
+        """停 read_thread 并 join；做 jlink reset / rtt_stop_start 之类
+        阻断动作前必须调，pylink/SEGGER DLL 不支持读循环并发占句柄。"""
         self._stop_read = True
         if self._read_thread is not None and self._read_thread.is_alive():
             self._read_thread.join(timeout=2.0)
         self._read_thread = None
 
-        ok = True
-        err_msg = ""
+    def _restart_read_thread(self) -> None:
+        """启一条新读线程。pause 后 / 新连接后调用。"""
+        self._stop_read = False
+        self._read_thread = threading.Thread(
+            target=self._read_loop, name="JLinkReadThread", daemon=True
+        )
+        self._read_thread.start()
+
+    @Slot()
+    def _on_reset_target(self) -> None:
+        """完整重置：停读线程 → reset → 等 MCU boot → rtt_stop/start →
+        重启读线程。normal 模式用，目标是"原地保持连接"地完成重置。
+
+        pylink 缓存的 RTT 控制块地址在 reset 后会过期 → rtt_stop+rtt_start
+        强制 pylink 重新搜索控制块。对大多数 MCU 够用；不行时切到
+        auto_reconnect 模式（走 _on_reset_only + 断开重连）。
+        """
+        if self._state != _STATE_CONNECTED:
+            self.command_result.emit("reset", False, "未连接")
+            return
+
+        self._pause_read_thread()
+        ok, err = True, ""
         try:
             self.jlink.reset(1, False)
-            # MCU 重启 + 重新初始化 _SEGGER_RTT 控制块需要时间。
-            # 100ms 是 STM32 / nRF 类 boot 时间的上限经验值。
-            time.sleep(0.1)
-            # 关键：reset 后 pylink 缓存的 RTT 控制块地址过期，rtt_read 永远空。
-            # 必须 stop + start 让 pylink 重新搜索控制块——这就是 "重置后必须
-            # 断开重连才有数据" bug 的根因（normal 模式的尝试性修复）。
+            time.sleep(0.1)  # 等 MCU 重新初始化 _SEGGER_RTT 控制块
             self.jlink.rtt_stop()
             self.jlink.rtt_start()
-            self._reset_decoder()  # 解码器残留半字节也清掉
+            self._reset_decoder()
         except Exception as e:
-            ok = False
-            err_msg = str(e)
+            ok, err = False, str(e)
             self._logger.error(f"重置失败：{e}")
         finally:
-            # 无论成败都重启读线程（成功路径继续收数据；失败路径若 jlink 仍
-            # 可用，下次 rtt_read 也能尝试；真坏了 read 失败会自然停）。
-            self._stop_read = False
-            self._read_thread = threading.Thread(
-                target=self._read_loop, name="JLinkReadThread", daemon=True
-            )
-            self._read_thread.start()
+            self._restart_read_thread()  # 成败都要让读线程能恢复
 
-        self.command_result.emit("reset", ok, err_msg)
+        self.command_result.emit("reset", ok, err)
         if ok:
             self.log_message.emit("info", "目标设备已重置")
+
+    @Slot()
+    def _on_reset_only(self) -> None:
+        """只发 reset 命令让 MCU 重启，不动 RTT 通道也不动读线程。
+        auto_reconnect 模式专用 —— UI 紧跟着会 emit disconnect → 等
+        state(False) → reconnect，整个会话推倒重来拿干净 RTT。"""
+        if self._state != _STATE_CONNECTED:
+            self.command_result.emit("reset", False, "未连接")
+            return
+        try:
+            self.jlink.reset(1, False)
+            self.command_result.emit("reset", True, "")
+            self.log_message.emit("info", "目标设备已重置（等待重连）")
+        except Exception as e:
+            self._logger.error(f"重置失败：{e}")
+            self.command_result.emit("reset", False, str(e))
 
     @Slot(int)
     def _on_set_channel(self, channel: int) -> None:

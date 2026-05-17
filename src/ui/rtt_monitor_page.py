@@ -535,23 +535,16 @@ class RTTMonitorPage(QWidget):
             self.btn_reset.setToolTip("F4 重置目标 — 当前模式：仅重置 MCU")
 
     def _on_reset_clicked(self) -> None:
-        """两种模式：
-        - normal: 让 worker 走 5 步 dance（reset + rtt_stop/start + 重启读线程）
-        - auto_reconnect: worker 只发 reset 命令让 MCU 真重启；然后 UI 编排
-            disconnect → 等 state(False) → 延时让 MCU boot 完 → reconnect。
-        """
         if self._cfg.get("reset_mode") == "auto_reconnect":
-            # UI 立即反馈
+            # auto_reconnect：仅发 reset 让 MCU 重启 → 断开 → 等 state(False) →
+            # 延时 → 重连。worker 顺序处理 queued 信号，reset 完才 disconnect。
             self._set_disconnected_ui()
             self._pending_auto_reconnect = True
-            # 1. 先发 reset：worker 调 jlink.reset 让 MCU 真重启（不动 RTT 通道）。
-            #    若漏了这步只走 disconnect+reconnect，MCU 根本没重启过。
-            self._worker.reset_target_requested.emit(False)
-            # 2. 紧跟着 disconnect：worker 顺序处理 queued 信号，reset 完才 disconnect。
+            self._worker.reset_only_requested.emit()
             self._worker.disconnect_requested.emit()
         else:
-            # normal 模式：5 步 dance，worker 内部完成 reset + rtt_stop/start
-            self._worker.reset_target_requested.emit(True)
+            # normal：worker 内部完成 reset + RTT 重新挂接 + 读线程重启
+            self._worker.reset_target_requested.emit()
 
     def _reconnect_with_saved_params(self) -> None:
         """从 cfg 读上次连接参数 + 触发新一轮连接。供自动重连使用。"""
