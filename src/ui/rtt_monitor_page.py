@@ -187,10 +187,6 @@ class RTTMonitorPage(QWidget):
         # False 表示用户手动滚动。区分两者用来同步 chk_auto_scroll 复选框。
         self._programmatic_scroll = False
 
-        # 重置 = 自动重连（reset_mode 配置）的待办标志：点击重置 → 触发 disconnect
-        # → 收到 connection_state_changed(False) 时检查该标志，重新连接
-        self._pending_auto_reconnect = False
-
         # 按当前 reset_mode 设置按钮文字 + 订阅 cfg 变化实时刷新
         self._apply_reset_mode_to_button(cfg.get("reset_mode"))
         cfg.reset_mode_changed.connect(self._apply_reset_mode_to_button)
@@ -535,28 +531,9 @@ class RTTMonitorPage(QWidget):
             self.btn_reset.setToolTip("F4 重置目标 — 当前模式：仅重置 MCU")
 
     def _on_reset_clicked(self) -> None:
-        if self._cfg.get("reset_mode") == "auto_reconnect":
-            # auto_reconnect：仅发 reset 让 MCU 重启 → 断开 → 等 state(False) →
-            # 延时 → 重连。worker 顺序处理 queued 信号，reset 完才 disconnect。
-            self._set_disconnected_ui()
-            self._pending_auto_reconnect = True
-            self._worker.reset_only_requested.emit()
-            self._worker.disconnect_requested.emit()
-        else:
-            # normal：worker 内部完成 reset + RTT 重新挂接 + 读线程重启
-            self._worker.reset_target_requested.emit()
-
-    def _reconnect_with_saved_params(self) -> None:
-        """从 cfg 读上次连接参数 + 触发新一轮连接。供自动重连使用。"""
-        target = self._cfg.get("target_mcu")
-        if not target:
-            return  # 没有保存的参数，放弃静默重连
-        iface = self._cfg.get("interface")
-        speed = int(self._cfg.get("speed_khz"))
-        channel = int(self._cfg.get("rtt_channel"))
-        self.btn_connect.setEnabled(False)
-        self.btn_connect.setText("连接中…")
-        self._worker.connect_requested.emit(target, iface, speed, channel)
+        # 一行：发模式给 worker，worker 自己一条龙处理（normal=5 步 dance；
+        # auto_reconnect=reset+disconnect+sleep+reconnect）
+        self._worker.reset_requested.emit(self._cfg.get("reset_mode"))
 
     def _on_channel_changed(self, ch: int) -> None:
         self._cfg.set("rtt_channel", ch)
@@ -595,14 +572,6 @@ class RTTMonitorPage(QWidget):
             if self._cfg.get("auto_mark_on_disconnect"):
                 ts = datetime.now().strftime("%H:%M:%S")
                 self._insert_mark_text(f"已断开 @ {ts}")
-            # 自动重连：reset_mode=auto_reconnect 且用户点了重置 → 触发重连
-            if self._pending_auto_reconnect:
-                self._pending_auto_reconnect = False
-                # 300ms 延时：等 MCU 完成 boot 后再重连。jlink.reset 触发后到
-                # 这里大概已经过去 100-200ms（reset + disconnect 串行执行），
-                # 再延 300ms 共 ~500ms，覆盖 STM32H7 (~200ms) / nRF52 (~80ms)
-                # 等典型 MCU 上电初始化时间，避免连接到还没 boot 完的 MCU。
-                QTimer.singleShot(300, self._reconnect_with_saved_params)
 
     def _set_connected_ui(self, info: dict) -> None:
         self.btn_connect.setEnabled(True)

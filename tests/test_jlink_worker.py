@@ -273,7 +273,7 @@ def test_reset_target(worker):
     w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
     _drain_events(0.3)
 
-    w.reset_target_requested.emit()
+    w.reset_requested.emit("normal")
     _drain_events(0.3)
     jl.reset.assert_called_once()
 
