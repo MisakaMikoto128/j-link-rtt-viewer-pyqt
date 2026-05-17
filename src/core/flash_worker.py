@@ -118,7 +118,23 @@ class FlashWorker(QObject):
         raise NotImplementedError  # Task 6
 
     def _do_connect(self, device: str, iface: str, speed: int) -> None:
-        raise NotImplementedError  # Task 5
+        """严格按 CLAUDE.md 'pylink 1.6.0 连接顺序'：open → close → open(serial)
+        → set_tif → set_speed → connect。"""
+        j = self._jlink
+        if j is None:
+            raise RuntimeError("FlashWorker 未 initialize")
+        if not j.opened():
+            j.open()
+            ser = j.serial_number
+            j.close()
+            j.open(str(ser))
+            self.flash_log.emit("info", f"J-Link SN: {ser}")
+        tif = (pylink.enums.JLinkInterfaces.SWD if iface == "SWD"
+               else pylink.enums.JLinkInterfaces.JTAG)
+        j.set_tif(tif)
+        j.set_speed(int(speed))
+        j.connect(device)
+        self.flash_log.emit("info", f"Target connected: {device}")
 
     def _safe_disconnect(self) -> None:
         if self._jlink is None:
