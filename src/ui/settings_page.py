@@ -31,6 +31,7 @@ from qfluentwidgets import (
 from PySide6.QtGui import QColor, QFont
 
 from . import _infobar
+from ._scroll_helpers import make_transparent_scroll
 
 from core.config_service import ConfigService
 from core.jlink_worker import RESET_MODE_AUTO_RECONNECT, RESET_MODE_NORMAL
@@ -62,7 +63,15 @@ class SettingsPage(QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        # 整页透明 ScrollArea —— 窗口压扁时纵向滚，控件不再被挤压重叠。
+        # 套路同 RTT / 内存 / 关于页，复用 make_transparent_scroll helper。
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._scroll, inner = make_transparent_scroll(self, "settings")
+        outer.addWidget(self._scroll)
+
+        root = QVBoxLayout(inner)
         root.setContentsMargins(20, 20, 20, 20)
         root.setSpacing(16)
 
