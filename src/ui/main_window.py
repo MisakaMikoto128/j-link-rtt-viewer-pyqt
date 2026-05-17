@@ -14,6 +14,7 @@ from core.jlink_worker import JLinkWorker
 from core.logger import get_logger
 
 from .about_page import AboutPage
+from .flash_page import FlashPage
 from .memory_viewer_page import MemoryViewerPage
 from .rtt_monitor_page import RTTMonitorPage
 from .settings_page import SettingsPage
@@ -38,12 +39,14 @@ class MainWindow(FluentWindow):
         # 2. 各页面
         self.rtt_page = RTTMonitorPage(self.worker, cfg, self)
         self.memory_page = MemoryViewerPage(self.worker, cfg, self)
+        self.flash_page = FlashPage(cfg, self)
         self.settings_page = SettingsPage(cfg, self)
         self.about_page = AboutPage(self)
 
         # 3. 导航
         self.addSubInterface(self.rtt_page, FIF.SPEED_HIGH, "RTT 监控")
         self.addSubInterface(self.memory_page, FIF.CODE, "内存查看")
+        self.addSubInterface(self.flash_page, FIF.SEND_FILL, "固件烧录")
         self.navigationInterface.addSeparator()
         self.addSubInterface(
             self.settings_page, FIF.SETTING, "设置", NavigationItemPosition.BOTTOM
@@ -152,5 +155,11 @@ class MainWindow(FluentWindow):
                 self._logger.warning(f"主线程兜底关日志文件失败：{e}")
             self.worker_thread.terminate()
             self.worker_thread.wait(1000)
+
+        # 关掉烧录页的独立 worker thread
+        try:
+            self.flash_page.shutdown()
+        except Exception as e:
+            self._logger.warning(f"FlashPage shutdown failed: {e}")
 
         event.accept()
