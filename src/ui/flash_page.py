@@ -328,8 +328,10 @@ class FlashPage(QWidget):
             "固件文件 (*.axf *.elf *.hex *.bin);;所有文件 (*.*)")
         if not path:
             return
-        # 加进下拉 + 持久化
         self.cmb_file.setCurrentText(path)
+        # qfluentwidgets EditableComboBox.setCurrentText 只设 lineEdit 文本，
+        # 不会触发 currentTextChanged 信号 → 显式调一次 _on_file_changed
+        self._on_file_changed(path)
 
     def _on_file_changed(self, path: str, silent: bool = False) -> None:
         """新文件选定：解析 → 填 format/range → 更新最近文件 + mtime 比对。"""
@@ -517,6 +519,8 @@ class FlashPage(QWidget):
         path = urls[0].toLocalFile()
         if path.lower().endswith((".axf", ".elf", ".hex", ".bin")):
             self.cmb_file.setCurrentText(path)
+            # 同 _on_browse：fluent EditableComboBox.setCurrentText 不发信号
+            self._on_file_changed(path)
             e.acceptProposedAction()
 
     def shutdown(self) -> None:

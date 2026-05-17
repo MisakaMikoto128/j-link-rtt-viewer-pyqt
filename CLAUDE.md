@@ -545,6 +545,25 @@ with self._programmatic_scroll_guard():
 
 ---
 
+## qfluentwidgets `EditableComboBox.setCurrentText()` 不发 `currentTextChanged` 信号
+
+**现象**：FlashPage 浏览选完固件文件 → `cmb_file.setCurrentText(path)` 后界面无任何变化：Format/Range 标签不更新、`recent_files` 不持久化、mtime flag 不显示。明明 `currentTextChanged.connect(self._on_file_changed)` 接好了，单步进 setCurrentText 后槽没跑。
+
+**原因**：qfluentwidgets 的 `EditableComboBox` 覆盖了 `setCurrentText`，实现只调 `self.lineEdit().setText(text)`，**不走 `QComboBox.setCurrentText` 的内部路径，自然也不 emit `currentTextChanged`**。这和原生 `QComboBox.setCurrentText`（editable 时设 lineEdit 同时 emit 信号）的行为不一致，是 qfluentwidgets 自己的实现 quirk。Read-only ComboBox 不受影响，因为它的 setCurrentText 还是走 currentIndex 切换路径。
+
+**处理**：调 `setCurrentText` 后**显式调一次目标槽**，不要依赖信号：
+```python
+self.cmb_file.setCurrentText(path)
+self._on_file_changed(path)   # 显式触发，绕开 fluent 的不 emit 行为
+```
+两处都要改：`_on_browse`（QFileDialog 选完）和 `dropEvent`（拖放）。
+
+CLAUDE.md 早就记过一条相关的：「`EditableComboBox` 无 `clearEditText` AttributeError」，配套这条信号不发的 quirk 一起记。如果今后用 EditableComboBox 的地方多了，可考虑封装个 `set_editable_combo_text(combo, text, on_change)` helper 把两步绑一起。
+
+参考：`src/ui/flash_page.py` `_on_browse` / `dropEvent`
+
+---
+
 ## 设计原则：派生公式必须有单点真源，行 / 列 / 格式映射不允许多处重复
 
 **现象**：内存页 hex byte → 列位置的公式 `_HEX_START_COL + col_in_row * 3 + (col_in_row // 4)` 在 `_highlight_diff` 和 `_select_buffer_range` 两处独立写。如果格式改动（如改成 `0xHHHH:` 起始列变 15），改一处漏一处。
