@@ -227,11 +227,176 @@ class FlashPage(QWidget):
         layout.addWidget(self.txt_log)
         return card
 
-    # ---- 占位（下一 Task 填）----
-    def _connect_signals(self) -> None:
-        pass
-
+    # ---- 加载偏好到控件 ----
     def _load_prefs_into_controls(self) -> None:
+        self.cmb_device.setCurrentText(self._cfg.get("flash_device_name"))
+        iface = self._cfg.get("flash_interface")
+        self.rb_swd.setChecked(iface == "SWD")
+        self.rb_jtag.setChecked(iface == "JTAG")
+        self.spin_speed.setValue(int(self._cfg.get("flash_speed")))
+
+        # 最近文件
+        recent = list(self._cfg.get("flash_recent_files") or [])
+        self.cmb_file.clear()
+        for p in recent:
+            self.cmb_file.addItem(p)
+        if recent:
+            self.cmb_file.setCurrentIndex(0)
+            self._on_file_changed(recent[0], silent=True)
+        else:
+            self.cmb_file.setCurrentText("")
+
+        # bin addr
+        addr = int(self._cfg.get("flash_bin_address"))
+        self.edit_bin_addr.setText(f"0x{addr:08X}")
+
+        # erase mode
+        em = self._cfg.get("flash_erase_mode")
+        for i, (_, v) in enumerate(_ERASE_LABELS):
+            if v == em:
+                self.cmb_erase.setCurrentIndex(i)
+                break
+
+        # post action
+        pa = self._cfg.get("flash_post_action")
+        for i, (_, v) in enumerate(_POST_LABELS):
+            if v == pa:
+                self.cmb_post.setCurrentIndex(i)
+                break
+
+        self.chk_verify.setChecked(bool(self._cfg.get("flash_verify")))
+
+    # ---- 信号连接 ----
+    def _connect_signals(self) -> None:
+        # 持久化
+        self.cmb_device.currentTextChanged.connect(
+            lambda s: self._cfg.set("flash_device_name", s))
+        self.rb_swd.toggled.connect(
+            lambda on: on and self._cfg.set("flash_interface", "SWD"))
+        self.rb_jtag.toggled.connect(
+            lambda on: on and self._cfg.set("flash_interface", "JTAG"))
+        self.spin_speed.valueChanged.connect(
+            lambda v: self._cfg.set("flash_speed", int(v)))
+        self.edit_bin_addr.editingFinished.connect(self._on_bin_addr_changed)
+        self.cmb_erase.currentIndexChanged.connect(
+            lambda i: self._cfg.set("flash_erase_mode", _ERASE_LABELS[i][1]))
+        self.cmb_post.currentIndexChanged.connect(
+            lambda i: self._cfg.set("flash_post_action", _POST_LABELS[i][1]))
+        self.chk_verify.toggled.connect(
+            lambda v: self._cfg.set("flash_verify", bool(v)))
+
+        # 文件
+        self.btn_browse.clicked.connect(self._on_browse)
+        self.cmb_file.currentTextChanged.connect(self._on_file_changed)
+
+        # 详情折叠
+        self.btn_toggle_log.clicked.connect(self._toggle_log)
+        self.btn_copy_log.clicked.connect(self._copy_log)
+
+        # worker → ui（下一 Task 接）
+        self.btn_flash.clicked.connect(self._on_start_flash)
+
+    def _on_bin_addr_changed(self) -> None:
+        txt = self.edit_bin_addr.text().strip()
+        try:
+            v = int(txt, 0) if txt else 0
+        except ValueError:
+            _infobar.warn(self, "Bin 起始地址格式错误", f"无法解析为整数：{txt}")
+            return
+        self._cfg.set("flash_bin_address", int(v))
+        # 重解析当前文件以更新 range 显示
+        cur = self.cmb_file.currentText().strip()
+        if cur:
+            self._on_file_changed(cur, silent=True)
+
+    def _on_browse(self) -> None:
+        cur = self.cmb_file.currentText().strip()
+        start_dir = str(Path(cur).parent) if cur else ""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择固件文件", start_dir,
+            "固件文件 (*.axf *.elf *.hex *.bin);;所有文件 (*.*)")
+        if not path:
+            return
+        # 加进下拉 + 持久化
+        self.cmb_file.setCurrentText(path)
+
+    def _on_file_changed(self, path: str, silent: bool = False) -> None:
+        """新文件选定：解析 → 填 format/range → 更新最近文件 + mtime 比对。"""
+        path = path.strip()
+        if not path:
+            self.lbl_format.setText("(无)")
+            self.lbl_range.setText("(无)")
+            self.lbl_mtime_flag.setText("")
+            return
+        if not os.path.exists(path):
+            if not silent:
+                _infobar.warn(self, "文件不存在", path)
+            return
+
+        from core import flash_file_parser as fp
+        # bin addr 取页面当前值
+        try:
+            bin_addr = int(self.edit_bin_addr.text().strip(), 0)
+        except (ValueError, TypeError):
+            bin_addr = int(self._cfg.get("flash_bin_address"))
+        try:
+            info = fp.parse_file(path, bin_start_addr=bin_addr)
+        except fp.FileParseError as e:
+            self.lbl_format.setText("(解析失败)")
+            self.lbl_range.setText("")
+            if not silent:
+                _infobar.error(self, "文件解析失败", str(e))
+            return
+
+        self.lbl_format.setText(info.fmt.upper())
+        self.lbl_range.setText(
+            f"0x{info.addr_start:08X} – 0x{info.addr_end:08X} "
+            f"({info.total_bytes} B, {info.notes})")
+        # bin 模式才允许编辑 bin_addr
+        self.edit_bin_addr.setEnabled(info.fmt == FORMAT_BIN)
+
+        # 更新最近文件
+        recent = list(self._cfg.get("flash_recent_files") or [])
+        if path in recent:
+            recent.remove(path)
+        recent.insert(0, path)
+        recent = recent[:10]
+        self._cfg.set("flash_recent_files", recent)
+
+        # mtime 比对
+        mt_map = dict(self._cfg.get("flash_recent_files_mtime") or {})
+        cur_mt = os.path.getmtime(path)
+        prev_mt = mt_map.get(path)
+        if prev_mt is not None and cur_mt > prev_mt + 0.5:
+            self.lbl_mtime_flag.setText(f"● updated")
+        else:
+            self.lbl_mtime_flag.setText("")
+        mt_map[path] = cur_mt
+        self._cfg.set("flash_recent_files_mtime", mt_map)
+
+    def _toggle_log(self) -> None:
+        vis = not self.txt_log.isVisible()
+        self.txt_log.setVisible(vis)
+        self.btn_toggle_log.setText("▼ 详情" if vis else "▶ 详情")
+
+    def _copy_log(self) -> None:
+        import platform
+        import PySide6
+        from ui.about_page import APP_VERSION
+        header = (
+            f"J-Link RTT Viewer / Flash log\n"
+            f"App version: {APP_VERSION}\n"
+            f"OS: {platform.platform()}\n"
+            f"pylink-square: 1.6.0\n"
+            f"PySide6: {PySide6.__version__}\n"
+            f"---\n"
+        )
+        from PySide6.QtWidgets import QApplication
+        QApplication.clipboard().setText(header + self.txt_log.toPlainText())
+        _infobar.info(self, "已复制日志到剪贴板", "")
+
+    # ---- 占位（下一 Task）----
+    def _on_start_flash(self) -> None:
         pass
 
     # ---- 拖放（下一 Task 完善）----

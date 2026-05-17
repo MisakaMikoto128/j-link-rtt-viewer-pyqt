@@ -27,3 +27,9 @@ def err(parent, title: str, msg: str = "", *, duration: int = 3000) -> None:
 def ok(parent, title: str, msg: str = "", *, duration: int = 2000) -> None:
     InfoBar.success(title, msg, parent=parent,
                     position=InfoBarPosition.TOP, duration=duration)
+
+
+# Aliases for semantic clarity
+error = err
+info = ok
+success = ok
