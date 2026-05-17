@@ -1,20 +1,28 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  把 build/main.dist/ 打包成 JLinkRTTViewer-vX.Y.Z-win64.zip 供 Release 上传。
+  把 Nuitka 构建产物打包成 Release 资产。
 
 .DESCRIPTION
-  - 版本号默认从 pyproject.toml 读取，可用 -Version 覆盖
-  - 内层文件夹名 = JLinkRTTViewer-vX.Y.Z-win64（解压后用户看到的根目录）
-  - 输出到 build/JLinkRTTViewer-vX.Y.Z-win64.zip
-  - 重新运行会覆盖旧 zip 和临时文件夹
+  支持两种模式：
+    standalone (默认) — 把 build/main.dist/ 重命名后压缩成 zip
+                         产物：build/JLinkRTTViewer-vX.Y.Z-win64.zip
+    onefile           — 单 exe，仅重命名（已经是单文件，不再压缩）
+                         产物：build/JLinkRTTViewer-vX.Y.Z-win64.exe
+    both              — 两个都打
+
+  版本号默认从 pyproject.toml 读取，可用 -Version 覆盖。
 
 .EXAMPLE
-  ./scripts/package_release.ps1
-  ./scripts/package_release.ps1 -Version 0.2.1
+  ./scripts/package_release.ps1                       # 默认 standalone
+  ./scripts/package_release.ps1 -Mode onefile
+  ./scripts/package_release.ps1 -Mode both
+  ./scripts/package_release.ps1 -Version 0.2.2 -Mode both
 #>
 param(
-    [string]$Version = ""
+    [string]$Version = "",
+    [ValidateSet("standalone", "onefile", "both")]
+    [string]$Mode = "standalone"
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,27 +38,48 @@ if (-not $Version) {
     }
 }
 
-$distDir = "build/main.dist"
-if (-not (Test-Path "$distDir/JLinkRTTViewer.exe")) {
-    throw "找不到 $distDir/JLinkRTTViewer.exe — 先跑 build_nuitka.bat"
+$baseName = "JLinkRTTViewer-v$Version-win64"
+
+function Pack-Standalone {
+    $distDir = "build/main.dist"
+    if (-not (Test-Path "$distDir/JLinkRTTViewer.exe")) {
+        throw "找不到 $distDir/JLinkRTTViewer.exe — 先跑 build_nuitka.bat"
+    }
+    $stageDir = "build/$baseName"
+    $zipPath = "build/$baseName.zip"
+    if (Test-Path $stageDir) { Remove-Item -Recurse -Force $stageDir }
+    if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+
+    Write-Host "[standalone 1/3] 复制 $distDir -> $stageDir"
+    Copy-Item -Recurse $distDir $stageDir
+
+    Write-Host "[standalone 2/3] 压缩 -> $zipPath"
+    Compress-Archive -Path $stageDir -DestinationPath $zipPath -CompressionLevel Optimal
+
+    Write-Host "[standalone 3/3] 清理临时目录"
+    Remove-Item -Recurse -Force $stageDir
+
+    $size = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
+    Write-Host "OK: $zipPath ($size MB)" -ForegroundColor Green
 }
 
-$folderName = "JLinkRTTViewer-v$Version-win64"
-$stageDir = "build/$folderName"
-$zipPath = "build/$folderName.zip"
+function Pack-Onefile {
+    $srcExe = "build/onefile/JLinkRTTViewer.exe"
+    if (-not (Test-Path $srcExe)) {
+        throw "找不到 $srcExe — 先跑 build_nuitka_onefile.bat"
+    }
+    $dstExe = "build/$baseName.exe"
+    if (Test-Path $dstExe) { Remove-Item -Force $dstExe }
 
-if (Test-Path $stageDir) { Remove-Item -Recurse -Force $stageDir }
-if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+    Write-Host "[onefile 1/1] 复制 $srcExe -> $dstExe"
+    Copy-Item $srcExe $dstExe
 
-Write-Host "[1/3] 复制 $distDir -> $stageDir"
-Copy-Item -Recurse $distDir $stageDir
+    $size = [math]::Round((Get-Item $dstExe).Length / 1MB, 1)
+    Write-Host "OK: $dstExe ($size MB)" -ForegroundColor Green
+}
 
-Write-Host "[2/3] 压缩 -> $zipPath"
-Compress-Archive -Path $stageDir -DestinationPath $zipPath -CompressionLevel Optimal
-
-Write-Host "[3/3] 清理临时目录"
-Remove-Item -Recurse -Force $stageDir
-
-$size = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
-Write-Host ""
-Write-Host "OK: $zipPath ($size MB)"
+switch ($Mode) {
+    "standalone" { Pack-Standalone }
+    "onefile"    { Pack-Onefile }
+    "both"       { Pack-Standalone; Pack-Onefile }
+}

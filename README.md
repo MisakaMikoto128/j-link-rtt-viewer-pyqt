@@ -36,13 +36,20 @@
 
 ### 直接下载使用（推荐）
 
-1. 到 [Releases 页面](https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/releases) 下载最新版本压缩包（`JLinkRTTViewer-vX.Y.Z-win64.zip`）
-2. 解压到任意目录
-3. 双击 `JLinkRTTViewer.exe` 启动
-4. 在 UI 顶部选择目标 MCU、接口（SWD / JTAG）、速度、RTT 通道 → 点「连接」
-5. 用户偏好自动保存到 `%APPDATA%\JLinkRTTViewer\user_prefs.json`
+到 [Releases 页面](https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/releases) 下载，两种包二选一：
 
-> 不需要安装 Python，不需要 pip，**目标机器只要装了 SEGGER J-Link 驱动就能跑**。
+| 包名 | 适合 | 启动速度 | 体积 |
+|---|---|---|---|
+| `JLinkRTTViewer-vX.Y.Z-win64.zip` | 装到固定目录长期用 | 最快（无解压步骤） | ~43 MB（解压后 ~107 MB） |
+| `JLinkRTTViewer-vX.Y.Z-win64.exe` | U 盘 / 临时使用 / 单文件分发 | 首次 ~5s（解压到缓存），后续接近 zip 版 | ~31 MB |
+
+**使用步骤：**
+1. zip 版：解压到任意目录后双击 `JLinkRTTViewer.exe`；onefile 版：直接双击 .exe
+2. 在 UI 顶部选目标 MCU、接口（SWD / JTAG）、速度、RTT 通道 → 点「连接」
+3. 用户偏好自动保存到 `%APPDATA%\JLinkRTTViewer\user_prefs.json`
+
+> 不需要安装 Python，**目标机器只要装了 SEGGER J-Link 驱动就能跑**。
+> onefile 版首次启动会解压到 `%LOCALAPPDATA%\JLinkRTTViewer\Cache\<版本号>\`，删除该目录会触发下次启动重新解压。
 
 更多用法见 [用户手册](docs/USER_GUIDE.md)。
 
@@ -65,13 +72,25 @@ python src/main.py
 # 或直接双击 start.bat
 ```
 
-### 打包成独立 .exe
+### 打包
+
+两个 bat 二选一：
 
 ```bash
-build_nuitka.bat
+build_nuitka.bat            # standalone：输出 build/main.dist/，启动最快
+build_nuitka_onefile.bat    # onefile：输出 build/onefile/JLinkRTTViewer.exe，单文件便携
 ```
 
-输出在 `build/main.dist/JLinkRTTViewer.exe`，整个 `main.dist/` 目录可压缩分发，**不需要目标机器装 Python**。
+打 Release 资产：
+
+```powershell
+./scripts/package_release.ps1 -Mode both
+# 产物：
+#   build/JLinkRTTViewer-vX.Y.Z-win64.zip  （standalone 压缩包）
+#   build/JLinkRTTViewer-vX.Y.Z-win64.exe  （重命名后的 onefile）
+```
+
+均**不需要目标机器装 Python**。
 
 ## 📖 文档
 

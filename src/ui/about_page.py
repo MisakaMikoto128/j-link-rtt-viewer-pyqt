@@ -35,7 +35,7 @@ from core._paths import find_app_logo_png
 
 from ._scroll_helpers import make_transparent_scroll
 
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.2.2"
 APP_TAGLINE = "为嵌入式开发者打造的现代化 SEGGER RTT 调试工具"
 AUTHOR_NAME = "MisakaMikoto128"
 AUTHOR_BIO = "嵌入式 / Python 开发者"

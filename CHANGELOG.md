@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-05-17
+
+### Features
+
+- **新增单 exe (onefile) 打包模式**：`build_nuitka_onefile.bat` 产出单个 `JLinkRTTViewer.exe`，便携性最强
+  - 解压目录用 `--onefile-tempdir-spec={CACHE_DIR}\JLinkRTTViewer\Cache\{VERSION}` 固定缓存，首次启动解压后续启动直接命中缓存（避免每次 ~5s 解压等待）
+  - 不喜欢解压等待仍用 standalone 模式（zip 解压一次后用 .dist 目录跑，启动最快）
+- **打包脚本支持双模式**：`scripts/package_release.ps1 -Mode standalone|onefile|both`
+
+### Performance
+
+- **Nuitka 编译加性能标志**：`--lto=yes`（link-time optimization，二进制更小启动更快）+ `--python-flag=-O`（去 assert/docstring）+ `--python-flag=no_warnings`（跳过 warning 框架初始化）
+- 启动速度提升约 5-10%（standalone 模式实测）
+
 ## [0.2.1] — 2026-05-17
 
 ### Features

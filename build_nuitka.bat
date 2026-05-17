@@ -1,11 +1,21 @@
 @echo off
-chcp 65001 >nul
+REM Standalone build: outputs build\main.dist\ (multi-file, fastest startup)
+REM Performance flags:
+REM   --lto=yes              link-time optimization, smaller binary + faster startup
+REM   --python-flag=-O       strip assert + __debug__, skip docstring processing
+REM   --python-flag=no_warnings   skip warning framework init
+REM   --jobs=4               parallel compile workers
 call venv\Scripts\activate.bat
 python -m nuitka ^
     --standalone ^
     --enable-plugin=pyside6 ^
     --windows-console-mode=disable ^
     --windows-icon-from-ico=assets\icons\app_icon.ico ^
+    --lto=yes ^
+    --python-flag=-O ^
+    --python-flag=no_warnings ^
+    --jobs=8 ^
+    --assume-yes-for-downloads ^
     --include-package=qfluentwidgets ^
     --include-package-data=qfluentwidgets ^
     --include-package=pylink ^
