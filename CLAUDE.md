@@ -361,3 +361,89 @@ jlink.connect(target)
 ```
 
 参考：`src/core/jlink_worker.py` `_on_connect`、参考项目 `RTT-T/src/services/jlink_service.py` `connect`
+
+---
+
+## 设计原则：一次用户操作的编排，归属一个模块；不要跨 UI ↔ worker 用 flag 串
+
+**现象**：reset 按钮 auto_reconnect 模式最初实现是 UI 编排：
+```python
+# UI _on_reset_clicked
+self._pending_auto_reconnect = True              # ← 跨方法状态
+self._worker.reset_only_requested.emit()
+self._worker.disconnect_requested.emit()
+
+# UI _on_state_changed —— 另一个方法里
+if self._pending_auto_reconnect:
+    self._pending_auto_reconnect = False
+    QTimer.singleShot(300, self._reconnect_with_saved_params)  # ← reconnect 藏在这
+```
+读 `_on_reset_clicked` 只能看到一半（reset + disconnect，没有 reconnect）；reconnect 藏在 `_on_state_changed` 的 QTimer 里。三方法 + 一标志拼出来的隐式状态机。
+
+**原因**：UI 端拥有 reset_mode 配置和上次连接参数，就以为自己应该编排整个流程。实际 worker 才是知道 J-Link / pylink / 读线程的，让 UI 编排等于把内部细节倒推到 UI 层。
+
+**处理**：让"知道细节的那一层"全包：
+- UI 只发**意图**：`worker.reset_requested.emit(mode)`（一行）
+- worker 收到 `_on_reset(mode)` 派发到 `_reset_in_place` / `_reset_with_reconnect`
+- 后者内部线性写：reset → disconnect → sleep → reconnect，四步顺序读
+- worker 自己存 `_last_connect_params`（在 `_on_connect` 成功时落），重连不再需要 UI 回传
+
+跨方法 flag (`_pending_auto_reconnect`) 删掉。UI 端 `_on_state_changed` 回到只做 UI 反馈、不做状态机。
+
+参考：`src/core/jlink_worker.py` `_on_reset` / `_reset_with_reconnect`、commit `1bc917c`。
+
+---
+
+## 设计原则：信号参数不要靠 bool 反向区分模式
+
+**现象**：`reset_target_requested = Signal(bool)`，arg 叫 `reattach_rtt`：
+- `emit(True)` = normal 模式
+- `emit(False)` = auto_reconnect 模式
+
+UI 端：
+```python
+if self._cfg.get("reset_mode") == "auto_reconnect":
+    self._worker.reset_target_requested.emit(False)   # ← 心算翻转
+else:
+    self._worker.reset_target_requested.emit(True)
+```
+读起来要在脑子里翻一次："auto_reconnect 怎么是 False？"
+
+**原因**：bool 是从 worker 视角起的名（"要不要重新挂接 RTT"），UI 端调用方不知道这个内部细节，必须做语义反向映射。
+
+**处理**：传**意图**而非 worker 内部的实现细节标志。两种做法都可以：
+
+1. **传枚举字符串**（推荐，简单）：
+   ```python
+   reset_requested = Signal(str)  # mode: "normal" / "auto_reconnect"
+   ```
+   UI: `worker.reset_requested.emit(cfg.get("reset_mode"))`，零翻译。
+
+2. **拆成两个语义独立的信号**：
+   ```python
+   reset_target_requested = Signal()
+   reset_only_requested = Signal()
+   ```
+
+任何 `Signal(bool)` 出现都该问一句"True/False 对应什么"，如果调用方需要 if/else 才能决定，就用枚举或拆信号。
+
+参考：commit `1bc917c` 把两步重构（`Signal(bool)` → 两信号 → `Signal(str)`）压成最终设计。
+
+---
+
+## 设计原则：UI 控件文本不是 state enum，不要用 `text() == "连接"` 当状态判断
+
+**现象**：
+```python
+def _on_connect_clicked(self):
+    if self.btn_connect.text() == "连接":
+        # 走连接路径
+    else:
+        # 走断开路径
+```
+
+**原因**：按钮文本是**呈现**，不是**状态**。一旦改文案 / 加 i18n / 临时改成"连接中…"被读到，分支就走错。
+
+**处理**：维护一个真实的 `_is_connected: bool` 字段（在 `_on_state_changed` 里更新），或从 worker 同步取状态。按钮文本只负责显示。
+
+参考：`src/ui/rtt_monitor_page.py` `_on_connect_clicked` / `on_shortcut_connect` / `on_shortcut_disconnect`（TODO：还没改完，全用 `btn_connect.text()` 做状态判断）。
