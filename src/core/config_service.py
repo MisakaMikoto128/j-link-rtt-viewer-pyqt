@@ -64,6 +64,18 @@ class ConfigService(QObject):
         #   "normal"         → jlink.reset + rtt_stop/start（默认；适合大多数 MCU）
         #   "auto_reconnect" → 重置 = 断开+重连（更可靠，但有 ~1s 延迟）
         "reset_mode": "normal",
+        # 内存页用户选择持久化（地址/大小/字节序/字节每行/diff/自动刷新间隔/导出/写地址）
+        # 不持久化：auto_refresh（断开会清掉）、goto/search（一次性）、write_data（误点高危）
+        "mem_read_addr": "0x08000000",
+        "mem_read_size": "0x100",
+        "mem_bytes_per_row": 16,
+        "mem_endian_little": True,
+        "mem_diff_highlight": True,
+        "mem_refresh_sec": 2,
+        "mem_export_addr": "0x08000000",
+        "mem_export_preset_idx": 0,
+        "mem_export_custom_size": "",
+        "mem_write_addr": "0x20000000",
     }
 
     SEND_HISTORY_MAX = 50

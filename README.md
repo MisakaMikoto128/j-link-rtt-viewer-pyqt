@@ -30,9 +30,21 @@
 
 ### 前置要求
 
-- **Python 3.10+**
 - **SEGGER J-Link 驱动**（[官方下载](https://www.segger.com/downloads/jlink/)），`JLinkARM.dll` 由 pylink 自带
 - 一根 J-Link 调试器（J-Link BASE / EDU / PLUS 等，或 Flasher 设备）
+- 从源码运行还需要 **Python 3.10+**；下载 Release 直接用则不需要
+
+### 直接下载使用（推荐）
+
+1. 到 [Releases 页面](https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/releases) 下载最新版本压缩包（`JLinkRTTViewer-vX.Y.Z-win64.zip`）
+2. 解压到任意目录
+3. 双击 `JLinkRTTViewer.exe` 启动
+4. 在 UI 顶部选择目标 MCU、接口（SWD / JTAG）、速度、RTT 通道 → 点「连接」
+5. 用户偏好自动保存到 `%APPDATA%\JLinkRTTViewer\user_prefs.json`
+
+> 不需要安装 Python，不需要 pip，**目标机器只要装了 SEGGER J-Link 驱动就能跑**。
+
+更多用法见 [用户手册](docs/USER_GUIDE.md)。
 
 ### 从源码运行
 

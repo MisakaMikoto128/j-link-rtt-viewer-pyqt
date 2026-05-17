@@ -95,7 +95,7 @@ class MemoryViewerPage(QWidget):
         # 已读取的数据缓冲（用于搜索 / 类型解析 / 复制）
         self._buffer: bytes = b""
         self._buffer_base: int = 0
-        self._bytes_per_row: int = 16
+        self._bytes_per_row: int = int(self._cfg.get("mem_bytes_per_row"))
         # 上次 hover 显示的字节偏移；同一字节内 MouseMove 不重算 tooltip。
         # cursorForPosition 在大 buffer 上做 layout hit-test 不便宜，每秒可调用百次。
         self._last_hover_offset: int = -1
@@ -132,19 +132,19 @@ class MemoryViewerPage(QWidget):
         r1 = QHBoxLayout()
         r1.addWidget(BodyLabel("起始地址"))
         self.le_read_addr = LineEdit(self)
-        self.le_read_addr.setText("0x08000000")
+        self.le_read_addr.setText(str(self._cfg.get("mem_read_addr")))
         self.le_read_addr.setMaximumWidth(140)
         r1.addWidget(self.le_read_addr)
         r1.addWidget(BodyLabel("大小 (字节)"))
         self.le_read_size = LineEdit(self)
-        self.le_read_size.setText("0x100")
+        self.le_read_size.setText(str(self._cfg.get("mem_read_size")))
         self.le_read_size.setMaximumWidth(100)
         r1.addWidget(self.le_read_size)
         r1.addWidget(BodyLabel("字节/行"))
         self.cb_row_width = ComboBox(self)
         for n in _BYTES_PER_ROW_OPTIONS:
             self.cb_row_width.addItem(str(n))
-        self.cb_row_width.setCurrentText("16")
+        self.cb_row_width.setCurrentText(str(self._bytes_per_row))
         r1.addWidget(self.cb_row_width)
         self.btn_read = PrimaryPushButton("读取", self)
         self.btn_clear = PushButton("清空", self)
@@ -158,10 +158,10 @@ class MemoryViewerPage(QWidget):
         self.chk_auto_refresh = CheckBox("自动刷新")
         self.sp_refresh_sec = SpinBox(self)
         self.sp_refresh_sec.setRange(1, 60)
-        self.sp_refresh_sec.setValue(2)
+        self.sp_refresh_sec.setValue(int(self._cfg.get("mem_refresh_sec")))
         self.sp_refresh_sec.setSuffix(" s")
         self.chk_diff = CheckBox("高亮变化")
-        self.chk_diff.setChecked(True)
+        self.chk_diff.setChecked(bool(self._cfg.get("mem_diff_highlight")))
         self.chk_diff.setToolTip("重新读取相同地址/大小时，把变化的字节背景标红")
         r2.addWidget(self.chk_auto_refresh)
         r2.addWidget(self.sp_refresh_sec)
@@ -226,6 +226,7 @@ class MemoryViewerPage(QWidget):
         endian_row.addWidget(BodyLabel("字节序"))
         self.cb_endian = ComboBox(self)
         self.cb_endian.addItems(["小端 (LE)", "大端 (BE)"])
+        self.cb_endian.setCurrentIndex(0 if self._cfg.get("mem_endian_little") else 1)
         endian_row.addWidget(self.cb_endian, 1)
         side_lay.addLayout(endian_row)
 
@@ -270,18 +271,23 @@ class MemoryViewerPage(QWidget):
         ex_row = QHBoxLayout()
         ex_row.addWidget(BodyLabel("起始地址"))
         self.le_ex_addr = LineEdit(self)
-        self.le_ex_addr.setText("0x08000000")
+        self.le_ex_addr.setText(str(self._cfg.get("mem_export_addr")))
         self.le_ex_addr.setMaximumWidth(140)
         ex_row.addWidget(self.le_ex_addr)
         ex_row.addWidget(BodyLabel("大小"))
         self.cb_ex_preset = ComboBox(self)
         for label, _ in _SIZE_PRESETS:
             self.cb_ex_preset.addItem(label)
+        # 把 cb_ex_preset 索引限制到合法范围（防止 user_prefs.json 被手改成越界值）
+        _preset_idx = max(0, min(int(self._cfg.get("mem_export_preset_idx")), len(_SIZE_PRESETS) - 1))
+        self.cb_ex_preset.setCurrentIndex(_preset_idx)
         ex_row.addWidget(self.cb_ex_preset)
         self.le_ex_custom = LineEdit(self)
         self.le_ex_custom.setPlaceholderText("0x100000")
         self.le_ex_custom.setMaximumWidth(120)
-        self.le_ex_custom.setEnabled(False)
+        self.le_ex_custom.setText(str(self._cfg.get("mem_export_custom_size")))
+        # 自定义大小只在 preset == 自定义 时启用（_SIZE_PRESETS 末项 size=-1）
+        self.le_ex_custom.setEnabled(_SIZE_PRESETS[_preset_idx][1] < 0)
         ex_row.addWidget(self.le_ex_custom)
         self.btn_choose = PushButton("选择保存路径", self)
         ex_row.addWidget(self.btn_choose)
@@ -316,7 +322,7 @@ class MemoryViewerPage(QWidget):
         wr_row = QHBoxLayout()
         wr_row.addWidget(BodyLabel("地址"))
         self.le_write_addr = LineEdit(self)
-        self.le_write_addr.setText("0x20000000")
+        self.le_write_addr.setText(str(self._cfg.get("mem_write_addr")))
         self.le_write_addr.setMaximumWidth(140)
         wr_row.addWidget(self.le_write_addr)
         wr_row.addWidget(BodyLabel("Hex 数据"))
@@ -352,8 +358,29 @@ class MemoryViewerPage(QWidget):
 
         self.cb_row_width.currentTextChanged.connect(self._on_row_width_changed)
         self.cb_endian.currentIndexChanged.connect(self._refresh_types)
+        self.cb_endian.currentIndexChanged.connect(
+            lambda idx: self._cfg.set("mem_endian_little", idx == 0)
+        )
         self.chk_auto_refresh.toggled.connect(self._on_auto_refresh_toggled)
+        self.chk_diff.toggled.connect(lambda v: self._cfg.set("mem_diff_highlight", v))
         self.sp_refresh_sec.valueChanged.connect(self._on_refresh_sec_changed)
+
+        # LineEdit 用 editingFinished：避免每键击都写盘，且按钮点击的 focus 离开会触发
+        self.le_read_addr.editingFinished.connect(
+            lambda: self._cfg.set("mem_read_addr", self.le_read_addr.text())
+        )
+        self.le_read_size.editingFinished.connect(
+            lambda: self._cfg.set("mem_read_size", self.le_read_size.text())
+        )
+        self.le_ex_addr.editingFinished.connect(
+            lambda: self._cfg.set("mem_export_addr", self.le_ex_addr.text())
+        )
+        self.le_ex_custom.editingFinished.connect(
+            lambda: self._cfg.set("mem_export_custom_size", self.le_ex_custom.text())
+        )
+        self.le_write_addr.editingFinished.connect(
+            lambda: self._cfg.set("mem_write_addr", self.le_write_addr.text())
+        )
         self.btn_goto.clicked.connect(self._on_goto_clicked)
         self.le_goto.returnPressed.connect(self._on_goto_clicked)
         self.btn_find_next.clicked.connect(self._on_find_next)
@@ -415,6 +442,7 @@ class MemoryViewerPage(QWidget):
             return
         if n in _BYTES_PER_ROW_OPTIONS:
             self._bytes_per_row = n
+            self._cfg.set("mem_bytes_per_row", n)
             self._rerender()
 
     def _on_read_clicked(self) -> None:
@@ -593,6 +621,7 @@ class MemoryViewerPage(QWidget):
             self._auto_refresh_timer.stop()
 
     def _on_refresh_sec_changed(self, sec: int) -> None:
+        self._cfg.set("mem_refresh_sec", sec)
         if self._auto_refresh_timer.isActive():
             self._auto_refresh_timer.start(sec * 1000)
 
@@ -710,6 +739,7 @@ class MemoryViewerPage(QWidget):
     def _on_preset_changed(self, idx: int) -> None:
         _, size = _SIZE_PRESETS[idx]
         self.le_ex_custom.setEnabled(size < 0)
+        self._cfg.set("mem_export_preset_idx", idx)
 
     def _on_choose_path(self) -> None:
         from datetime import datetime
