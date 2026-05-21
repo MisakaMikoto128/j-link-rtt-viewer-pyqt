@@ -42,7 +42,7 @@ from qfluentwidgets import (
 
 from core.ansi_parser import AnsiAttrs, parse_ansi
 from core.config_service import ConfigService
-from core.jlink_worker import JLinkWorker
+from core.jlink_worker import RESET_MODE_HALT, JLinkWorker
 
 from . import _infobar
 from ._scroll_helpers import make_transparent_scroll
@@ -264,8 +264,13 @@ class RTTMonitorPage(QWidget):
         self.btn_reset = PushButton(FluentIcon.SYNC, "重置目标", self)
         self.btn_reset.setToolTip("F4 重置目标")
         self.btn_reset.setEnabled(False)
+        self.btn_reset_halt = PushButton(FluentIcon.PAUSE_BOLD, "重置并暂停", self)
+        self.btn_reset_halt.setToolTip(
+            "复位 MCU 并停在复位状态（halt，不运行、不断开重连）")
+        self.btn_reset_halt.setEnabled(False)
         ctrl.addWidget(self.btn_connect)
         ctrl.addWidget(self.btn_reset)
+        ctrl.addWidget(self.btn_reset_halt)
         ctrl.addStretch(1)
         root.addLayout(ctrl)
 
@@ -441,6 +446,7 @@ class RTTMonitorPage(QWidget):
     def _wire_signals(self) -> None:
         self.btn_connect.clicked.connect(self._on_connect_clicked)
         self.btn_reset.clicked.connect(self._on_reset_clicked)
+        self.btn_reset_halt.clicked.connect(self._on_reset_halt_clicked)
         self.btn_clear.clicked.connect(self.display.clear)
         self.chk_pause.toggled.connect(self._worker.set_pause_receive_requested.emit)
         self.chk_power.toggled.connect(self._worker.set_power_output_requested.emit)
@@ -550,6 +556,10 @@ class RTTMonitorPage(QWidget):
         # auto_reconnect=reset+disconnect+sleep+reconnect）
         self._worker.reset_requested.emit(self._cfg.get("reset_mode"))
 
+    def _on_reset_halt_clicked(self) -> None:
+        """重置并暂停：固定 halt 意图，与配置的 reset_mode 无关。"""
+        self._worker.reset_requested.emit(RESET_MODE_HALT)
+
     def _on_channel_changed(self, ch: int) -> None:
         self._cfg.set("rtt_channel", ch)
         self._worker.set_rtt_channel_requested.emit(ch)
@@ -594,6 +604,7 @@ class RTTMonitorPage(QWidget):
         self.btn_connect.setText("断开")
         self.btn_connect.setIcon(FluentIcon.PAUSE)
         self.btn_reset.setEnabled(True)
+        self.btn_reset_halt.setEnabled(True)
         self.btn_send.setEnabled(True)
         self.chk_power.setEnabled(True)
         for key, lbl in self._info_labels.items():
@@ -615,6 +626,7 @@ class RTTMonitorPage(QWidget):
         self.btn_connect.setText("连接")
         self.btn_connect.setIcon(FluentIcon.PLAY)
         self.btn_reset.setEnabled(False)
+        self.btn_reset_halt.setEnabled(False)
         self.btn_send.setEnabled(False)
         self.chk_power.setEnabled(False)
         for lbl in self._info_labels.values():

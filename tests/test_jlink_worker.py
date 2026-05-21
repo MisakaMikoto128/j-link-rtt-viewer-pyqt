@@ -278,6 +278,24 @@ def test_reset_target(worker):
     jl.reset.assert_called_once()
 
 
+def test_reset_and_halt(worker):
+    """重置并暂停：reset 第二参 halt=True，且不触发断开/重连。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.3)
+    jl.reset.reset_mock()
+    jl.close.reset_mock()
+
+    from core.jlink_worker import RESET_MODE_HALT
+    w.reset_requested.emit(RESET_MODE_HALT)
+    _drain_events(0.3)
+
+    jl.reset.assert_called_once_with(0, True)  # halt=True
+    jl.close.assert_not_called()               # 不断开
+
+
 def test_set_channel_takes_effect(worker):
     w, jl = worker
     w.set_rtt_channel_requested.emit(5)

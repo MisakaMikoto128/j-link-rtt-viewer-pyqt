@@ -40,6 +40,9 @@ _STATE_DISCONNECTING = "DISCONNECTING"
 # reset_mode 公开常量：worker 派发 + UI 配置 + settings combo 三处都引用，避免散落硬字符串
 RESET_MODE_NORMAL = "normal"
 RESET_MODE_AUTO_RECONNECT = "auto_reconnect"
+# halt 不是用户可配的 reset_mode，而是「重置并暂停」按钮专用的一次性意图：
+# reset 后让 CPU 停在复位状态（不运行、不断开重连）。
+RESET_MODE_HALT = "halt"
 
 
 class JLinkWorker(QObject):
@@ -409,6 +412,8 @@ class JLinkWorker(QObject):
             return
         if mode == RESET_MODE_AUTO_RECONNECT:
             self._reset_with_reconnect()
+        elif mode == RESET_MODE_HALT:
+            self._reset_and_halt()
         else:
             self._reset_in_place()
 
@@ -430,6 +435,26 @@ class JLinkWorker(QObject):
         self.command_result.emit("reset", ok, err)
         if ok:
             self.log_message.emit("info", "目标设备已重置")
+
+    def _reset_and_halt(self) -> None:
+        """治法 C：reset 后让 CPU 停在复位状态（halt=True），不运行、不断开重连。
+
+        与「仅重置」不同——这里 reset 第二参 halt=True，CPU 复位后停在复位向量、
+        不执行启动代码，可用于上电瞬间状态调试。MCU 停着不跑，所以不会再产生
+        新 RTT 数据；保留 J-Link 会话与读线程，待用户后续操作恢复运行。
+        """
+        self._pause_read_thread()
+        ok, err = True, ""
+        try:
+            self.jlink.reset(0, True)  # halt=True
+        except Exception as e:
+            ok, err = False, str(e)
+            self._logger.error(f"重置并暂停失败：{e}")
+        finally:
+            self._restart_read_thread()  # 成败都要让读线程恢复
+        self.command_result.emit("reset", ok, err)
+        if ok:
+            self.log_message.emit("info", "目标设备已重置并暂停（halt，停在复位状态）")
 
     def _reset_with_reconnect(self) -> None:
         """治法 B：reset → disconnect → 等 boot → reconnect，整个会话重建。"""
