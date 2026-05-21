@@ -140,8 +140,12 @@ class _SummaryView(QWidget):
         layout.addLayout(form2)
 
         self.lbl_hint = CaptionLabel(
-            "占用按 arm-none-eabi-size (Berkeley) 口径汇总。"
-            "初始 SP / Reset_Handler 取最低 LOAD 段前两个字（Cortex-M 向量表）。")
+            "内存占用采用 arm-none-eabi-size 的 Berkeley 统计方式："
+            "text = 已加载的可执行/只读段（.text/.rodata/.isr_vector），"
+            "data = 已初始化可写段（.data），bss = 未初始化段（.bss）；"
+            "Flash = text + data，RAM = data + bss。"
+            "初始 SP / Reset_Handler 按 Cortex-M 约定，从最低 LOAD 段头 8 字节"
+            "读取（向量表第 0、1 个字），非 Cortex-M 架构无意义。")
         self.lbl_hint.setStyleSheet("color: #6b7280;")
         self.lbl_hint.setWordWrap(True)
         layout.addWidget(self.lbl_hint)

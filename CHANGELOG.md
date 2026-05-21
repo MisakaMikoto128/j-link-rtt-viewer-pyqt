@@ -9,7 +9,7 @@
 - **RTT 监控页新增「重置并暂停」按钮**（重置目标按钮旁）：复位 MCU 后让 CPU 停在复位状态（`reset(halt=True)`），不运行、不断开重连，用于调试上电瞬间状态。
 - **固件分析视图扩展**：烧录页底部符号面板用 SegmentedWidget 切换「符号 / 段 / 占用汇总」三视图，共用同一已选 axf/elf。
   - **段 Sections**：列出 SHF_ALLOC 段的地址 / 大小 / RWX / 对齐。
-  - **占用汇总 Summary**：按 arm-none-eabi-size 口径汇总 text/data/bss + Flash/RAM 总量；并显示 Entry point、Cortex-M 初始 SP、Reset_Handler。
+  - **占用汇总 Summary**：采用 arm-none-eabi-size 的 Berkeley 统计方式汇总 text/data/bss + Flash/RAM 总量；并显示 Entry point、Cortex-M 初始 SP、Reset_Handler。
   - **符号视图新增「% 段」列**：每个符号占其所属段大小的百分比（可数值排序）。
 
 ## [0.4.0] — 2026-05-21

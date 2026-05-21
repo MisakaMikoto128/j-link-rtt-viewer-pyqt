@@ -16,7 +16,7 @@
 | --- | --- |
 | **符号 Symbols** | 全部符号表（详见下文），含每个符号占所属段大小的「% 段」列。 |
 | **段 Sections** | 占用内存的段（`SHF_ALLOC`）：名称 / 地址 / 大小 / RWX 属性 / 对齐。看 `.text`/`.rodata`/`.data`/`.bss` 各占多少、落在哪。 |
-| **占用汇总 Summary** | 按 `arm-none-eabi-size`（Berkeley）口径汇总：**Flash = text+data**、**RAM = data+bss**，以及 text/data/bss 明细；外加 **Entry point**、Cortex-M **初始 SP**、**Reset_Handler**（取最低 LOAD 段向量表前两个字）。 |
+| **占用汇总 Summary** | 采用 `arm-none-eabi-size` 的 Berkeley 统计方式：**Flash = text+data**、**RAM = data+bss**，以及 text/data/bss 明细；外加 **Entry point**、Cortex-M **初始 SP**、**Reset_Handler**（按 Cortex-M 约定从最低 LOAD 段头读向量表第 0、1 个字，非 Cortex-M 无意义）。 |
 
 ---
 
