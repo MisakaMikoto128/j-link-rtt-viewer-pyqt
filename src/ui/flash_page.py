@@ -52,7 +52,7 @@ from core.flash_worker import (
 
 from . import _infobar
 from ._scroll_helpers import make_transparent_scroll
-from .symbol_table_view import SymbolTableView
+from .firmware_analysis_view import FirmwareAnalysisView
 
 
 _ERASE_LABELS = [
@@ -237,9 +237,9 @@ class FlashPage(QWidget):
         # 仅 axf/elf 时显示；其它格式 / 无文件时整卡隐藏
         self.symbol_card = CardWidget()
         layout = QVBoxLayout(self.symbol_card)
-        self.symbol_view = SymbolTableView()
-        self.symbol_view.table.setMinimumHeight(720)
-        layout.addWidget(self.symbol_view)
+        self.analysis_view = FirmwareAnalysisView()
+        self.analysis_view.setMinimumHeight(760)
+        layout.addWidget(self.analysis_view)
         self.symbol_card.setVisible(False)
         return self.symbol_card
 
@@ -424,7 +424,7 @@ class FlashPage(QWidget):
                 self.lbl_format.setText("(无)")
                 self.lbl_range.setText("(无)")
                 self.lbl_mtime_flag.setText("")
-                self.symbol_view.clear()
+                self.analysis_view.clear()
                 self.symbol_card.setVisible(False)
             return
         self._parse_and_show(text, silent=True)
@@ -450,7 +450,7 @@ class FlashPage(QWidget):
         except fp.FileParseError as e:
             self.lbl_format.setText("(解析失败)")
             self.lbl_range.setText("")
-            self.symbol_view.clear()
+            self.analysis_view.clear()
             self.symbol_card.setVisible(False)
             if not silent:
                 _infobar.error(self, "文件解析失败", str(e))
@@ -465,10 +465,10 @@ class FlashPage(QWidget):
 
         # 符号表：仅 ELF/axf 显示
         if info.fmt == FORMAT_ELF:
-            self.symbol_view.load(path)
+            self.analysis_view.load(path)
             self.symbol_card.setVisible(True)
         else:
-            self.symbol_view.clear()
+            self.analysis_view.clear()
             self.symbol_card.setVisible(False)
 
         # mtime 比对

@@ -18,6 +18,9 @@ from core.flash_file_parser import (
     convert_file,
     detect_format,
     parse_file,
+    read_elf_meta,
+    read_memory_summary,
+    read_sections,
     read_symbols,
     to_intelhex,
 )
@@ -161,3 +164,36 @@ def test_read_symbols_stripped_returns_empty():
 def test_read_symbols_rejects_non_elf():
     with pytest.raises(FileParseError):
         read_symbols(str(FIX / "blink.bin"))
+
+
+# ---- read_sections / read_memory_summary / read_elf_meta ----
+
+def test_read_sections_alloc_only():
+    secs = read_sections(str(FIX / "blink_sym.axf"))
+    # 只有 .text 是 ALLOC；.symtab/.strtab/.shstrtab 不是
+    assert [s.name for s in secs] == [".text"]
+    text = secs[0]
+    assert text.addr == 0x08000000
+    assert text.size == 64
+    assert text.flags == "R-X"
+    assert text.align == 4
+
+def test_read_sections_stripped_returns_empty():
+    assert read_sections(str(FIX / "blink.axf")) == []
+
+def test_read_memory_summary():
+    s = read_memory_summary(str(FIX / "blink_sym.axf"))
+    assert s.text == 64 and s.data == 0 and s.bss == 0
+    assert s.flash == 64 and s.ram == 0
+
+def test_read_elf_meta_entry_and_vector():
+    m = read_elf_meta(str(FIX / "blink_sym.axf"))
+    assert m.entry == 0x08000000
+    # payload = bytes(range(64))：前两字（小端）
+    assert m.initial_sp == 0x03020100
+    assert m.reset_handler == 0x07060504  # 偶数，去 thumb 位无变化
+
+def test_section_apis_reject_non_elf():
+    for fn in (read_sections, read_memory_summary, read_elf_meta):
+        with pytest.raises(FileParseError):
+            fn(str(FIX / "blink.bin"))

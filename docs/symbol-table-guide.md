@@ -1,9 +1,22 @@
-# 符号表查看器 — 使用指南
+# 固件分析（符号 / 段 / 占用汇总）— 使用指南
 
-> 选中 `.axf` / `.elf` 固件时，烧录页**底部**自动出现「符号表 Symbol Table」面板，
-> 直接读取 ELF 的 `.symtab`，无需 `arm-none-eabi-nm` / `fromelf` 等命令行工具。
+> 选中 `.axf` / `.elf` 固件时，烧录页**底部**自动出现固件分析面板，顶部用分段开关
+> 切换三个共用同一固件的视图：**符号 Symbols / 段 Sections / 占用汇总 Summary**。
+> 直接读取 ELF，无需 `arm-none-eabi-nm` / `size` / `fromelf` 等命令行工具。
 
 ![符号表查看器](../img/flashing2.png)
+
+> 仅 `.axf` / `.elf` 含这些信息；选中 `.hex` / `.bin` 时整个面板隐藏。
+
+---
+
+## 三个视图
+
+| 视图 | 内容 |
+| --- | --- |
+| **符号 Symbols** | 全部符号表（详见下文），含每个符号占所属段大小的「% 段」列。 |
+| **段 Sections** | 占用内存的段（`SHF_ALLOC`）：名称 / 地址 / 大小 / RWX 属性 / 对齐。看 `.text`/`.rodata`/`.data`/`.bss` 各占多少、落在哪。 |
+| **占用汇总 Summary** | 按 `arm-none-eabi-size`（Berkeley）口径汇总：**Flash = text+data**、**RAM = data+bss**，以及 text/data/bss 明细；外加 **Entry point**、Cortex-M **初始 SP**、**Reset_Handler**（取最低 LOAD 段向量表前两个字）。 |
 
 ---
 

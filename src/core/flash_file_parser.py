@@ -270,3 +270,131 @@ def read_symbols(path: str, func_and_data_only: bool = True) -> list[Symbol]:
             return out
     except ELFError as e:
         raise FileParseError(f"ELF 解析失败：{e}")
+
+
+# ---- 段表 / 内存占用 / ELF 元信息（仅 ELF/axf）----
+
+@dataclass(frozen=True)
+class Section:
+    name: str
+    addr: int
+    size: int
+    flags: str             # "R-X" / "RW-" / "RW-(nobits)" 风格的 RWX 串
+    align: int
+
+
+@dataclass(frozen=True)
+class MemorySummary:
+    text: int              # ALLOC 且非 WRITE（代码 + 只读数据）
+    data: int              # ALLOC + WRITE + 有文件内容（已初始化数据）
+    bss: int               # ALLOC + WRITE + 无文件内容（NOBITS）
+    flash: int             # text + data（烧进 Flash 的总量）
+    ram: int               # data + bss（运行期 RAM 占用）
+
+
+@dataclass(frozen=True)
+class ElfMeta:
+    entry: int             # ELF header e_entry
+    initial_sp: int | None  # Cortex-M 向量表 [0]
+    reset_handler: int | None  # Cortex-M 向量表 [1]（已去 thumb 位）
+
+
+# ELF section flags（避免依赖 elftools 常量名）
+_SHF_WRITE = 0x1
+_SHF_ALLOC = 0x2
+_SHF_EXEC = 0x4
+
+
+def _open_elf(path: str):
+    """打开并返回 (file_obj, ELFFile)；调用方负责 close file_obj。"""
+    fmt = detect_format(path)
+    if fmt != FORMAT_ELF:
+        raise FileParseError("仅 ELF/axf 文件含此信息")
+    try:
+        from elftools.elf.elffile import ELFFile
+    except ImportError as e:
+        raise FileParseError(f"pyelftools 未安装：{e}")
+    f = open(path, "rb")
+    return f, ELFFile(f)
+
+
+def read_sections(path: str) -> list[Section]:
+    """读 ELF 的内存相关段（SHF_ALLOC），按地址排序。无 section header 返回空。"""
+    from elftools.common.exceptions import ELFError
+    f, elf = _open_elf(path)
+    try:
+        out: list[Section] = []
+        for sec in elf.iter_sections():
+            flags = sec["sh_flags"]
+            if not (flags & _SHF_ALLOC):
+                continue
+            is_nobits = sec["sh_type"] == "SHT_NOBITS"
+            rwx = ("R"
+                   + ("W" if flags & _SHF_WRITE else "-")
+                   + ("X" if flags & _SHF_EXEC else "-"))
+            if is_nobits:
+                rwx += " (nobits)"
+            out.append(Section(
+                name=sec.name or "(无名)",
+                addr=sec["sh_addr"],
+                size=sec["sh_size"],
+                flags=rwx,
+                align=sec["sh_addralign"],
+            ))
+        out.sort(key=lambda s: s.addr)
+        return out
+    except ELFError as e:
+        raise FileParseError(f"ELF 解析失败：{e}")
+    finally:
+        f.close()
+
+
+def read_memory_summary(path: str) -> MemorySummary:
+    """按 arm-none-eabi-size (Berkeley) 口径汇总 text/data/bss + Flash/RAM。"""
+    from elftools.common.exceptions import ELFError
+    f, elf = _open_elf(path)
+    try:
+        text = data = bss = 0
+        for sec in elf.iter_sections():
+            flags = sec["sh_flags"]
+            if not (flags & _SHF_ALLOC):
+                continue
+            size = sec["sh_size"]
+            if sec["sh_type"] == "SHT_NOBITS":
+                bss += size
+            elif flags & _SHF_WRITE:
+                data += size
+            else:
+                text += size
+        return MemorySummary(
+            text=text, data=data, bss=bss,
+            flash=text + data, ram=data + bss,
+        )
+    except ELFError as e:
+        raise FileParseError(f"ELF 解析失败：{e}")
+    finally:
+        f.close()
+
+
+def read_elf_meta(path: str) -> ElfMeta:
+    """ELF entry + Cortex-M 初始 SP / Reset_Handler（向量表前两个字）。
+
+    SP/reset 取最低地址 LOAD 段的前 8 字节（小端）；非 Cortex-M 或段太小则为 None。
+    """
+    from elftools.common.exceptions import ELFError
+    f, elf = _open_elf(path)
+    try:
+        entry = elf.header["e_entry"]
+        sp = reset = None
+        load = [s for s in elf.iter_segments()
+                if s["p_type"] == "PT_LOAD" and s["p_filesz"] >= 8]
+        if load:
+            seg = min(load, key=lambda s: s["p_paddr"])
+            head = seg.data()[:8]
+            sp = int.from_bytes(head[0:4], "little")
+            reset = int.from_bytes(head[4:8], "little") & ~1  # 去 thumb 位
+        return ElfMeta(entry=entry, initial_sp=sp, reset_handler=reset)
+    except ELFError as e:
+        raise FileParseError(f"ELF 解析失败：{e}")
+    finally:
+        f.close()

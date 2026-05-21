@@ -31,9 +31,14 @@ from qfluentwidgets import (
     TableWidget,
 )
 
-from core.flash_file_parser import FileParseError, Symbol, read_symbols
+from core.flash_file_parser import (
+    FileParseError,
+    Symbol,
+    read_sections,
+    read_symbols,
+)
 
-_COLUMNS = ["Name", "Address", "Size", "Type", "Binding", "Section"]
+_COLUMNS = ["Name", "Address", "Size", "Type", "Binding", "Section", "% 段"]
 
 # 类别 chip：key, 英文, 中文, 图标, tooltip, 默认是否亮
 _CATEGORIES = [
@@ -95,6 +100,7 @@ class SymbolTableView(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._symbols: list[Symbol] = []  # 当前文件的全部符号
+        self._section_sizes: dict[str, int] = {}  # {段名: 段大小}，算占比用
         self._current_path: str | None = None
         self._cat_chips: dict[str, PillPushButton] = {}
         self._bind_chips: dict[str, PillPushButton] = {}
@@ -169,7 +175,7 @@ class SymbolTableView(QWidget):
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for i in range(1, len(_COLUMNS)):
             hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
-        for col, w in ((1, 110), (2, 70), (3, 90), (4, 90), (5, 140)):
+        for col, w in ((1, 110), (2, 70), (3, 90), (4, 90), (5, 140), (6, 70)):
             self.table.setColumnWidth(col, w)
         layout.addWidget(self.table, 1)
 
@@ -193,11 +199,16 @@ class SymbolTableView(QWidget):
             self._symbols = read_symbols(path, func_and_data_only=False)
         except FileParseError:
             self._symbols = []
+        try:
+            self._section_sizes = {s.name: s.size for s in read_sections(path)}
+        except FileParseError:
+            self._section_sizes = {}
         self._apply_filter()
 
     def clear(self) -> None:
         self._current_path = None
         self._symbols = []
+        self._section_sizes = {}
         self.table.setRowCount(0)
         self.lbl_count.setText("")
 
@@ -230,9 +241,19 @@ class SymbolTableView(QWidget):
             type_item.setForeground(fg)
             bind_item = QTableWidgetItem(s.bind)
             sec_item = QTableWidgetItem(s.section)
+            sec_size = self._section_sizes.get(s.section, 0)
+            if sec_size > 0:
+                pct = s.size * 100.0 / sec_size
+                pct_item = _NumericItem(f"{pct:.1f}%")
+                pct_item.setData(Qt.ItemDataRole.UserRole, pct)
+            else:
+                pct_item = _NumericItem("-")
+                pct_item.setData(Qt.ItemDataRole.UserRole, -1.0)
+            pct_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             for c, item in enumerate(
                     (name_item, addr_item, size_item, type_item,
-                     bind_item, sec_item)):
+                     bind_item, sec_item, pct_item)):
                 self.table.setItem(r, c, item)
         self.table.setSortingEnabled(True)
         self.table.setUpdatesEnabled(True)
