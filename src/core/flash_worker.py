@@ -117,7 +117,7 @@ class FlashWorker(QObject):
     def _run_flash(self, p: FlashParams) -> None:
         self.flash_started.emit()
         self._t_start = time.time()
-        self.flash_log.emit("info", f"=== Flash session ===")
+        self.flash_log.emit("info", "=== Flash session ===")
         self.flash_log.emit("info",
             f"File: {p.file_path} ({p.file_format})")
         self.flash_log.emit("info",
@@ -215,28 +215,15 @@ class FlashWorker(QObject):
     def _verify_bytewise(self, p: FlashParams) -> None:
         """按文件实际内容逐字节比对（在 flash_file 内含 CRC verify 之上的二次保险）。
 
-        pylink memory_read 一次最多读 4096 字节，分块。
+        ELF/HEX/BIN 的解析复用 flash_file_parser.to_intelhex（不在 worker 里
+        重复实现），再按 IntelHex 的连续段分块校验。pylink memory_read 一次
+        最多读 4096 字节，_verify_range 内分块。
         """
-        if p.file_format == FORMAT_BIN:
-            with open(p.file_path, "rb") as f:
-                expected = f.read()
-            base_addr = p.bin_start_addr
-            self._verify_range(base_addr, expected)
-        elif p.file_format == FORMAT_HEX:
-            from intelhex import IntelHex
-            ih = IntelHex()
-            ih.loadhex(p.file_path)
-            data = ih.tobinarray(start=ih.minaddr(), end=ih.maxaddr())
-            self._verify_range(ih.minaddr(), bytes(data))
-        else:  # FORMAT_ELF
-            from elftools.elf.elffile import ELFFile
-            with open(p.file_path, "rb") as f:
-                elf = ELFFile(f)
-                for seg in elf.iter_segments():
-                    if seg["p_type"] != "PT_LOAD" or seg["p_filesz"] == 0:
-                        continue
-                    data = seg.data()
-                    self._verify_range(seg["p_paddr"], data)
+        from core import flash_file_parser as fp
+        ih = fp.to_intelhex(p.file_path, p.bin_start_addr)
+        for start, end in ih.segments():  # end 为开区间
+            data = bytes(ih.tobinarray(start=start, end=end - 1))
+            self._verify_range(start, data)
 
     def _verify_range(self, addr: int, expected: bytes) -> None:
         CHUNK = 4096

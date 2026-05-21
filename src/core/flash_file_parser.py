@@ -149,6 +149,17 @@ def _import_intelhex():
         raise FileParseError(f"intelhex 未安装：{e}")
 
 
+def to_intelhex(path: str, bin_start_addr: int = 0):
+    """把任意支持格式（axf/elf/hex/bin）读成带地址的 IntelHex。
+
+    供格式转换（另存为）与烧录后校验复用，避免各处重复 ELF/HEX 解析。
+    bin_start_addr 仅在源是 .bin 时使用。
+    """
+    if not os.path.exists(path):
+        raise FileParseError(f"文件不存在：{path}")
+    return _to_intelhex(path, detect_format(path), bin_start_addr)
+
+
 def _to_intelhex(src_path: str, src_fmt: str, bin_start_addr: int):
     """把任意支持格式读成 IntelHex（含地址）。"""
     IntelHex = _import_intelhex()

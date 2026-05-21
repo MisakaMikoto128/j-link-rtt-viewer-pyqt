@@ -19,6 +19,7 @@ from core.flash_file_parser import (
     detect_format,
     parse_file,
     read_symbols,
+    to_intelhex,
 )
 
 FIX = Path(__file__).parent / "fixtures"
@@ -117,6 +118,22 @@ def test_convert_rejects_unsupported_target(tmp_path):
 def test_convert_nonexistent_source_raises(tmp_path):
     with pytest.raises(FileParseError):
         convert_file(str(FIX / "nope.bin"), str(tmp_path / "o.bin"))
+
+
+# ---- to_intelhex（转换 + 校验共用）----
+
+def test_to_intelhex_elf_segments():
+    ih = to_intelhex(str(FIX / "blink.axf"))
+    assert ih.segments() == [(0x08000000, 0x08000000 + 64)]
+    assert len(ih) == 64
+
+def test_to_intelhex_bin_uses_start_addr():
+    ih = to_intelhex(str(FIX / "blink.bin"), bin_start_addr=0x08000000)
+    assert ih.minaddr() == 0x08000000
+
+def test_to_intelhex_nonexistent_raises():
+    with pytest.raises(FileParseError):
+        to_intelhex(str(FIX / "nope.hex"))
 
 
 # ---- read_symbols ----

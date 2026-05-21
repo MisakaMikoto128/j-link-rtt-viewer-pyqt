@@ -57,14 +57,15 @@ _BINDINGS = [
     ("WEAK",   "Weak",   "弱",   "弱符号 (STB_WEAK)"),
 ]
 
-# Type 列 pill 配色：(底色, 文字色)
-_TYPE_COLORS = {
-    "FUNC":    ("#ede9fe", "#6d28d9"),   # 紫
-    "OBJECT":  ("#dbeafe", "#1d4ed8"),   # 蓝
-    "FILE":    ("#f1f5f9", "#475569"),   # 灰
-    "SECTION": ("#ccfbf1", "#0f766e"),   # 青
+# Type 列 pill 配色：(底色, 文字色)。QColor 在模块加载时构造一次，
+# 避免给上万行符号逐行 new QColor。
+_TYPE_QCOLORS = {
+    "FUNC":    (QColor("#ede9fe"), QColor("#6d28d9")),   # 紫
+    "OBJECT":  (QColor("#dbeafe"), QColor("#1d4ed8")),   # 蓝
+    "FILE":    (QColor("#f1f5f9"), QColor("#475569")),   # 灰
+    "SECTION": (QColor("#ccfbf1"), QColor("#0f766e")),   # 青
 }
-_TYPE_COLOR_DEFAULT = ("#f1f5f9", "#475569")
+_TYPE_QCOLOR_DEFAULT = (QColor("#f1f5f9"), QColor("#475569"))
 
 
 def _category_of(sym_type: str) -> str:
@@ -224,9 +225,9 @@ class SymbolTableView(QWidget):
             size_item.setData(Qt.ItemDataRole.UserRole, s.size)
             type_item = QTableWidgetItem(s.type)
             type_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            bg, fg = _TYPE_COLORS.get(s.type, _TYPE_COLOR_DEFAULT)
-            type_item.setBackground(QColor(bg))
-            type_item.setForeground(QColor(fg))
+            bg, fg = _TYPE_QCOLORS.get(s.type, _TYPE_QCOLOR_DEFAULT)
+            type_item.setBackground(bg)
+            type_item.setForeground(fg)
             bind_item = QTableWidgetItem(s.bind)
             sec_item = QTableWidgetItem(s.section)
             for c, item in enumerate(
