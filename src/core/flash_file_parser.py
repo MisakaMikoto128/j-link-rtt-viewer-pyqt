@@ -40,6 +40,16 @@ class FileInfo:
     notes: str             # 人类可读补充
 
 
+@dataclass(frozen=True)
+class Symbol:
+    name: str
+    address: int
+    size: int
+    type: str              # FUNC / OBJECT / SECTION / FILE / NOTYPE ...
+    bind: str              # LOCAL / GLOBAL / WEAK
+    section: str           # 所属 section 名（或 ABS / UNDEF / COMMON）
+
+
 def detect_format(path: str) -> str:
     """按后缀判断；不读文件头。未知后缀抛 FileParseError。"""
     ext = os.path.splitext(path)[1].lower()
@@ -127,3 +137,125 @@ def _parse_bin(path: str, start_addr: int) -> FileInfo:
         total_bytes=size,
         notes=f"raw {size} bytes",
     )
+
+
+# ---- 格式转换（另存为）----
+
+def _import_intelhex():
+    try:
+        from intelhex import IntelHex
+        return IntelHex
+    except ImportError as e:
+        raise FileParseError(f"intelhex 未安装：{e}")
+
+
+def _to_intelhex(src_path: str, src_fmt: str, bin_start_addr: int):
+    """把任意支持格式读成 IntelHex（含地址）。"""
+    IntelHex = _import_intelhex()
+    if src_fmt == FORMAT_ELF:
+        try:
+            from elftools.elf.elffile import ELFFile
+            from elftools.common.exceptions import ELFError
+        except ImportError as e:
+            raise FileParseError(f"pyelftools 未安装：{e}")
+        ih = IntelHex()
+        try:
+            with open(src_path, "rb") as f:
+                elf = ELFFile(f)
+                load = [s for s in elf.iter_segments()
+                        if s["p_type"] == "PT_LOAD" and s["p_filesz"] > 0]
+                if not load:
+                    raise FileParseError("ELF 中无 LOAD 段")
+                for s in load:
+                    ih.puts(s["p_paddr"], s.data())
+        except ELFError as e:
+            raise FileParseError(f"ELF 解析失败：{e}")
+        return ih
+    if src_fmt == FORMAT_HEX:
+        ih = IntelHex()
+        ih.loadhex(src_path)
+        return ih
+    # BIN
+    ih = IntelHex()
+    with open(src_path, "rb") as f:
+        ih.frombytes(f.read(), offset=bin_start_addr)
+    return ih
+
+
+def convert_file(src_path: str, dst_path: str, bin_start_addr: int = 0) -> str:
+    """把 src 固件转换并写到 dst。目标格式由 dst 后缀决定，仅支持 .bin / .hex。
+
+    bin_start_addr 仅在源是 .bin 时用于定位地址。返回 dst_path。
+    """
+    if not os.path.exists(src_path):
+        raise FileParseError(f"源文件不存在：{src_path}")
+    src_fmt = detect_format(src_path)
+    dst_ext = os.path.splitext(dst_path)[1].lower()
+    if dst_ext not in (".bin", ".hex"):
+        raise FileParseError(f"另存目标仅支持 .bin / .hex：{dst_ext or '(无后缀)'}")
+
+    ih = _to_intelhex(src_path, src_fmt, bin_start_addr)
+    if len(ih) == 0:
+        raise FileParseError("源文件没有可转换的数据")
+    try:
+        if dst_ext == ".bin":
+            ih.tobinfile(dst_path)
+        else:
+            ih.write_hex_file(dst_path)
+    except Exception as e:
+        raise FileParseError(f"写出失败：{e}")
+    return dst_path
+
+
+# ---- 符号表（仅 ELF/axf）----
+
+def _shndx_name(elf, shndx) -> str:
+    if isinstance(shndx, str):
+        return shndx.replace("SHN_", "")
+    try:
+        sec = elf.get_section(shndx)
+        return sec.name or str(shndx)
+    except Exception:
+        return str(shndx)
+
+
+def read_symbols(path: str, func_and_data_only: bool = True) -> list[Symbol]:
+    """读 ELF/axf 的 .symtab。func_and_data_only=True 时只保留 FUNC/OBJECT。
+
+    非 ELF 抛 FileParseError；ELF 被 strip（无 .symtab）时返回空列表。
+    """
+    fmt = detect_format(path)
+    if fmt != FORMAT_ELF:
+        raise FileParseError("仅 ELF/axf 文件含符号表")
+    try:
+        from elftools.elf.elffile import ELFFile
+        from elftools.common.exceptions import ELFError
+    except ImportError as e:
+        raise FileParseError(f"pyelftools 未安装：{e}")
+    try:
+        with open(path, "rb") as f:
+            elf = ELFFile(f)
+            symtab = elf.get_section_by_name(".symtab")
+            if symtab is None:
+                return []
+            out: list[Symbol] = []
+            for sym in symtab.iter_symbols():
+                if not sym.name:
+                    continue
+                t = sym["st_info"]["type"]
+                typ = t[4:] if t.startswith("STT_") else t
+                if func_and_data_only and typ not in ("FUNC", "OBJECT"):
+                    continue
+                b = sym["st_info"]["bind"]
+                bind = b[4:] if b.startswith("STB_") else b
+                out.append(Symbol(
+                    name=sym.name,
+                    address=sym["st_value"],
+                    size=sym["st_size"],
+                    type=typ,
+                    bind=bind,
+                    section=_shndx_name(elf, sym["st_shndx"]),
+                ))
+            return out
+    except ELFError as e:
+        raise FileParseError(f"ELF 解析失败：{e}")

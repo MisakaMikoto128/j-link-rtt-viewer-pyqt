@@ -15,8 +15,10 @@ from core.flash_file_parser import (
     FORMAT_HEX,
     FileInfo,
     FileParseError,
+    convert_file,
     detect_format,
     parse_file,
+    read_symbols,
 )
 
 FIX = Path(__file__).parent / "fixtures"
@@ -79,3 +81,66 @@ def test_file_info_is_frozen():
     info = FileInfo(fmt=FORMAT_BIN, addr_start=0, addr_end=1, total_bytes=1, notes="")
     with pytest.raises(Exception):  # dataclasses.FrozenInstanceError
         info.addr_start = 999  # type: ignore
+
+
+# ---- convert_file ----
+
+def test_convert_elf_to_bin(tmp_path):
+    out = tmp_path / "o.bin"
+    convert_file(str(FIX / "blink.axf"), str(out))
+    assert out.exists()
+    assert out.stat().st_size == 64
+
+def test_convert_elf_to_hex(tmp_path):
+    out = tmp_path / "o.hex"
+    convert_file(str(FIX / "blink.axf"), str(out))
+    info = parse_file(str(out))
+    assert info.fmt == FORMAT_HEX
+    assert info.addr_start == 0x08000000
+    assert info.total_bytes == 64
+
+def test_convert_hex_to_bin(tmp_path):
+    out = tmp_path / "h.bin"
+    convert_file(str(FIX / "blink.hex"), str(out))
+    assert out.stat().st_size == 64
+
+def test_convert_bin_to_hex_uses_start_addr(tmp_path):
+    out = tmp_path / "b.hex"
+    convert_file(str(FIX / "blink.bin"), str(out), bin_start_addr=0x08000000)
+    info = parse_file(str(out))
+    assert info.addr_start == 0x08000000
+
+def test_convert_rejects_unsupported_target(tmp_path):
+    with pytest.raises(FileParseError):
+        convert_file(str(FIX / "blink.bin"), str(tmp_path / "x.axf"))
+
+def test_convert_nonexistent_source_raises(tmp_path):
+    with pytest.raises(FileParseError):
+        convert_file(str(FIX / "nope.bin"), str(tmp_path / "o.bin"))
+
+
+# ---- read_symbols ----
+
+def test_read_symbols_func_and_data_only():
+    syms = read_symbols(str(FIX / "blink_sym.axf"), func_and_data_only=True)
+    names = {s.name for s in syms}
+    assert names == {"local_helper", "main", "g_counter"}  # FILE 被过滤
+    main = next(s for s in syms if s.name == "main")
+    assert main.address == 0x08000000
+    assert main.size == 32
+    assert main.type == "FUNC"
+    assert main.bind == "GLOBAL"
+    assert main.section == ".text"
+
+def test_read_symbols_all_includes_file():
+    syms = read_symbols(str(FIX / "blink_sym.axf"), func_and_data_only=False)
+    assert any(s.type == "FILE" and s.name == "blink.c" for s in syms)
+    assert len(syms) == 4
+
+def test_read_symbols_stripped_returns_empty():
+    # blink.axf 无 .symtab（无 section header）
+    assert read_symbols(str(FIX / "blink.axf")) == []
+
+def test_read_symbols_rejects_non_elf():
+    with pytest.raises(FileParseError):
+        read_symbols(str(FIX / "blink.bin"))

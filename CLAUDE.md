@@ -589,3 +589,15 @@ CLAUDE.md 另有相关条：「`EditableComboBox` 无 `clearEditText` AttributeE
 **处理**：单点抽 `_byte_start_col(col_in_row) -> int` 静态方法，两处都调。同模块里和反向函数 `_byte_offset_at` 放一起，方便看正反映射的对称性。
 
 参考：`src/ui/memory_viewer_page.py` `_byte_start_col` + 用法。
+
+---
+
+## `QTableWidget` 排序默认按字符串，数值列要用自定义 item
+
+**现象**：符号表「地址」「大小」列点列头排序，`0x08000000` 和 `0x20000000` 看着对，但 `100` 排在 `20` 后面、`0x9` 排在 `0x10` 前面——按 ASCII 字符串比的，不是数值。
+
+**原因**：`QTableWidgetItem` 的 `<` 默认比 `DisplayRole` 文本（字符串）。十六进制/十进制显示文本的字典序 ≠ 数值序。
+
+**处理**：自定义 `_NumericItem(QTableWidgetItem)` override `__lt__`，比存进 `Qt.ItemDataRole.UserRole` 的真实数值；显示文本仍是格式化后的 `0x…` / 十进制。重填表格时先 `setSortingEnabled(False)` 再逐行插入、插完再 `True`，避免边插边排导致行错位。
+
+参考：`src/ui/symbol_table_view.py` `_NumericItem` / `_apply_filter`。

@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### Features
+
+- **固件烧录页：固件另存为（格式转换）** — 浏览按钮右侧新增「另存为…」，把当前固件转换为 `.bin` / `.hex`（目标格式按所选后缀决定）。支持 axf/elf/hex/bin → bin、axf/elf/hex/bin → hex（bin 源用页面当前起始地址）。
+- **固件烧录页：axf/elf 符号表查看器** — 选中 ELF/axf 时页面底部显示符号表卡片：名称搜索过滤、列排序（地址/大小按数值）、复制选中行、标题显示统计；「显示全部符号」勾选可在「函数+全局变量」与「全部符号」间切换。
+
+### Fixes
+
+- **固件文件选择全链路失效** — `EditableComboBox.setCurrentText` 对不在 items 里的路径是 no-op，导致浏览/拖放选的文件不显示、历史列表空、烧录提示「未选择文件」。改为「更新最近文件 → 重建下拉 items → 按 index 选中」。
+- 烧录页 Speed 由 SpinBox 改为与 RTT 监控页一致的 ComboBox（默认速度列表）。
+- 文件更新提示 `updated` → `Updated`（首字母大写）。
+
 ## [0.3.0] — 2026-05-17
 
 ### Features

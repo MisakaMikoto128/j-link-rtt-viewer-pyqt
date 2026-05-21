@@ -42,6 +42,7 @@ from core.flash_worker import (
     ERASE_MODE_CHIP,
     ERASE_MODE_SECTOR,
     FORMAT_BIN,
+    FORMAT_ELF,
     POST_ACTION_NONE,
     POST_ACTION_RESET,
     POST_ACTION_RESET_RUN,
@@ -51,6 +52,7 @@ from core.flash_worker import (
 
 from . import _infobar
 from ._scroll_helpers import make_transparent_scroll
+from .symbol_table_view import SymbolTableView
 
 
 _ERASE_LABELS = [
@@ -96,6 +98,7 @@ class FlashPage(QWidget):
         v.addWidget(self._build_file_card())
         v.addWidget(self._build_options_card())
         v.addWidget(self._build_run_card())
+        v.addWidget(self._build_symbol_card())
         v.addStretch(1)
 
         self._connect_signals()
@@ -142,6 +145,9 @@ class FlashPage(QWidget):
         row.addWidget(self.cmb_file, 1)
         self.btn_browse = PushButton("浏览…")
         row.addWidget(self.btn_browse)
+        self.btn_save_as = PushButton("另存为…")
+        self.btn_save_as.setToolTip("把当前固件转换为 .bin / .hex 另存")
+        row.addWidget(self.btn_save_as)
         self.lbl_mtime_flag = BodyLabel("")
         self.lbl_mtime_flag.setStyleSheet("color: #d97706;")  # amber
         row.addWidget(self.lbl_mtime_flag)
@@ -227,6 +233,16 @@ class FlashPage(QWidget):
         layout.addWidget(self.txt_log)
         return card
 
+    def _build_symbol_card(self) -> QWidget:
+        # 仅 axf/elf 时显示；其它格式 / 无文件时整卡隐藏
+        self.symbol_card = CardWidget()
+        layout = QVBoxLayout(self.symbol_card)
+        self.symbol_view = SymbolTableView()
+        self.symbol_view.table.setMinimumHeight(240)
+        layout.addWidget(self.symbol_view)
+        self.symbol_card.setVisible(False)
+        return self.symbol_card
+
     # ---- 加载偏好到控件 ----
     def _load_prefs_into_controls(self) -> None:
         self.cmb_device.setCurrentText(self._cfg.get("flash_device_name"))
@@ -287,6 +303,7 @@ class FlashPage(QWidget):
 
         # 文件
         self.btn_browse.clicked.connect(self._on_browse)
+        self.btn_save_as.clicked.connect(self._on_save_as)
         # 用户从下拉选择 / 手动输入路径回车 → 仅解析显示
         self.cmb_file.currentTextChanged.connect(self._on_file_text_changed)
 
@@ -331,6 +348,40 @@ class FlashPage(QWidget):
             return
         self._select_file(path)
 
+    def _on_save_as(self) -> None:
+        """把当前固件转换为 .bin / .hex 另存（目标格式由所选后缀决定）。"""
+        src = self.cmb_file.currentText().strip()
+        if not src:
+            _infobar.warn(self, "未选择文件", "请先选择要转换的固件")
+            return
+        if not os.path.exists(src):
+            _infobar.warn(self, "文件不存在", src)
+            return
+
+        stem = Path(src).stem
+        start_dir = str(Path(src).with_name(stem + ".bin"))
+        dst, sel = QFileDialog.getSaveFileName(
+            self, "固件另存为", start_dir,
+            "Binary (*.bin);;Intel HEX (*.hex)")
+        if not dst:
+            return
+        # 用户没敲后缀时按所选过滤器补全
+        if not os.path.splitext(dst)[1]:
+            dst += ".hex" if "hex" in sel.lower() else ".bin"
+
+        try:
+            bin_addr = int(self.edit_bin_addr.text().strip(), 0)
+        except (ValueError, TypeError):
+            bin_addr = int(self._cfg.get("flash_bin_address"))
+
+        from core import flash_file_parser as fp
+        try:
+            fp.convert_file(src, dst, bin_start_addr=bin_addr)
+        except fp.FileParseError as e:
+            _infobar.error(self, "转换失败", str(e))
+            return
+        _infobar.success(self, "已另存", dst)
+
     def _rebuild_file_combo(self, recent: list[str], select_index: int = 0) -> None:
         """用最近文件列表重建下拉项并选中 select_index。
 
@@ -373,6 +424,8 @@ class FlashPage(QWidget):
                 self.lbl_format.setText("(无)")
                 self.lbl_range.setText("(无)")
                 self.lbl_mtime_flag.setText("")
+                self.symbol_view.clear()
+                self.symbol_card.setVisible(False)
             return
         self._parse_and_show(text, silent=True)
 
@@ -397,6 +450,8 @@ class FlashPage(QWidget):
         except fp.FileParseError as e:
             self.lbl_format.setText("(解析失败)")
             self.lbl_range.setText("")
+            self.symbol_view.clear()
+            self.symbol_card.setVisible(False)
             if not silent:
                 _infobar.error(self, "文件解析失败", str(e))
             return
@@ -408,12 +463,20 @@ class FlashPage(QWidget):
         # bin 模式才允许编辑 bin_addr
         self.edit_bin_addr.setEnabled(info.fmt == FORMAT_BIN)
 
+        # 符号表：仅 ELF/axf 显示
+        if info.fmt == FORMAT_ELF:
+            self.symbol_view.load(path)
+            self.symbol_card.setVisible(True)
+        else:
+            self.symbol_view.clear()
+            self.symbol_card.setVisible(False)
+
         # mtime 比对
         mt_map = dict(self._cfg.get("flash_recent_files_mtime") or {})
         cur_mt = os.path.getmtime(path)
         prev_mt = mt_map.get(path)
         if prev_mt is not None and cur_mt > prev_mt + 0.5:
-            self.lbl_mtime_flag.setText("● updated")
+            self.lbl_mtime_flag.setText("● Updated")
         else:
             self.lbl_mtime_flag.setText("")
         mt_map[path] = cur_mt
@@ -534,7 +597,8 @@ class FlashPage(QWidget):
 
     def _set_inputs_enabled(self, enabled: bool) -> None:
         for w in (self.cmb_device, self.rb_swd, self.rb_jtag, self.cmb_speed,
-                  self.cmb_file, self.btn_browse, self.edit_bin_addr,
+                  self.cmb_file, self.btn_browse, self.btn_save_as,
+                  self.edit_bin_addr,
                   self.cmb_erase, self.cmb_post, self.chk_verify):
             w.setEnabled(enabled)
         self.btn_flash.setEnabled(enabled)
