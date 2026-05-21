@@ -34,7 +34,6 @@ from qfluentwidgets import (
     PrimaryPushButton,
     PushButton,
     RadioButton,
-    SpinBox,
     StrongBodyLabel,
 )
 
@@ -122,10 +121,11 @@ class FlashPage(QWidget):
         row2.addWidget(self.rb_jtag)
         row2.addSpacing(20)
         row2.addWidget(BodyLabel("Speed (kHz):"))
-        self.spin_speed = SpinBox()
-        self.spin_speed.setRange(100, 50000)
-        self.spin_speed.setSingleStep(100)
-        row2.addWidget(self.spin_speed)
+        # 与 RTT 监控页完全一致：非编辑 ComboBox + 默认速度列表
+        self.cmb_speed = ComboBox()
+        for s in self._cfg.get_default_speeds():
+            self.cmb_speed.addItem(str(s))
+        row2.addWidget(self.cmb_speed)
         row2.addStretch(1)
         layout.addLayout(row2)
         return card
@@ -233,18 +233,18 @@ class FlashPage(QWidget):
         iface = self._cfg.get("flash_interface")
         self.rb_swd.setChecked(iface == "SWD")
         self.rb_jtag.setChecked(iface == "JTAG")
-        self.spin_speed.setValue(int(self._cfg.get("flash_speed")))
 
-        # 最近文件
+        # speed：与 RTT 页一致——若保存值不在默认列表则补一项再选中
+        cur_speed = str(int(self._cfg.get("flash_speed")))
+        if self.cmb_speed.findText(cur_speed) < 0:
+            self.cmb_speed.addItem(cur_speed)
+        self.cmb_speed.setCurrentText(cur_speed)
+
+        # 最近文件：重建下拉并选中第一个（阻塞信号，避免触发 currentTextChanged）
         recent = list(self._cfg.get("flash_recent_files") or [])
-        self.cmb_file.clear()
-        for p in recent:
-            self.cmb_file.addItem(p)
+        self._rebuild_file_combo(recent)
         if recent:
-            self.cmb_file.setCurrentIndex(0)
-            self._on_file_changed(recent[0], silent=True)
-        else:
-            self.cmb_file.setCurrentText("")
+            self._parse_and_show(recent[0], silent=True)
 
         # bin addr
         addr = int(self._cfg.get("flash_bin_address"))
@@ -275,8 +275,8 @@ class FlashPage(QWidget):
             lambda on: on and self._cfg.set("flash_interface", "SWD"))
         self.rb_jtag.toggled.connect(
             lambda on: on and self._cfg.set("flash_interface", "JTAG"))
-        self.spin_speed.valueChanged.connect(
-            lambda v: self._cfg.set("flash_speed", int(v)))
+        self.cmb_speed.currentTextChanged.connect(
+            lambda s: self._cfg.set("flash_speed", int(s)) if s.strip() else None)
         self.edit_bin_addr.editingFinished.connect(self._on_bin_addr_changed)
         self.cmb_erase.currentIndexChanged.connect(
             lambda i: self._cfg.set("flash_erase_mode", _ERASE_LABELS[i][1]))
@@ -287,7 +287,8 @@ class FlashPage(QWidget):
 
         # 文件
         self.btn_browse.clicked.connect(self._on_browse)
-        self.cmb_file.currentTextChanged.connect(self._on_file_changed)
+        # 用户从下拉选择 / 手动输入路径回车 → 仅解析显示
+        self.cmb_file.currentTextChanged.connect(self._on_file_text_changed)
 
         # 详情折叠
         self.btn_toggle_log.clicked.connect(self._toggle_log)
@@ -318,7 +319,7 @@ class FlashPage(QWidget):
         # 重解析当前文件以更新 range 显示
         cur = self.cmb_file.currentText().strip()
         if cur:
-            self._on_file_changed(cur, silent=True)
+            self._parse_and_show(cur, silent=True)
 
     def _on_browse(self) -> None:
         cur = self.cmb_file.currentText().strip()
@@ -328,18 +329,57 @@ class FlashPage(QWidget):
             "固件文件 (*.axf *.elf *.hex *.bin);;所有文件 (*.*)")
         if not path:
             return
-        self.cmb_file.setCurrentText(path)
-        # qfluentwidgets EditableComboBox.setCurrentText 只设 lineEdit 文本，
-        # 不会触发 currentTextChanged 信号 → 显式调一次 _on_file_changed
-        self._on_file_changed(path)
+        self._select_file(path)
 
-    def _on_file_changed(self, path: str, silent: bool = False) -> None:
-        """新文件选定：解析 → 填 format/range → 更新最近文件 + mtime 比对。"""
+    def _rebuild_file_combo(self, recent: list[str], select_index: int = 0) -> None:
+        """用最近文件列表重建下拉项并选中 select_index。
+
+        EditableComboBox.setCurrentText 对不在 items 里的文本是 no-op，
+        所以新文件必须先 addItem 再用 index 选中。重建期间阻塞信号，
+        避免误触发 currentTextChanged → _on_file_text_changed。
+        """
+        self.cmb_file.blockSignals(True)
+        try:
+            self.cmb_file.clear()
+            for p in recent:
+                self.cmb_file.addItem(p)
+            if recent and 0 <= select_index < len(recent):
+                self.cmb_file.setCurrentIndex(select_index)
+        finally:
+            self.cmb_file.blockSignals(False)
+
+    def _select_file(self, path: str) -> None:
+        """浏览 / 拖放选中新文件：置顶最近文件 + 重建下拉 + 显示 + 解析。"""
         path = path.strip()
         if not path:
-            self.lbl_format.setText("(无)")
-            self.lbl_range.setText("(无)")
-            self.lbl_mtime_flag.setText("")
+            return
+        if not os.path.exists(path):
+            _infobar.warn(self, "文件不存在", path)
+            return
+        recent = list(self._cfg.get("flash_recent_files") or [])
+        if path in recent:
+            recent.remove(path)
+        recent.insert(0, path)
+        recent = recent[:10]
+        self._cfg.set("flash_recent_files", recent)
+        self._rebuild_file_combo(recent, select_index=0)
+        self._parse_and_show(path, silent=False)
+
+    def _on_file_text_changed(self, text: str) -> None:
+        """用户从下拉选择 / 手动输入路径：仅解析显示，不改最近文件顺序。"""
+        text = text.strip()
+        if not text or not os.path.exists(text):
+            if not text:
+                self.lbl_format.setText("(无)")
+                self.lbl_range.setText("(无)")
+                self.lbl_mtime_flag.setText("")
+            return
+        self._parse_and_show(text, silent=True)
+
+    def _parse_and_show(self, path: str, silent: bool = False) -> None:
+        """解析固件 → 填 format/range → bin_addr 可编辑性 + mtime 比对。"""
+        path = path.strip()
+        if not path:
             return
         if not os.path.exists(path):
             if not silent:
@@ -368,20 +408,12 @@ class FlashPage(QWidget):
         # bin 模式才允许编辑 bin_addr
         self.edit_bin_addr.setEnabled(info.fmt == FORMAT_BIN)
 
-        # 更新最近文件
-        recent = list(self._cfg.get("flash_recent_files") or [])
-        if path in recent:
-            recent.remove(path)
-        recent.insert(0, path)
-        recent = recent[:10]
-        self._cfg.set("flash_recent_files", recent)
-
         # mtime 比对
         mt_map = dict(self._cfg.get("flash_recent_files_mtime") or {})
         cur_mt = os.path.getmtime(path)
         prev_mt = mt_map.get(path)
         if prev_mt is not None and cur_mt > prev_mt + 0.5:
-            self.lbl_mtime_flag.setText(f"● updated")
+            self.lbl_mtime_flag.setText("● updated")
         else:
             self.lbl_mtime_flag.setText("")
         mt_map[path] = cur_mt
@@ -438,7 +470,7 @@ class FlashPage(QWidget):
             return
 
         iface = "SWD" if self.rb_swd.isChecked() else "JTAG"
-        speed = int(self.spin_speed.value())
+        speed = int(self.cmb_speed.currentText())
         erase_mode = _ERASE_LABELS[self.cmb_erase.currentIndex()][1]
         post_action = _POST_LABELS[self.cmb_post.currentIndex()][1]
         verify = self.chk_verify.isChecked()
@@ -501,7 +533,7 @@ class FlashPage(QWidget):
             _infobar.error(self, "烧录失败", summary)
 
     def _set_inputs_enabled(self, enabled: bool) -> None:
-        for w in (self.cmb_device, self.rb_swd, self.rb_jtag, self.spin_speed,
+        for w in (self.cmb_device, self.rb_swd, self.rb_jtag, self.cmb_speed,
                   self.cmb_file, self.btn_browse, self.edit_bin_addr,
                   self.cmb_erase, self.cmb_post, self.chk_verify):
             w.setEnabled(enabled)
@@ -518,9 +550,7 @@ class FlashPage(QWidget):
             return
         path = urls[0].toLocalFile()
         if path.lower().endswith((".axf", ".elf", ".hex", ".bin")):
-            self.cmb_file.setCurrentText(path)
-            # 同 _on_browse：fluent EditableComboBox.setCurrentText 不发信号
-            self._on_file_changed(path)
+            self._select_file(path)
             e.acceptProposedAction()
 
     def shutdown(self) -> None:
