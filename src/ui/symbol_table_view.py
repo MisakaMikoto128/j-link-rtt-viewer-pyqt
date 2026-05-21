@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel,
     CheckBox,
+    ComboBox,
     PushButton,
     SearchLineEdit,
     StrongBodyLabel,
@@ -28,6 +29,8 @@ from qfluentwidgets import (
 from core.flash_file_parser import FileParseError, Symbol, read_symbols
 
 _COLUMNS = ["Name", "Address", "Size", "Type", "Section"]
+_ALL_TYPES = "全部类型"
+_ALL_BINDS = "全部绑定"
 
 
 class _NumericItem(QTableWidgetItem):
@@ -59,8 +62,19 @@ class SymbolTableView(QWidget):
         self.search = SearchLineEdit()
         self.search.setPlaceholderText("按名称过滤…")
         self.search.setClearButtonEnabled(True)
-        self.search.setMaximumWidth(280)
+        self.search.setMaximumWidth(240)
         top.addWidget(self.search)
+
+        top.addWidget(BodyLabel("类型"))
+        self.cmb_type = ComboBox()
+        self.cmb_type.setMinimumWidth(110)
+        top.addWidget(self.cmb_type)
+
+        top.addWidget(BodyLabel("绑定"))
+        self.cmb_bind = ComboBox()
+        self.cmb_bind.setMinimumWidth(110)
+        top.addWidget(self.cmb_bind)
+
         self.chk_all = CheckBox("显示全部符号")
         top.addWidget(self.chk_all)
         top.addStretch(1)
@@ -82,6 +96,8 @@ class SymbolTableView(QWidget):
         layout.addWidget(self.table, 1)
 
         self.search.textChanged.connect(self._apply_filter)
+        self.cmb_type.currentTextChanged.connect(self._apply_filter)
+        self.cmb_bind.currentTextChanged.connect(self._apply_filter)
         self.chk_all.toggled.connect(self._reload)
         self.btn_copy.clicked.connect(self._copy_selected)
 
@@ -98,6 +114,7 @@ class SymbolTableView(QWidget):
         self._symbols = []
         self.table.setRowCount(0)
         self.lbl_title.setText("符号表")
+        self._repopulate_filter_combos()
 
     # ---- 内部 ----
     def _reload(self) -> None:
@@ -111,11 +128,35 @@ class SymbolTableView(QWidget):
             )
         except FileParseError:
             self._symbols = []
+        self._repopulate_filter_combos()
         self._apply_filter()
+
+    def _repopulate_filter_combos(self) -> None:
+        """按当前符号集刷新「类型 / 绑定」下拉，尽量保留原选择。"""
+        for combo, attr, all_label in (
+                (self.cmb_type, "type", _ALL_TYPES),
+                (self.cmb_bind, "bind", _ALL_BINDS)):
+            prev = combo.currentText()
+            values = sorted({getattr(s, attr) for s in self._symbols})
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem(all_label)
+            for v in values:
+                combo.addItem(v)
+            idx = combo.findText(prev)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
 
     def _apply_filter(self) -> None:
         kw = self.search.text().strip().lower()
-        rows = [s for s in self._symbols if not kw or kw in s.name.lower()]
+        sel_type = self.cmb_type.currentText()
+        sel_bind = self.cmb_bind.currentText()
+        rows = [
+            s for s in self._symbols
+            if (not kw or kw in s.name.lower())
+            and (sel_type in ("", _ALL_TYPES) or s.type == sel_type)
+            and (sel_bind in ("", _ALL_BINDS) or s.bind == sel_bind)
+        ]
 
         # 重填期间关排序，避免边插边排乱序
         self.table.setSortingEnabled(False)

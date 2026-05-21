@@ -238,7 +238,7 @@ class FlashPage(QWidget):
         self.symbol_card = CardWidget()
         layout = QVBoxLayout(self.symbol_card)
         self.symbol_view = SymbolTableView()
-        self.symbol_view.table.setMinimumHeight(240)
+        self.symbol_view.table.setMinimumHeight(720)
         layout.addWidget(self.symbol_view)
         self.symbol_card.setVisible(False)
         return self.symbol_card
