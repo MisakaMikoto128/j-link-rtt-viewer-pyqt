@@ -161,10 +161,15 @@ class SymbolTableView(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().setVisible(False)
+        # 列宽用固定/可拖动而非 ResizeToContents：后者每次模型变更都要扫描
+        # 全表所有行重算列宽，大符号表(上万行)切换 chip 时会明显卡顿。
+        # Name 拉伸占满，其余给定合理初始宽度、用户可拖。
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for i in range(1, len(_COLUMNS)):
-            hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+            hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
+        for col, w in ((1, 110), (2, 70), (3, 90), (4, 90), (5, 140)):
+            self.table.setColumnWidth(col, w)
         layout.addWidget(self.table, 1)
 
         # ---- 底部说明 ----
@@ -207,7 +212,8 @@ class SymbolTableView(QWidget):
             and s.bind in active_binds
         ]
 
-        # 重填期间关排序，避免边插边排乱序
+        # 重填期间关刷新 + 关排序：避免逐行触发重绘/边插边排乱序
+        self.table.setUpdatesEnabled(False)
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(rows))
         for r, s in enumerate(rows):
@@ -228,6 +234,7 @@ class SymbolTableView(QWidget):
                      bind_item, sec_item)):
                 self.table.setItem(r, c, item)
         self.table.setSortingEnabled(True)
+        self.table.setUpdatesEnabled(True)
 
         total = len(self._symbols)
         shown = len(rows)
