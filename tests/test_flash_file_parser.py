@@ -81,6 +81,20 @@ def test_parse_corrupt_elf_raises(tmp_path):
     with pytest.raises(FileParseError):
         parse_file(str(p))
 
+
+@pytest.mark.parametrize("reader", [read_sections, read_memory_summary, read_elf_meta])
+def test_elf_readers_wrap_corrupt_file_as_fileparseerror(tmp_path, reader):
+    """非 ELF 内容（但扩展名是 .axf）→ _open_elf 应在内部 catch ELFError 并 close 文件，
+    抛 FileParseError；调用方不必再处理裸 ELFError。
+
+    回归 _open_elf 漏 catch ELFError 的 bug：之前 ELFFile 构造抛 ELFError 直接逃出去，
+    UI 层的 SymbolTableView.load 完全没机会消化。
+    """
+    p = tmp_path / "fake.axf"
+    p.write_bytes(b"not an elf at all")
+    with pytest.raises(FileParseError):
+        reader(str(p))
+
 def test_file_info_is_frozen():
     info = FileInfo(fmt=FORMAT_BIN, addr_start=0, addr_end=1, total_bytes=1, notes="")
     with pytest.raises(Exception):  # dataclasses.FrozenInstanceError

@@ -82,6 +82,12 @@ _ANSI_COLOR_MAP = {
     "bright_white": "#ffffff",
 }
 
+# 预构造 QColor：_fmt 在 RTT 高吞吐场景下每段都调，QColor(hex_string) 每次都要解析
+# 字符串 + 申请对象。模块加载时一次性把 16 个调色板色 + 两个默认色都建好，热路径只查 dict。
+_ANSI_QCOLORS: dict[str, QColor] = {k: QColor(v) for k, v in _ANSI_COLOR_MAP.items()}
+_DEFAULT_FG_QCOLOR = QColor("#dddddd")
+_DEFAULT_BG_QCOLOR = QColor("#222222")
+
 
 class _VResizeHandle(QFrame):
     """display 下方的水平拖动条 —— 极简观感，跟随主题色。
@@ -754,11 +760,13 @@ class RTTMonitorPage(QWidget):
         self.le_mark.setCurrentText("")
 
     def _fmt(self, attrs: AnsiAttrs) -> QTextCharFormat:
+        # 注意：QColor 必须从预构造表查（_ANSI_QCOLORS），不要 QColor(hex_string)。
+        # RTT 高吞吐时本函数每段都调，每次构造 QColor 是不必要的 syscall + alloc。
         fmt = QTextCharFormat()
         if attrs.fg:
-            fmt.setForeground(QColor(_ANSI_COLOR_MAP.get(attrs.fg, "#dddddd")))
+            fmt.setForeground(_ANSI_QCOLORS.get(attrs.fg, _DEFAULT_FG_QCOLOR))
         if attrs.bg:
-            fmt.setBackground(QColor(_ANSI_COLOR_MAP.get(attrs.bg, "#222222")))
+            fmt.setBackground(_ANSI_QCOLORS.get(attrs.bg, _DEFAULT_BG_QCOLOR))
         if attrs.bold:
             # 用 setFontWeight 而非 setFont(fmt.font())——后者会把字号也设回
             # QTextCharFormat 默认值（通常远小于 widget 字号），导致 bold

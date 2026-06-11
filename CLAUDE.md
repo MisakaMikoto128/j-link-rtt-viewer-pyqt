@@ -601,3 +601,69 @@ CLAUDE.md 另有相关条：「`EditableComboBox` 无 `clearEditText` AttributeE
 **处理**：自定义 `_NumericItem(QTableWidgetItem)` override `__lt__`，比存进 `Qt.ItemDataRole.UserRole` 的真实数值；显示文本仍是格式化后的 `0x…` / 十进制。重填表格时先 `setSortingEnabled(False)` 再逐行插入、插完再 `True`，避免边插边排导致行错位。
 
 参考：`src/ui/symbol_table_view.py` `_NumericItem` / `_apply_filter`。
+
+---
+
+## `_open_elf` 必须自己 catch `ELFError`，不能依赖调用方包 try
+
+**现象**：用户在烧录页选了一个名字叫 `xxx.axf` 但实际不是 ELF 的文件（误改名、损坏、半截下载），`SymbolTableView.load()` 直接抛 `elftools.common.exceptions.ELFError: Magic number does not match`，UI 端崩出红色弹窗，体验差。
+
+**原因**：`flash_file_parser._open_elf` 的代码长这样：
+```python
+f = open(path, "rb")
+return f, ELFFile(f)              # ← ELFError 在这里
+```
+调用方（`read_sections` / `read_memory_summary` / `read_elf_meta`）虽然在外层套了 `try ... except ELFError → FileParseError`，但 ELFError 是在 `_open_elf` 内部抛的，那里只 catch 了 `ImportError`，**异常会直接逃出 `_open_elf`**，从外层 try 的「调用 `_open_elf`」这一行就已经穿过去了——外层的 except 根本接不到。同时 `f` 还被开着没 close。
+
+**处理**：所有「打开+解析」一体的 helper（这里是 `_open_elf`）必须**自己**包 try/except + 失败时 close 文件，再统一抛领域内的 `FileParseError`：
+```python
+f = open(path, "rb")
+try:
+    return f, ELFFile(f)
+except ELFError as e:
+    f.close()
+    raise FileParseError(f"ELF 解析失败：{e}")
+```
+
+**通用规则**：调用方的 try/except 只对「**直接由调用方代码抛出**」的异常有效；helper 内构造对象时已经抛了的异常，与外层 try 的语义上「同一行」，但实际栈帧是 helper 内的——只有 helper 自己能管。**「open + 立刻 parse」类 helper 一律自带 catch + close**。
+
+参考：`src/core/flash_file_parser.py` `_open_elf`、`tests/test_flash_file_parser.py` `test_elf_readers_wrap_corrupt_file_as_fileparseerror`、`tests/test_symbol_table_view.py` `test_load_corrupt_elf_does_not_crash`。
+
+---
+
+## `EditableComboBox.setCurrentText(任意路径)` 在多处都会踩坑，要全局统一走 `setText` 或「先 addItem 再 setCurrentIndex」
+
+**现象**：写测试时 `page.le_send.setCurrentText("hello world")` 之后 `page.le_send.currentText()` 仍是 `""`，发送按钮不发数据。同样的形态在烧录页文件选择 `cmb_file.setCurrentText(path)` 也踩过（commit `a068fd0`）。两处不同模块、不同上下文，根因是同一个 fluent 实现细节。
+
+**原因**：CLAUDE.md 另有详细条目（「`EditableComboBox.setCurrentText(text)` 对不在 items 里的文本是 no-op」）。简单说：`setCurrentText` 继承自 `ComboBoxBase`，行为是 `if findText(text) >= 0: setCurrentIndex(idx) else: 什么都不做`——**不**直接设 lineEdit 文本。
+
+**处理**：分两种用法：
+
+1. **业务持久化路径**（如最近文件）：先 `addItem(path) → setCurrentIndex(0)`，统一走 `_rebuild_file_combo` helper（参考 `src/ui/flash_page.py` `_rebuild_file_combo`）。
+
+2. **测试 / 临时给输入框塞文本**：用 `EditableComboBox.setText(s)`（fluent 暴露的直通 LineEdit 的方法），**不要**用 `setCurrentText`。`page.le_send.setText("hello")` 直接生效。
+
+**反模式**：测试时图省事写 `page.le_send.lineEdit().setText(...)` —— fluent `EditableComboBox` 没有 `lineEdit()` 方法（不是标准 `QComboBox`），AttributeError。
+
+参考：`tests/test_rtt_monitor_page.py`（统一用 `setText`）；`src/ui/flash_page.py` `_rebuild_file_combo`、`src/ui/rtt_monitor_page.py:582` `setCurrentText("")` 用于清空（空串与已有空状态相等，等价于 no-op，刚好对）。
+
+---
+
+## 高频热路径上构造 QColor 是不必要的 alloc，预构造放模块级 dict
+
+**现象**：RTT 监控页 `_fmt(attrs)` 在每个 ANSI 段都调，原实现 `QColor(_ANSI_COLOR_MAP.get(attrs.fg, "#dddddd"))` —— 每次都要把 hex 字符串解析一次、申请一个 QColor 对象。高吞吐流（10kHz+ 段）下是可观的 alloc 噪声。
+
+**原因**：调色板是常量集合（16 色 ANSI + 默认前/背景），运行期不会变。每段都 `QColor(hex)` 是把模块加载就能做的事推到热路径上。
+
+**处理**：模块加载时把 `QColor(hex)` 全部构造好，热路径只查 dict：
+```python
+_ANSI_QCOLORS: dict[str, QColor] = {k: QColor(v) for k, v in _ANSI_COLOR_MAP.items()}
+_DEFAULT_FG_QCOLOR = QColor("#dddddd")
+
+# _fmt 里：
+fmt.setForeground(_ANSI_QCOLORS.get(attrs.fg, _DEFAULT_FG_QCOLOR))
+```
+
+微基准 1.51× 加速（200k 次 600ms → 400ms）。同模式适用于符号表 Type pill 配色（已用），任何「枚举键 → QColor」映射都该模块级预构造。
+
+参考：`src/ui/rtt_monitor_page.py` `_ANSI_QCOLORS` / `_fmt`、`src/ui/symbol_table_view.py` `_TYPE_QCOLORS`。

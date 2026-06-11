@@ -12,6 +12,22 @@
   - **占用汇总 Summary**：采用 arm-none-eabi-size 的 Berkeley 统计方式汇总 text/data/bss + Flash/RAM 总量；并显示 Entry point、Cortex-M 初始 SP、Reset_Handler。
   - **符号视图新增「% 段」列**：每个符号占其所属段大小的百分比（可数值排序）。
 
+### Fixes
+
+- **`_open_elf` 漏 catch `ELFError`**：内容损坏但扩展名是 `.axf` 的文件，会让 `SymbolTableView.load` / `read_sections` / `read_memory_summary` / `read_elf_meta` 直接抛 `ELFError`，UI 层无机会消化。修复后 `_open_elf` 内部 catch + close 文件句柄，统一抛 `FileParseError`。
+
+### Performance
+
+- **RTT `_fmt` 预构造 QColor**：16 色 ANSI 调色板 + 默认前/背景在模块加载时一次性 `QColor(hex)` 构造好，热路径直接查 dict。微基准 1.51× 提速；高吞吐流减少每段的 alloc/parse 开销。
+
+### Testing
+
+- **新增 pytest-qt + offscreen UI 测试脚手架**：`QT_QPA_PLATFORM=offscreen` 全程无窗口、无焦点，CI 友好。
+  - 共 50 个 UI 用例，4 秒内跑完：SymbolTableView (7)、FlashPage (7)、RTTMonitorPage (12)、MemoryViewerPage (11)、SettingsPage (10)、截图烟雾 (3)。
+  - 公共 fixture：`isolated_appdata`（monkeypatch APPDATA → tmp，不污染真 `user_prefs.json`）、`fixtures_dir`、`screenshot_dir`。
+  - 跨页 worker 替身：`FakeWorker` / `FakeMemWorker` 复刻 JLinkWorker 信号集，解耦真 pylink / QThread。
+  - `_open_elf` 的 `ELFError` 漏 catch 由本次 `test_load_corrupt_elf_does_not_crash` 首次复现。
+
 ## [0.4.0] — 2026-05-21
 
 ### Features
