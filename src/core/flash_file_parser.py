@@ -306,16 +306,25 @@ _SHF_EXEC = 0x4
 
 
 def _open_elf(path: str):
-    """打开并返回 (file_obj, ELFFile)；调用方负责 close file_obj。"""
+    """打开并返回 (file_obj, ELFFile)；调用方负责 close file_obj。
+
+    ELFFile 构造时若魔数不对会抛 ELFError，必须在这里捕获并
+    及时 close 已打开的文件句柄——否则调用方的 try/except 是空操作。
+    """
     fmt = detect_format(path)
     if fmt != FORMAT_ELF:
         raise FileParseError("仅 ELF/axf 文件含此信息")
     try:
+        from elftools.common.exceptions import ELFError
         from elftools.elf.elffile import ELFFile
     except ImportError as e:
         raise FileParseError(f"pyelftools 未安装：{e}")
     f = open(path, "rb")
-    return f, ELFFile(f)
+    try:
+        return f, ELFFile(f)
+    except ELFError as e:
+        f.close()
+        raise FileParseError(f"ELF 解析失败：{e}")
 
 
 def read_sections(path: str) -> list[Section]:
