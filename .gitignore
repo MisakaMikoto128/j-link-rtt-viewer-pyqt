@@ -44,3 +44,5 @@ Thumbs.db
 # 临时/缓存
 *.tmp
 *.bak
+.mimocode/mimocode.json
+AGENTS.md
