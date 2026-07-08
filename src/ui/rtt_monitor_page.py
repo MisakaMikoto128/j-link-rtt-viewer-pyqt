@@ -36,6 +36,7 @@ from qfluentwidgets import (
     PushButton,
     SpinBox,
     StrongBodyLabel,
+    ToolTipFilter,
     TransparentToolButton,
     themeColor,
 )
@@ -51,6 +52,12 @@ from .widgets.search_bar import SearchBar
 
 _FONT_SIZE_MIN = 8
 _FONT_SIZE_MAX = 32
+
+
+def _tip(widget: QWidget, text: str, duration: int = 300) -> None:
+    """给控件安装 QFluentWidgets 风格的 tooltip（圆角 + 阴影）。"""
+    widget.setToolTip(text)
+    widget.installEventFilter(ToolTipFilter(widget, duration))
 
 
 def _human_bytes(n: int) -> str:
@@ -267,13 +274,12 @@ class RTTMonitorPage(QWidget):
         ctrl.addWidget(self.sp_channel)
 
         self.btn_connect = PrimaryPushButton(FluentIcon.PLAY, "连接", self)
-        self.btn_connect.setToolTip("F2 连接 / F3 断开")
+        _tip(self.btn_connect, "F2 连接 / F3 断开")
         self.btn_reset = PushButton(FluentIcon.SYNC, "重置目标", self)
-        self.btn_reset.setToolTip("F4 重置目标")
+        _tip(self.btn_reset, "F4 重置目标")
         self.btn_reset.setEnabled(False)
         self.btn_reset_halt = PushButton(FluentIcon.PAUSE_BOLD, "重置并暂停", self)
-        self.btn_reset_halt.setToolTip(
-            "复位 MCU 并停在复位状态（halt，不运行、不断开重连）")
+        _tip(self.btn_reset_halt, "复位 MCU 并停在复位状态（halt，不运行、不断开重连）")
         self.btn_reset_halt.setEnabled(False)
         ctrl.addWidget(self.btn_connect)
         ctrl.addWidget(self.btn_reset)
@@ -333,16 +339,16 @@ class RTTMonitorPage(QWidget):
         self.chk_power = CheckBox("电源输出")
         self.chk_power.setEnabled(False)
         self.chk_log_rec = CheckBox("实时日志记录")
-        # 字号调整按钮（替代 Ctrl+滚轮，避免和滚动冲突）
-        self.btn_font_minus = PushButton("A−", self)
-        self.btn_font_minus.setFixedWidth(36)
-        self.btn_font_minus.setToolTip("字号 −1")
+        # 字号调整按钮（替代 Ctrl+滚轮，避免和滚动冲突）—— 使用图标替代文字
+        self.btn_font_minus = TransparentToolButton(FluentIcon.ZOOM_OUT, self)
+        self.btn_font_minus.setFixedSize(30, 30)
+        _tip(self.btn_font_minus, "字号 −1")
         self.lbl_font_size = BodyLabel(f"{self._cfg.get('font_size')}")
         self.lbl_font_size.setAlignment(Qt.AlignCenter)
         self.lbl_font_size.setFixedWidth(28)
-        self.btn_font_plus = PushButton("A+", self)
-        self.btn_font_plus.setFixedWidth(36)
-        self.btn_font_plus.setToolTip("字号 +1")
+        self.btn_font_plus = TransparentToolButton(FluentIcon.ZOOM_IN, self)
+        self.btn_font_plus.setFixedSize(30, 30)
+        _tip(self.btn_font_plus, "字号 +1")
         # 插入会话标记：输入框 + 按钮，在 RTT 显示区插入分隔行
         self.le_mark = EditableComboBox(self)
         self.le_mark.setPlaceholderText("会话标记文本…")
@@ -350,7 +356,7 @@ class RTTMonitorPage(QWidget):
         # 最近 10 条标记历史（不持久化，会话内可重用）
         self._mark_history: list[str] = []
         self.btn_mark = PushButton("插入标记", self)
-        self.btn_mark.setToolTip("在显示区插入一行分隔标记，便于会话分段")
+        _tip(self.btn_mark, "在显示区插入一行分隔标记，便于会话分段")
         self.btn_clear = PushButton("清除", self)
         self.btn_save = PushButton("💾 保存当前", self)
         opt.addWidget(self.chk_auto_scroll)
@@ -542,10 +548,10 @@ class RTTMonitorPage(QWidget):
         """按 cfg.reset_mode 刷新 btn_reset 文字 + tooltip。"""
         if mode == "auto_reconnect":
             self.btn_reset.setText("重置(重连)")
-            self.btn_reset.setToolTip("F4 重置目标 — 当前模式：断开+重连（更可靠）")
+            _tip(self.btn_reset, "F4 重置目标 — 当前模式：断开+重连（更可靠）")
         else:
             self.btn_reset.setText("重置目标")
-            self.btn_reset.setToolTip("F4 重置目标 — 当前模式：仅重置 MCU")
+            _tip(self.btn_reset, "F4 重置目标 — 当前模式：仅重置 MCU")
 
     def _on_reset_clicked(self) -> None:
         # auto_reconnect=reset+disconnect+sleep+reconnect）
