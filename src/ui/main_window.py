@@ -68,6 +68,8 @@ class MainWindow(FluentWindow):
         QShortcut(QKeySequence("F2"), self, self.rtt_page.on_shortcut_connect)
         QShortcut(QKeySequence("F3"), self, self.rtt_page.on_shortcut_disconnect)
         QShortcut(QKeySequence("F4"), self, self.rtt_page.on_shortcut_reset)
+        QShortcut(QKeySequence("Ctrl+F"), self, self.rtt_page.on_shortcut_find)
+        QShortcut(QKeySequence("Ctrl+H"), self, self.rtt_page.on_shortcut_replace)
 
         # 7. 窗口属性
         self.setWindowTitle("J-Link RTT Viewer")
