@@ -19,9 +19,16 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     FluentIcon,
     LineEdit,
+    ToolTipFilter,
     TransparentToolButton,
     isDarkTheme,
 )
+
+
+def _tip(widget: QWidget, text: str, duration: int = 300) -> None:
+    """给控件安装 QFluentWidgets 风格的 tooltip（圆角 + 阴影）。"""
+    widget.setToolTip(text)
+    widget.installEventFilter(ToolTipFilter(widget, duration))
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +68,7 @@ class _ToggleButton(TransparentToolButton):
     def __init__(self, text: str, tip: str, parent: QWidget) -> None:
         super().__init__(parent)
         self._text = text
-        self.setToolTip(tip)
+        _tip(self, tip)
         self.setFixedSize(28, 24)
         self.setCheckable(True)
 
@@ -143,21 +150,21 @@ class SearchBar(QWidget):
         self.lbl_match.setAlignment(Qt.AlignCenter)
 
         self.btn_prev = TransparentToolButton(FluentIcon.UP, self)
-        self.btn_prev.setToolTip("上一个 (Shift+Enter)")
+        _tip(self.btn_prev, "上一个 (Shift+Enter)")
         self.btn_prev.setFixedSize(26, 24)
 
         self.btn_next = TransparentToolButton(FluentIcon.DOWN, self)
-        self.btn_next.setToolTip("下一个 (Enter)")
+        _tip(self.btn_next, "下一个 (Enter)")
         self.btn_next.setFixedSize(26, 24)
 
         self.btn_toggle_replace = TransparentToolButton(FluentIcon.CHEVRON_DOWN_MED, self)
         self.btn_toggle_replace.setFixedSize(26, 24)
-        self.btn_toggle_replace.setToolTip("展开/收起替换 (Ctrl+H)")
+        _tip(self.btn_toggle_replace, "展开/收起替换 (Ctrl+H)")
         self.btn_toggle_replace.setCheckable(True)
 
         self.btn_close = TransparentToolButton(FluentIcon.CLOSE, self)
         self.btn_close.setFixedSize(26, 24)
-        self.btn_close.setToolTip("关闭 (Esc)")
+        _tip(self.btn_close, "关闭 (Esc)")
 
         row1.addWidget(self.le_search, 1)
         row1.addWidget(self.btn_case)
@@ -181,11 +188,11 @@ class SearchBar(QWidget):
 
         self.btn_replace = TransparentToolButton(_svg_icon(_REPLACE_ONE_SVG), self)
         self.btn_replace.setFixedSize(26, 24)
-        self.btn_replace.setToolTip("替换 (Enter 在替换框中)")
+        _tip(self.btn_replace, "替换 (Enter 在替换框中)")
 
         self.btn_replace_all = TransparentToolButton(_svg_icon(_REPLACE_ALL_SVG), self)
         self.btn_replace_all.setFixedSize(26, 24)
-        self.btn_replace_all.setToolTip("全部替换")
+        _tip(self.btn_replace_all, "全部替换")
 
         self._row2.addWidget(self.le_replace, 1)
         self._row2.addWidget(self.btn_replace)
