@@ -12,6 +12,7 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPainter,
     QPaintEvent,
+    QResizeEvent,
     QTextCharFormat,
     QTextCursor,
 )
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -46,7 +48,6 @@ from core.config_service import ConfigService
 from core.jlink_worker import RESET_MODE_HALT, JLinkWorker
 
 from . import _infobar
-from ._scroll_helpers import make_transparent_scroll
 from .widgets.search_bar import SearchBar
 
 
@@ -208,6 +209,9 @@ class RTTMonitorPage(QWidget):
         # 由 _on_state_changed 维护。
         self._is_connected = False
 
+        # 复位计数：连接成功时重置为 0，每次 reset 操作 +1
+        self._reset_count = 0
+
         # 按当前 reset_mode 设置按钮文字 + 订阅 cfg 变化实时刷新
         self._apply_reset_mode_to_button(cfg.get("reset_mode"))
         cfg.reset_mode_changed.connect(self._apply_reset_mode_to_button)
@@ -228,81 +232,166 @@ class RTTMonitorPage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        self._scroll, inner = make_transparent_scroll(self, "rtt")
-        outer.addWidget(self._scroll)
-        root = QVBoxLayout(inner)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(8)
 
-        # ---- 控制栏 ----
-        ctrl = QHBoxLayout()
-        ctrl.addWidget(BodyLabel("目标设备"))
-        self.cb_target = EditableComboBox(self)
+        # ---- 主布局：左右分栏 ----
+        main_split = QHBoxLayout()
+        main_split.setContentsMargins(0, 0, 0, 0)
+        main_split.setSpacing(0)
+
+        # ==== 左侧配置面板（固定宽度，内部可滚动）====
+        self._config_visible = True
+        self._config_panel = self._build_left_panel()
+        main_split.addWidget(self._config_panel)
+
+        # ==== 右侧数据区（stretch=1，占满剩余空间）====
+        self._right_panel = self._build_right_panel()
+        main_split.addWidget(self._right_panel, 1)
+
+        outer.addLayout(main_split)
+
+        # 收起状态下的快捷按钮栏（默认隐藏）
+        self._quick_toolbar = QWidget(self)
+        self._quick_toolbar.setVisible(False)
+        qt = QHBoxLayout(self._quick_toolbar)
+        qt.setContentsMargins(4, 2, 4, 2)
+        qt.setSpacing(4)
+        self._btn_quick_pause = TransparentToolButton(
+            FluentIcon.PAUSE, self._quick_toolbar)
+        _tip(self._btn_quick_pause, "暂停/恢复接收")
+        self._btn_quick_pause.setCheckable(True)
+        self._btn_quick_pause.toggled.connect(
+            self._worker.set_pause_receive_requested.emit)
+        self._btn_quick_clear = TransparentToolButton(
+            FluentIcon.DELETE, self._quick_toolbar)
+        _tip(self._btn_quick_clear, "清除显示")
+        self._btn_quick_clear.clicked.connect(self.display.clear)
+        self._btn_quick_save = TransparentToolButton(
+            FluentIcon.SAVE, self._quick_toolbar)
+        _tip(self._btn_quick_save, "保存当前")
+        self._btn_quick_save.clicked.connect(self._on_save_clicked)
+        qt.addWidget(self._btn_quick_pause)
+        qt.addWidget(self._btn_quick_clear)
+        qt.addWidget(self._btn_quick_save)
+        qt.addStretch(1)
+
+        # 窗口 resize 防抖 timer
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(100)
+        self._resize_timer.timeout.connect(self._on_resize_debounce)
+
+    # ------------------------------------------------------------------
+    # 左侧配置面板
+    # ------------------------------------------------------------------
+    def _build_left_panel(self) -> QWidget:
+        """构建左侧配置面板，返回容器 widget。"""
+        panel = QWidget(self)
+        panel.setObjectName("configPanel")
+        panel.setFixedWidth(240)
+        panel.setStyleSheet(
+            "QWidget#configPanel { background: transparent; }"
+        )
+
+        scroll = QScrollArea(panel)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }")
+        vp = scroll.viewport()
+        vp.setObjectName("configVP")
+        vp.setStyleSheet("QWidget#configVP { background: transparent; }")
+
+        inner = QWidget()
+        inner.setObjectName("configInner")
+        inner.setStyleSheet(
+            "QWidget#configInner { background: transparent; }")
+        scroll.setWidget(inner)
+
+        pl = QVBoxLayout(panel)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.addWidget(scroll)
+
+        v = QVBoxLayout(inner)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(6)
+
+        # ---- 连接控制区 ----
+        v.addWidget(StrongBodyLabel("连接设置"))
+        v.addWidget(BodyLabel("目标设备"))
+        self.cb_target = EditableComboBox(inner)
         chip_list = self._cfg.get_chip_list()
         self.cb_target.addItems(chip_list)
         last_mcu = self._cfg.get("target_mcu")
         if last_mcu:
             self.cb_target.setCurrentText(last_mcu)
-        self.cb_target.setMinimumWidth(180)
-        # 自动补全：不区分大小写、子串匹配
-        completer = QCompleter(chip_list, self)
+        completer = QCompleter(chip_list, self.cb_target)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setFilterMode(Qt.MatchContains)
         self.cb_target.setCompleter(completer)
-        ctrl.addWidget(self.cb_target)
+        v.addWidget(self.cb_target)
 
-        ctrl.addWidget(BodyLabel("接口"))
-        self.cb_iface = ComboBox(self)
+        row_iface = QHBoxLayout()
+        row_iface.setSpacing(4)
+        row_iface.addWidget(BodyLabel("接口"))
+        self.cb_iface = ComboBox(inner)
         self.cb_iface.addItems(["SWD", "JTAG"])
         self.cb_iface.setCurrentText(self._cfg.get("interface"))
-        ctrl.addWidget(self.cb_iface)
-
-        ctrl.addWidget(BodyLabel("速度(kHz)"))
-        self.cb_speed = ComboBox(self)
+        row_iface.addWidget(self.cb_iface)
+        row_iface.addSpacing(8)
+        row_iface.addWidget(BodyLabel("速度"))
+        self.cb_speed = ComboBox(inner)
         for s in self._cfg.get_default_speeds():
             self.cb_speed.addItem(str(s))
         cur_speed = str(self._cfg.get("speed_khz"))
         if self.cb_speed.findText(cur_speed) < 0:
             self.cb_speed.addItem(cur_speed)
         self.cb_speed.setCurrentText(cur_speed)
-        ctrl.addWidget(self.cb_speed)
+        row_iface.addWidget(self.cb_speed)
+        v.addLayout(row_iface)
 
-        ctrl.addWidget(BodyLabel("RTT 通道"))
-        self.sp_channel = SpinBox(self)
+        row_ch = QHBoxLayout()
+        row_ch.setSpacing(4)
+        row_ch.addWidget(BodyLabel("RTT 通道"))
+        self.sp_channel = SpinBox(inner)
         self.sp_channel.setRange(0, 15)
         self.sp_channel.setValue(self._cfg.get("rtt_channel"))
-        ctrl.addWidget(self.sp_channel)
+        row_ch.addWidget(self.sp_channel)
+        row_ch.addStretch(1)
+        v.addLayout(row_ch)
 
-        self.btn_connect = PrimaryPushButton(FluentIcon.PLAY, "连接", self)
+        self.btn_connect = PrimaryPushButton(FluentIcon.PLAY, "连接", inner)
         _tip(self.btn_connect, "F2 连接 / F3 断开")
-        self.btn_reset = PushButton(FluentIcon.SYNC, "重置目标", self)
+        v.addWidget(self.btn_connect)
+
+        row_reset = QHBoxLayout()
+        row_reset.setSpacing(4)
+        self.btn_reset = PushButton(FluentIcon.SYNC, "重置目标", inner)
         _tip(self.btn_reset, "F4 重置目标")
         self.btn_reset.setEnabled(False)
-        self.btn_reset_halt = PushButton(FluentIcon.PAUSE_BOLD, "重置并暂停", self)
-        _tip(self.btn_reset_halt, "复位 MCU 并停在复位状态（halt，不运行、不断开重连）")
+        self.btn_reset_halt = PushButton(
+            FluentIcon.PAUSE_BOLD, "重置并暂停", inner)
+        _tip(self.btn_reset_halt, "复位 MCU 并停在复位状态（halt）")
         self.btn_reset_halt.setEnabled(False)
-        ctrl.addWidget(self.btn_connect)
-        ctrl.addWidget(self.btn_reset)
-        ctrl.addWidget(self.btn_reset_halt)
-        ctrl.addStretch(1)
-        root.addLayout(ctrl)
+        row_reset.addWidget(self.btn_reset)
+        row_reset.addWidget(self.btn_reset_halt)
+        v.addLayout(row_reset)
 
-        # ---- 设备信息卡片（可展开/收起）----
-        self.gb_info = HeaderCardWidget(self)
+        # ---- 设备信息卡片（可折叠）----
+        self.gb_info = HeaderCardWidget(inner)
         self.gb_info.setTitle("设备信息")
-
-        # 在标题栏右侧加展开/收起按钮
-        self.btn_info_toggle = TransparentToolButton(FluentIcon.CHEVRON_DOWN_MED, self.gb_info)
+        self.btn_info_toggle = TransparentToolButton(
+            FluentIcon.CHEVRON_DOWN_MED, self.gb_info)
         self.gb_info.headerLayout.addStretch(1)
         self.gb_info.headerLayout.addWidget(self.btn_info_toggle)
 
-        # 内容容器
         self._info_container = QWidget(self.gb_info)
         info_grid = QGridLayout(self._info_container)
-        info_grid.setHorizontalSpacing(16)
-        info_grid.setVerticalSpacing(6)
+        info_grid.setHorizontalSpacing(8)
+        info_grid.setVerticalSpacing(4)
         self._info_labels: dict[str, StrongBodyLabel] = {}
-        rows = [
+        info_rows = [
             ("固件版本", "jlink_firmware"),
             ("硬件版本", "jlink_hardware"),
             ("序列号", "jlink_serial"),
@@ -311,135 +400,176 @@ class RTTMonitorPage(QWidget):
             ("CPU 类型", "core_cpu"),
             ("目标设备", "target_device"),
             ("接口", "interface"),
-            ("速度 (kHz)", "speed_khz"),
+            ("速度(kHz)", "speed_khz"),
         ]
-        for i, (text, key) in enumerate(rows):
-            r, c = divmod(i, 3)
-            info_grid.addWidget(BodyLabel(f"{text}:"), r, c * 2)
+        for i, (text, key) in enumerate(info_rows):
+            info_grid.addWidget(BodyLabel(f"{text}:"), i, 0)
             lbl = StrongBodyLabel("-")
             self._info_labels[key] = lbl
-            info_grid.addWidget(lbl, r, c * 2 + 1)
+            info_grid.addWidget(lbl, i, 1)
         self.gb_info.viewLayout.addWidget(self._info_container)
-
-        # 默认收起：隐藏内容容器、分隔线和 view
         self._info_container.setVisible(False)
         self.gb_info.separator.setVisible(False)
         self.gb_info.view.setVisible(False)
-
-        # 点击按钮切换展开/收起
         self.btn_info_toggle.clicked.connect(self._toggle_info_card)
+        v.addWidget(self.gb_info)
 
-        root.addWidget(self.gb_info)
-
-        # ---- 选项栏 ----
-        opt = QHBoxLayout()
+        # ---- 接收设置分组 ----
+        v.addWidget(StrongBodyLabel("接收设置"))
         self.chk_auto_scroll = CheckBox("自动滚动")
         self.chk_auto_scroll.setChecked(self._cfg.get("auto_scroll"))
+        v.addWidget(self.chk_auto_scroll)
         self.chk_pause = CheckBox("暂停接收")
+        v.addWidget(self.chk_pause)
         self.chk_power = CheckBox("电源输出")
         self.chk_power.setEnabled(False)
+        v.addWidget(self.chk_power)
         self.chk_log_rec = CheckBox("实时日志记录")
-        # 字号调整按钮（替代 Ctrl+滚轮，避免和滚动冲突）—— 使用图标替代文字
-        self.btn_font_minus = TransparentToolButton(FluentIcon.ZOOM_OUT, self)
-        self.btn_font_minus.setFixedSize(30, 30)
+        v.addWidget(self.chk_log_rec)
+
+        # 字号
+        row_font = QHBoxLayout()
+        row_font.setSpacing(4)
+        row_font.addWidget(BodyLabel("字号"))
+        self.btn_font_minus = TransparentToolButton(
+            FluentIcon.ZOOM_OUT, inner)
+        self.btn_font_minus.setFixedSize(28, 28)
         _tip(self.btn_font_minus, "字号 −1")
         self.lbl_font_size = BodyLabel(f"{self._cfg.get('font_size')}")
         self.lbl_font_size.setAlignment(Qt.AlignCenter)
         self.lbl_font_size.setFixedWidth(28)
-        self.btn_font_plus = TransparentToolButton(FluentIcon.ZOOM_IN, self)
-        self.btn_font_plus.setFixedSize(30, 30)
+        self.btn_font_plus = TransparentToolButton(
+            FluentIcon.ZOOM_IN, inner)
+        self.btn_font_plus.setFixedSize(28, 28)
         _tip(self.btn_font_plus, "字号 +1")
-        # 插入会话标记：输入框 + 按钮，在 RTT 显示区插入分隔行
-        self.le_mark = EditableComboBox(self)
-        self.le_mark.setPlaceholderText("会话标记文本…")
-        self.le_mark.setMinimumWidth(180)
-        # 最近 10 条标记历史（不持久化，会话内可重用）
-        self._mark_history: list[str] = []
-        self.btn_mark = PushButton("插入标记", self)
-        _tip(self.btn_mark, "在显示区插入一行分隔标记，便于会话分段")
-        self.btn_clear = PushButton("清除", self)
-        self.btn_save = PushButton("💾 保存当前", self)
-        opt.addWidget(self.chk_auto_scroll)
-        opt.addWidget(self.chk_pause)
-        opt.addWidget(self.chk_power)
-        opt.addWidget(self.chk_log_rec)
-        opt.addStretch(1)
-        opt.addWidget(self.le_mark)
-        opt.addWidget(self.btn_mark)
-        opt.addWidget(self.btn_font_minus)
-        opt.addWidget(self.lbl_font_size)
-        opt.addWidget(self.btn_font_plus)
-        opt.addWidget(self.btn_clear)
-        opt.addWidget(self.btn_save)
-        root.addLayout(opt)
+        row_font.addWidget(self.btn_font_minus)
+        row_font.addWidget(self.lbl_font_size)
+        row_font.addWidget(self.btn_font_plus)
+        row_font.addStretch(1)
+        v.addLayout(row_font)
 
-        # ---- 显示区（qfluentwidgets PlainTextEdit 自动适应主题）----
-        self.display = PlainTextEdit(self)
+        # 标记 / 保存 / 清空
+        self.le_mark = EditableComboBox(inner)
+        self.le_mark.setPlaceholderText("会话标记文本…")
+        self._mark_history: list[str] = []
+        v.addWidget(self.le_mark)
+
+        row_mark = QHBoxLayout()
+        row_mark.setSpacing(4)
+        self.btn_mark = PushButton("插入标记", inner)
+        _tip(self.btn_mark, "在显示区插入分隔标记")
+        self.btn_clear = PushButton("清除", inner)
+        self.btn_save = PushButton("💾 保存", inner)
+        row_mark.addWidget(self.btn_mark)
+        row_mark.addWidget(self.btn_clear)
+        row_mark.addWidget(self.btn_save)
+        v.addLayout(row_mark)
+
+        v.addStretch(1)
+        return panel
+
+    # ------------------------------------------------------------------
+    # 右侧数据区
+    # ------------------------------------------------------------------
+    def _build_right_panel(self) -> QWidget:
+        """构建右侧数据收发区，返回容器 widget。"""
+        panel = QWidget(self)
+        panel.setObjectName("rightPanel")
+        panel.setStyleSheet(
+            "QWidget#rightPanel { background: transparent; }")
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(4)
+
+        # ---- 显示区 ----
+        self.display = PlainTextEdit(panel)
         self.display.setReadOnly(True)
-        self.display.setMaximumBlockCount(self._cfg.get("max_display_lines"))
-        # 固定宽度按窗口宽度换行（超过窗宽自动 wrap，便于阅读长行日志）
+        self.display.setMaximumBlockCount(
+            self._cfg.get("max_display_lines"))
         self.display.setLineWrapMode(PlainTextEdit.WidgetWidth)
-        # display 高度由用户拖 _VResizeHandle 控制；fixedHeight 让 inner widget
-        # 的 sizeHint 跟着长高，ScrollArea 自动判断溢出 → 整页滚条。
         saved_h = int(self._cfg.get("rtt_display_height") or 500)
         self.display.setFixedHeight(max(120, saved_h))
 
-        # ---- 搜索栏（浮动叠加在 display 右上角，不占布局流）----
-        self.search_bar = SearchBar(self.display.viewport())
+        # ---- 搜索栏（浮动在 right_panel 右上角，不随文本滚动）----
+        self.search_bar = SearchBar(panel)
         self.search_bar.setVisible(False)
-        # 主题色变化时刷新搜索栏样式
-        self._cfg.theme_color_changed.connect(lambda _c: self.search_bar._apply_style())
+        self._cfg.theme_color_changed.connect(
+            lambda _c: self.search_bar._apply_style())
+
+        # ---- resize handle ----
+        self.resize_handle = _VResizeHandle(self.display, panel)
+        self.resize_handle.heightChanged.connect(
+            lambda h: self._cfg.set("rtt_display_height", h))
+        self._cfg.theme_color_changed.connect(
+            lambda _c: self.resize_handle.update())
 
         # ---- 发送栏 ----
-        send = QHBoxLayout()
-        # EditableComboBox 复用 cfg.send_history（最近 50 条）下拉快速重发
-        self.le_send = EditableComboBox(self)
-        self.le_send.setPlaceholderText("输入要发送的数据 (Hex 模式下用 16 进制字符)")
-        # 加载历史（倒序：最新在最前）
+        self.le_send = EditableComboBox(panel)
+        self.le_send.setPlaceholderText(
+            "输入要发送的数据 (Hex 模式下用 16 进制字符)")
         history = list(self._cfg.get("send_history") or [])
         if history:
             self.le_send.addItems(list(reversed(history)))
-            self.le_send.setCurrentText("")  # 不预选任何项
+            self.le_send.setCurrentText("")
         self.chk_hex = CheckBox("Hex")
         self.chk_hex.setChecked(self._cfg.get("hex_send_mode"))
-        self.btn_send = PushButton(FluentIcon.SEND, "发送", self)
+        self.btn_send = PushButton(FluentIcon.SEND, "发送", panel)
         self.btn_send.setEnabled(False)
-        send.addWidget(self.le_send, 1)
-        send.addWidget(self.chk_hex)
-        send.addWidget(self.btn_send)
+
+        send_row = QHBoxLayout()
+        send_row.setSpacing(4)
+        send_row.addWidget(self.le_send, 1)
+        send_row.addWidget(self.chk_hex)
+        send_row.addWidget(self.btn_send)
 
         # ---- 底部状态栏 ----
-        status = QHBoxLayout()
-        status.setContentsMargins(0, 0, 0, 0)
         self.lbl_status_state = BodyLabel("● 未连接")
         self.lbl_status_state.setStyleSheet("color: #888888;")
-        self.lbl_status_state.setMinimumWidth(120)
+        self.lbl_status_state.setMinimumWidth(100)
         self.lbl_status_rate = BodyLabel("")
-        self.lbl_status_rate.setMinimumWidth(160)
+        self.lbl_status_rate.setMinimumWidth(120)
         self.lbl_status_total = BodyLabel("")
-        self.lbl_status_total.setMinimumWidth(200)
+        self.lbl_status_total.setMinimumWidth(160)
         self.lbl_status_encoding = BodyLabel("")
-        status.addWidget(self.lbl_status_state)
-        status.addWidget(self.lbl_status_rate)
-        status.addWidget(self.lbl_status_total)
-        status.addStretch(1)
-        status.addWidget(self.lbl_status_encoding)
+        self.lbl_reset_count = BodyLabel("")
 
-        # display 加入布局 → 拖动 handle → 底部控件按自然高度排
-        root.addWidget(self.display)
-        self.resize_handle = _VResizeHandle(self.display, inner)
-        self.resize_handle.heightChanged.connect(
-            lambda h: self._cfg.set("rtt_display_height", h)
-        )
-        # 用户在设置页换主题色 → handle 立刻重绘成新颜色（不必等下次 hover）
-        self._cfg.theme_color_changed.connect(lambda _c: self.resize_handle.update())
-        root.addWidget(self.resize_handle)
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(8)
+        status_row.addWidget(self.lbl_status_state)
+        status_row.addWidget(self.lbl_status_rate)
+        status_row.addWidget(self.lbl_status_total)
+        status_row.addStretch(1)
+        status_row.addWidget(self.lbl_reset_count)
+        status_row.addWidget(self.lbl_status_encoding)
 
-        root.addLayout(send)
-        root.addLayout(status)
-        # 窗口比内容高时：stretch 吸收剩余空间，避免最后一个 layout 被布局
-        # 引擎拉长走样；窗口比内容矮时：ScrollArea 自动出整页滚条。
-        root.addStretch(1)
+        v.addWidget(self.display)
+        v.addWidget(self.resize_handle)
+        v.addLayout(send_row)
+        v.addLayout(status_row)
+        return panel
+
+    # ------------------------------------------------------------------
+    # 窗口 resize → 自动收起/展开左侧面板
+    # ------------------------------------------------------------------
+    _COLLAPSE_WIDTH = 900
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, '_resize_timer'):
+            self._resize_timer.start()
+
+    def _on_resize_debounce(self) -> None:
+        w = self.width()
+        if w < self._COLLAPSE_WIDTH and self._config_visible:
+            self._set_config_panel_visible(False)
+        elif w >= self._COLLAPSE_WIDTH and not self._config_visible:
+            self._set_config_panel_visible(True)
+
+    def _set_config_panel_visible(self, visible: bool) -> None:
+        self._config_visible = visible
+        self._config_panel.setVisible(visible)
+        self._quick_toolbar.setVisible(not visible)
 
     # ------------------------------------------------------------------
     # 信号接线
@@ -555,10 +685,14 @@ class RTTMonitorPage(QWidget):
 
     def _on_reset_clicked(self) -> None:
         # auto_reconnect=reset+disconnect+sleep+reconnect）
+        self._reset_count += 1
+        self.lbl_reset_count.setText(f"复位: {self._reset_count}")
         self._worker.reset_requested.emit(self._cfg.get("reset_mode"))
 
     def _on_reset_halt_clicked(self) -> None:
         """重置并暂停：固定 halt 意图，与配置的 reset_mode 无关。"""
+        self._reset_count += 1
+        self.lbl_reset_count.setText(f"复位: {self._reset_count}")
         self._worker.reset_requested.emit(RESET_MODE_HALT)
 
     def _on_channel_changed(self, ch: int) -> None:
@@ -610,8 +744,9 @@ class RTTMonitorPage(QWidget):
         self.chk_power.setEnabled(True)
         for key, lbl in self._info_labels.items():
             lbl.setText(str(info.get(key, "-")))
-        # 设备信息卡片保持当前折叠/展开状态，不自动展开
-        # （用户可以点击右上 ⌄ 按钮手动展开）
+        # 复位计数：新连接重置为 0
+        self._reset_count = 0
+        self.lbl_reset_count.setText("")
         # 状态栏：绿色圆点 + 设备摘要
         target = info.get("target_device", "—")
         iface = info.get("interface", "—")
@@ -637,6 +772,7 @@ class RTTMonitorPage(QWidget):
         self.lbl_status_state.setStyleSheet("color: #888888;")
         self.lbl_status_rate.setText("")
         self.lbl_status_total.setText("")
+        self.lbl_reset_count.setText("")
         self.gb_info.setTitle("设备信息")
         # 清除上次统计 delta 基线
         self._stats_prev_bytes = 0
