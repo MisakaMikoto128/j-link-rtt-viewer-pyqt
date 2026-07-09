@@ -808,7 +808,7 @@ class RTTMonitorPage(QWidget):
         self.le_send.blockSignals(True)
         self.le_send.clear()
         self.le_send.addItems(list(reversed(hist)))
-        self.le_send.setCurrentText("")
+        self.le_send.setText("")
         self.le_send.blockSignals(False)
 
     def _on_hex_send_toggled(self, checked: bool) -> None:
@@ -827,7 +827,7 @@ class RTTMonitorPage(QWidget):
             try:
                 raw = cur.encode("utf-8")
                 hex_str = " ".join(f"{b:02X}" for b in raw)
-                self.le_send.setCurrentText(hex_str)
+                self.le_send.setText(hex_str)
             except Exception:
                 pass
         else:
@@ -837,7 +837,7 @@ class RTTMonitorPage(QWidget):
                 if len(cleaned) % 2 != 0:
                     cleaned += "0"
                 raw = bytes.fromhex(cleaned)
-                self.le_send.setCurrentText(raw.decode("utf-8", errors="replace"))
+                self.le_send.setText(raw.decode("utf-8", errors="replace"))
             except ValueError:
                 pass  # 非法 HEX，保留原文
 

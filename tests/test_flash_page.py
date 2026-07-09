@@ -91,3 +91,12 @@ def test_recent_files_capped_at_10(flash_page, tmp_path):
     assert recent[0] == paths[-1]
     assert paths[0] not in recent
     assert paths[1] not in recent
+
+
+def test_device_combo_has_completer(flash_page):
+    """cmb_device 应配备 QCompleter，支持子串匹配。"""
+    from PySide6.QtCore import Qt
+    completer = flash_page.cmb_device.completer()
+    assert completer is not None
+    assert completer.caseSensitivity() == Qt.CaseInsensitive
+    assert completer.filterMode() == Qt.MatchContains

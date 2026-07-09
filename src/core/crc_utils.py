@@ -57,17 +57,17 @@ def _crc16(
 
 def _crc32(
     data: bytes,
-    poly: int = 0x04C11DB7,
+    poly: int = 0xEDB88320,  # 反转多项式 (0x04C11DB7 位翻转)
     init: int = 0xFFFFFFFF,
     xor_out: int = 0xFFFFFFFF,
 ) -> int:
+    """标准 CRC-32：右移 + LSB 检查，算法本身已隐含 reflect。"""
     crc = init
     for byte in data:
-        crc ^= _reflect8(byte)
+        crc ^= byte
         for _ in range(8):
-            crc = (crc << 1) ^ poly if crc & 0x80000000 else crc << 1
-            crc &= 0xFFFFFFFF
-    return _reflect32(crc) ^ xor_out
+            crc = (crc >> 1) ^ poly if crc & 1 else crc >> 1
+    return crc ^ xor_out
 
 
 def _reflect8(val: int) -> int:

@@ -50,6 +50,9 @@ class FakeWorker(QObject):
     def get_log_path(self) -> str | None:
         return None
 
+    def get_stats(self) -> tuple[int, int, float]:
+        return (0, 0, 0.0)
+
 
 @pytest.fixture
 def rtt_page(qtbot, isolated_appdata):
@@ -191,3 +194,103 @@ def test_programmatic_scroll_guard_blocks_auto_scroll_uncheck(rtt_page, qtbot):
     qtbot.wait(20)
     # 仍勾选 — guard 内的滚动事件被 _on_display_scrolled 忽略
     assert page.chk_auto_scroll.isChecked()
+
+
+# ---- HEX 发送双向切换 ----
+def test_hex_send_toggle_text_to_hex(rtt_page, qtbot):
+    """勾选 Hex 时应将输入框文本转为 HEX 格式。"""
+    page, _, _ = rtt_page
+    page.le_send.setText("hello")
+    page.chk_hex.setChecked(True)
+    qtbot.wait(20)
+    assert page.le_send.currentText() == "68 65 6C 6C 6F"
+
+
+def test_hex_send_toggle_hex_to_text(rtt_page, qtbot):
+    """取消 Hex 时应将 HEX 转回文本。"""
+    page, _, _ = rtt_page
+    page.chk_hex.setChecked(True)
+    qtbot.wait(10)
+    page.le_send.setText("68 65 6C 6C 6F")
+    page.chk_hex.setChecked(False)
+    qtbot.wait(20)
+    assert page.le_send.currentText() == "hello"
+
+
+# ---- CRC 脚本追加 ----
+def test_crc_script_appends_crc_to_payload(rtt_page, qtbot):
+    """启用 CRC 脚本后发送，应在 payload 后追加 CRC 字节。"""
+    page, worker, _ = rtt_page
+    page._set_connected_ui(worker.get_device_info())
+    page.chk_crc_script.setChecked(True)
+    page.cb_crc_algo.setCurrentIndex(0)  # CRC-8
+    page.le_send.setText("AB")
+    page.btn_send.click()
+    qtbot.wait(20)
+    assert len(worker._sent) == 1
+    sent_text, is_hex = worker._sent[0]
+    assert is_hex is True
+    # "AB" = 0x41 0x42，CRC-8 追加 1 字节，总共 3 字节 HEX
+    parts = sent_text.split()
+    assert len(parts) == 3  # 41 42 + 1 byte CRC
+    assert parts[0] == "41"
+    assert parts[1] == "42"
+
+
+# ---- 定时发送 ----
+def test_timed_send_not_connected_shows_pending(rtt_page, qtbot):
+    """未连接时勾选定时发送应设 pending 标志。"""
+    page, _, _ = rtt_page
+    assert not page._is_connected
+    page.chk_timed_send.setChecked(True)
+    qtbot.wait(20)
+    assert page._timed_send_pending is True
+    assert not page._timed_send_timer.isActive()
+
+
+def test_timed_send_connected_starts_timer(rtt_page, qtbot):
+    """已连接时勾选定时发送应启动定时器。"""
+    page, worker, _ = rtt_page
+    page._set_connected_ui(worker.get_device_info())
+    page.chk_timed_send.setChecked(True)
+    qtbot.wait(20)
+    assert page._timed_send_timer.isActive()
+    page.chk_timed_send.setChecked(False)
+    qtbot.wait(20)
+    assert not page._timed_send_timer.isActive()
+
+
+# ---- 自动断帧 ----
+def test_auto_frame_inserts_newline_on_gap(rtt_page, qtbot):
+    """开启自动断帧且间隔超阈值时应插入换行。"""
+    page, worker, _ = rtt_page
+    page.chk_auto_frame.setChecked(True)
+    page.sp_frame_timeout.setValue(5)  # 5ms 阈值
+    # 第一批数据
+    worker.rtt_data_received.emit("frame1")
+    qtbot.wait(30)  # 等 > 5ms
+    # 第二批数据
+    worker.rtt_data_received.emit("frame2")
+    qtbot.wait(30)
+    text = page.display.toPlainText()
+    # 两帧之间应有换行
+    assert "frame1" in text
+    assert "frame2" in text
+
+
+# ---- 搜索栏选中文本自动填充 ----
+def test_shortcut_find_fills_selected_text(rtt_page, qtbot):
+    """Ctrl+F 时应将 display 选中文本填入搜索栏。"""
+    page, _, _ = rtt_page
+    page.show()  # 确保 widget 可见，isVisible() 才能返回 True
+    page.display.setPlainText("hello world")
+    # 模拟选中 "world"
+    from PySide6.QtGui import QTextCursor
+    tc = page.display.textCursor()
+    tc.setPosition(6)
+    tc.setPosition(11, QTextCursor.MoveMode.KeepAnchor)
+    page.display.setTextCursor(tc)
+    page.on_shortcut_find()
+    qtbot.wait(20)
+    assert page.search_bar.le_search.text() == "world"
+    assert page.search_bar.isVisible()
