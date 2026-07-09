@@ -16,6 +16,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
+    QCompleter,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -110,9 +111,15 @@ class FlashPage(QWidget):
         layout = QVBoxLayout(card)
         layout.addWidget(StrongBodyLabel("连接参数"))
         row = QHBoxLayout()
-        row.addWidget(BodyLabel("Device:"))
+        row.addWidget(BodyLabel("目标设备:"))
         self.cmb_device = EditableComboBox()
-        self.cmb_device.addItems(self._cfg.get_chip_list() or ["STM32H750VB"])
+        chip_list = self._cfg.get_chip_list() or ["STM32H750VB"]
+        self.cmb_device.addItems(chip_list)
+        # 自动补全：不区分大小写、子串匹配（与 RTT 页目标设备下拉一致）
+        completer = QCompleter(chip_list, self.cmb_device)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        self.cmb_device.setCompleter(completer)
         row.addWidget(self.cmb_device, 1)
         layout.addLayout(row)
 

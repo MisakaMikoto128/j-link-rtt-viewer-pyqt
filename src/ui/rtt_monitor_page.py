@@ -813,19 +813,29 @@ class RTTMonitorPage(QWidget):
 
     # ---- 搜索栏快捷键入口（由 MainWindow QShortcut 调用）----
     def on_shortcut_find(self) -> None:
-        """Ctrl+F：切换搜索栏显示/隐藏。已打开时仅聚焦。"""
+        """Ctrl+F：切换搜索栏显示/隐藏。已打开时仅聚焦。
+
+        如果显示区有选中文本，自动填入搜索框（VSCode 行为）。
+        """
+        sel = self.display.textCursor().selectedText().strip()
         if self.search_bar.isVisible():
+            if sel:
+                self.search_bar.le_search.setText(sel)
             self.search_bar.le_search.setFocus()
             self.search_bar.le_search.selectAll()
         else:
-            self.search_bar.show_search()
+            self.search_bar.show_search(initial_text=sel)
 
     def on_shortcut_replace(self) -> None:
-        """Ctrl+H：切换搜索栏 + 展开替换行。已展开时关闭。"""
+        """Ctrl+H：切换搜索栏 + 展开替换行。已展开时关闭。
+
+        如果显示区有选中文本，自动填入搜索框。
+        """
+        sel = self.display.textCursor().selectedText().strip()
         if self.search_bar.isVisible() and self.search_bar.is_replace_visible():
             self.search_bar.close_bar()
         else:
-            self.search_bar.show_replace()
+            self.search_bar.show_replace(initial_text=sel)
 
     def _on_search_bar_closed(self) -> None:
         """搜索栏关闭时把焦点还给 display，清除高亮。"""
@@ -862,7 +872,7 @@ class RTTMonitorPage(QWidget):
         full = self.display.toPlainText()
         matches = list(pat.finditer(full))
         if not matches:
-            self.search_bar.set_match_label(f"第0项，共0项")
+            self.search_bar.set_match_label(f"0/0")
             self.display.setExtraSelections([])
             return
         # 找当前光标后/前的下一个匹配
@@ -899,10 +909,19 @@ class RTTMonitorPage(QWidget):
             self.search_bar.set_match_label("无效正则")
             return
         if replace_all:
+            # 从后往前逐段替换，保留周围文本的 QTextCharFormat（不用 setPlainText，
+            # 后者会清除所有格式导致 ANSI 染色丢失）
             full = self.display.toPlainText()
-            new_text = pat.sub(replacement, full)
-            if new_text != full:
-                self.display.setPlainText(new_text)
+            matches = list(pat.finditer(full))
+            if not matches:
+                self._update_match_position(text)
+                return
+            doc = self.display.document()
+            for m in reversed(matches):
+                tc = QTextCursor(doc)
+                tc.setPosition(m.start())
+                tc.setPosition(m.end(), QTextCursor.KeepAnchor)
+                tc.insertText(replacement)  # 保留周围文本的格式
             self._update_match_position(text)
         else:
             # 替换当前选中：如果当前选中文本匹配 pattern，替换它
@@ -944,7 +963,7 @@ class RTTMonitorPage(QWidget):
         matches = list(pat.finditer(full))
         cnt = len(matches)
         if cnt == 0:
-            self.search_bar.set_match_label(f"第0项，共0项")
+            self.search_bar.set_match_label(f"0/0")
             self.display.setExtraSelections([])
             return
         # 当前光标在哪个匹配中
@@ -963,7 +982,7 @@ class RTTMonitorPage(QWidget):
                     break
             else:
                 idx = cnt
-        self.search_bar.set_match_label(f"第{idx}项，共{cnt}项")
+        self.search_bar.set_match_label(f"{idx}/{cnt}")
         self._highlight_matches(matches, limit=500)
 
     def _highlight_matches(self, matches: list, limit: int = 500) -> None:

@@ -146,7 +146,7 @@ class SearchBar(QWidget):
         self.btn_regex = _ToggleButton(".*", "正则表达式", self)
 
         self.lbl_match = QLabel("")
-        self.lbl_match.setFixedWidth(90)
+        self.lbl_match.setMinimumWidth(80)
         self.lbl_match.setAlignment(Qt.AlignCenter)
 
         self.btn_prev = TransparentToolButton(FluentIcon.UP, self)
@@ -218,18 +218,28 @@ class SearchBar(QWidget):
     # ------------------------------------------------------------------
     # 公开方法
     # ------------------------------------------------------------------
-    def show_search(self) -> None:
-        """Ctrl+F：显示查找框，**始终收起替换行**（对齐 VSCode）。"""
+    def show_search(self, initial_text: str = "") -> None:
+        """Ctrl+F：显示查找框，**始终收起替换行**（对齐 VSCode）。
+
+        initial_text: 非空时自动填入搜索框（用于选中文本场景）。
+        """
         self._set_replace_visible(False)
         self.setVisible(True)
+        if initial_text:
+            self.le_search.setText(initial_text)
         self.le_search.setFocus()
         self.le_search.selectAll()
         self._reposition()
 
-    def show_replace(self) -> None:
-        """Ctrl+H：显示查找框 + **展开替换行**。"""
+    def show_replace(self, initial_text: str = "") -> None:
+        """Ctrl+H：显示查找框 + **展开替换行**。
+
+        initial_text: 非空时自动填入搜索框（用于选中文本场景）。
+        """
         self.setVisible(True)
         self._set_replace_visible(True)
+        if initial_text:
+            self.le_search.setText(initial_text)
         self.le_search.setFocus()
         self.le_search.selectAll()
         self._reposition()
