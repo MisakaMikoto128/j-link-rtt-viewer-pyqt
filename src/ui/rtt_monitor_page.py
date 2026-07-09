@@ -30,6 +30,7 @@ from qfluentwidgets import (
     BodyLabel,
     CheckBox,
     ComboBox,
+    DoubleSpinBox,
     EditableComboBox,
     FluentIcon,
     HeaderCardWidget,
@@ -45,6 +46,7 @@ from qfluentwidgets import (
 
 from core.ansi_parser import AnsiAttrs, parse_ansi
 from core.config_service import ConfigService
+from core.crc_utils import CRC_ALGORITHMS, compute_crc
 from core.jlink_worker import RESET_MODE_HALT, JLinkWorker
 
 from . import _infobar
@@ -216,6 +218,11 @@ class RTTMonitorPage(QWidget):
         import time as _time_mod
         self._last_rx_time: float = 0.0
         self._time_mod = _time_mod
+
+        # 定时发送：QTimer + pending 标志（未连接时勾选 → 连接后自动启动）
+        self._timed_send_pending = False
+        self._timed_send_timer = QTimer(self)
+        self._timed_send_timer.timeout.connect(self._on_timed_send_fire)
 
         # 按当前 reset_mode 设置按钮文字 + 订阅 cfg 变化实时刷新
         self._apply_reset_mode_to_button(cfg.get("reset_mode"))
@@ -455,6 +462,39 @@ class RTTMonitorPage(QWidget):
         row_frame.addStretch(1)
         v.addLayout(row_frame)
 
+        # ---- 发送设置分组 ----
+        v.addWidget(StrongBodyLabel("发送设置"))
+
+        # 定时发送
+        row_timed = QHBoxLayout()
+        row_timed.setSpacing(4)
+        self.chk_timed_send = CheckBox("定时发送")
+        self.sp_timed_interval = DoubleSpinBox(inner)
+        self.sp_timed_interval.setRange(0.001, 999.0)
+        self.sp_timed_interval.setDecimals(3)
+        self.sp_timed_interval.setValue(1.0)
+        self.sp_timed_interval.setSuffix(" s")
+        self.sp_timed_interval.setMaximumWidth(90)
+        _tip(self.sp_timed_interval, "定时发送间隔（0.001~999 秒）")
+        row_timed.addWidget(self.chk_timed_send)
+        row_timed.addWidget(self.sp_timed_interval)
+        row_timed.addStretch(1)
+        v.addLayout(row_timed)
+
+        # CRC 脚本
+        row_crc = QHBoxLayout()
+        row_crc.setSpacing(4)
+        self.chk_crc_script = CheckBox("脚本")
+        self.cb_crc_algo = ComboBox(inner)
+        for display_name, _ in CRC_ALGORITHMS:
+            self.cb_crc_algo.addItem(display_name)
+        self.cb_crc_algo.setCurrentIndex(1)  # 默认 CRC-16/MODBUS
+        _tip(self.cb_crc_algo, "发送时追加 CRC 后缀（算法选）")
+        row_crc.addWidget(self.chk_crc_script)
+        row_crc.addWidget(self.cb_crc_algo)
+        row_crc.addStretch(1)
+        v.addLayout(row_crc)
+
         # 字号
         row_font = QHBoxLayout()
         row_font.setSpacing(4)
@@ -616,6 +656,7 @@ class RTTMonitorPage(QWidget):
         self.display.verticalScrollBar().valueChanged.connect(self._on_display_scrolled)
         self.chk_hex.toggled.connect(self._on_hex_send_toggled)
         self.btn_send.clicked.connect(self._on_send_clicked)
+        self.chk_timed_send.toggled.connect(self._on_timed_send_toggled)
 
         # 字号 ± 按钮：直接走 cfg.set → font_changed → _apply_font
         self.btn_font_minus.clicked.connect(lambda: self._adjust_font_size(-1))
@@ -731,12 +772,37 @@ class RTTMonitorPage(QWidget):
         text = self.le_send.currentText()
         if not text:
             return
-        self._worker.send_data_requested.emit(text, self.chk_hex.isChecked())
-        # 加入历史（去重 + 末尾追加）
+        is_hex = self.chk_hex.isChecked()
+
+        # CRC 脚本：在原始 payload 后追加 CRC 字节
+        if self.chk_crc_script.isChecked():
+            try:
+                algo_idx = self.cb_crc_algo.currentIndex()
+                _, algo_key = CRC_ALGORITHMS[algo_idx]
+                # 先把用户输入转成原始 bytes
+                if is_hex:
+                    cleaned = text.replace(" ", "").replace("\n", "").replace("\r", "")
+                    if len(cleaned) % 2 != 0:
+                        cleaned += "0"
+                    payload = bytes.fromhex(cleaned)
+                else:
+                    payload = text.encode("utf-8")
+                crc_bytes = compute_crc(algo_key, payload)
+                full_payload = payload + crc_bytes
+                # 追加 CRC 后以 HEX 方式发送
+                text = " ".join(f"{b:02X}" for b in full_payload)
+                is_hex = True
+            except Exception as exc:
+                _infobar.warn(self, "CRC 错误", str(exc))
+                return
+
+        self._worker.send_data_requested.emit(text, is_hex)
+        # 加入历史（去重 + 末尾追加）—— 存用户原始输入，不存 CRC 追加后的
+        orig_text = self.le_send.currentText()
         hist = list(self._cfg.get("send_history"))
-        if text in hist:
-            hist.remove(text)
-        hist.append(text)
+        if orig_text in hist:
+            hist.remove(orig_text)
+        hist.append(orig_text)
         self._cfg.set("send_history", hist)
         # 同步刷新下拉项：最新在最前
         self.le_send.blockSignals(True)
@@ -775,6 +841,39 @@ class RTTMonitorPage(QWidget):
             except ValueError:
                 pass  # 非法 HEX，保留原文
 
+    # ---- 定时发送 ----
+    def _on_timed_send_toggled(self, checked: bool) -> None:
+        """定时发送 checkbox 切换：启动/停止定时器。"""
+        if checked:
+            if not self._is_connected:
+                _infobar.warn(self, "提示", "未连接目标，定时发送将在连接后自动启动")
+                self._timed_send_pending = True
+                return
+            self._start_timed_send_timer()
+        else:
+            self._timed_send_timer.stop()
+            self._timed_send_pending = False
+
+    def _start_timed_send_timer(self) -> None:
+        """按当前 interval 启动/重启定时器。"""
+        self._timed_send_timer.stop()
+        interval_ms = max(1, int(self.sp_timed_interval.value() * 1000))
+        self._timed_send_timer.setInterval(interval_ms)
+        self._timed_send_timer.start()
+        self._timed_send_pending = False
+
+    def _on_timed_send_fire(self) -> None:
+        """定时器回调：自动触发发送。"""
+        if not self._is_connected:
+            self._timed_send_timer.stop()
+            self._timed_send_pending = True
+            return
+        # 如果用户改了间隔，实时生效
+        interval_ms = max(1, int(self.sp_timed_interval.value() * 1000))
+        if self._timed_send_timer.interval() != interval_ms:
+            self._timed_send_timer.setInterval(interval_ms)
+        self._on_send_clicked()
+
     def _on_state_changed(self, connected: bool) -> None:
         from datetime import datetime
         if connected:
@@ -811,6 +910,10 @@ class RTTMonitorPage(QWidget):
         speed = info.get("speed_khz", "—")
         self.lbl_status_state.setText(f"● 已连接 {target}")
         self.lbl_status_state.setStyleSheet("color: #2ecc71;")
+        # 定时发送：连接后自动恢复（如果 checkbox 仍勾选且 pending）
+        if self._timed_send_pending and self.chk_timed_send.isChecked():
+            self._start_timed_send_timer()
+
         # 卡片标题加摘要
         self.gb_info.setTitle(f"设备信息 — {target} / {iface} / {speed} kHz")
 
@@ -835,6 +938,8 @@ class RTTMonitorPage(QWidget):
         # 清除上次统计 delta 基线
         self._stats_prev_bytes = 0
         self._stats_prev_lines = 0
+        # 断开时停止定时发送
+        self._timed_send_timer.stop()
 
     def _update_stats(self) -> None:
         """1s 一次：从 worker 同步取吞吐，UI 端算 delta 显示。"""
