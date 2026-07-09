@@ -212,6 +212,11 @@ class RTTMonitorPage(QWidget):
         # 复位计数：连接成功时重置为 0，每次 reset 操作 +1
         self._reset_count = 0
 
+        # 自动断帧：上次接收数据的时间戳
+        import time as _time_mod
+        self._last_rx_time: float = 0.0
+        self._time_mod = _time_mod
+
         # 按当前 reset_mode 设置按钮文字 + 订阅 cfg 变化实时刷新
         self._apply_reset_mode_to_button(cfg.get("reset_mode"))
         cfg.reset_mode_changed.connect(self._apply_reset_mode_to_button)
@@ -427,6 +432,29 @@ class RTTMonitorPage(QWidget):
         self.chk_log_rec = CheckBox("实时日志记录")
         v.addWidget(self.chk_log_rec)
 
+        # HEX 显示
+        self.chk_hex_display = CheckBox("十六进制显示")
+        _tip(self.chk_hex_display, "将接收到的每个字节以大写的 HEX 格式显示")
+        v.addWidget(self.chk_hex_display)
+
+        # 自动断帧
+        row_frame = QHBoxLayout()
+        row_frame.setSpacing(4)
+        self.chk_auto_frame = CheckBox("自动断帧")
+        self.sp_frame_timeout = SpinBox(inner)
+        self.sp_frame_timeout.setRange(1, 200)
+        self.sp_frame_timeout.setValue(20)
+        self.sp_frame_timeout.setSuffix(" ms")
+        self.sp_frame_timeout.setMaximumWidth(80)
+        _tip(self.sp_frame_timeout,
+             "接收超时设置(1~200毫秒)，默认 20ms。\n"
+             "在接收连续数据流时，如果相邻两批数据的接收时间间隔\n"
+             "超过设定值，则判定为一帧数据结束，自动插入换行。")
+        row_frame.addWidget(self.chk_auto_frame)
+        row_frame.addWidget(self.sp_frame_timeout)
+        row_frame.addStretch(1)
+        v.addLayout(row_frame)
+
         # 字号
         row_font = QHBoxLayout()
         row_font.setSpacing(4)
@@ -586,7 +614,7 @@ class RTTMonitorPage(QWidget):
         # 用户手动滚动 → 取消 chk_auto_scroll 勾选；用 _programmatic_scroll 标志
         # 区分程序性 setValue 和用户拖动
         self.display.verticalScrollBar().valueChanged.connect(self._on_display_scrolled)
-        self.chk_hex.toggled.connect(lambda v: self._cfg.set("hex_send_mode", v))
+        self.chk_hex.toggled.connect(self._on_hex_send_toggled)
         self.btn_send.clicked.connect(self._on_send_clicked)
 
         # 字号 ± 按钮：直接走 cfg.set → font_changed → _apply_font
@@ -717,6 +745,36 @@ class RTTMonitorPage(QWidget):
         self.le_send.setCurrentText("")
         self.le_send.blockSignals(False)
 
+    def _on_hex_send_toggled(self, checked: bool) -> None:
+        """HEX 发送模式切换：双向转换输入框内容。
+
+        checked=True  → 文本 → HEX："hello" → "68 65 6C 6C 6F"
+        checked=False → HEX → 文本："68 65 6C 6C 6F" → "hello"
+        转换失败（非法 HEX）则保留原文。
+        """
+        self._cfg.set("hex_send_mode", checked)
+        cur = self.le_send.currentText()
+        if not cur:
+            return
+        if checked:
+            # 文本 → HEX
+            try:
+                raw = cur.encode("utf-8")
+                hex_str = " ".join(f"{b:02X}" for b in raw)
+                self.le_send.setCurrentText(hex_str)
+            except Exception:
+                pass
+        else:
+            # HEX → 文本
+            try:
+                cleaned = cur.replace(" ", "").replace("\n", "").replace("\r", "")
+                if len(cleaned) % 2 != 0:
+                    cleaned += "0"
+                raw = bytes.fromhex(cleaned)
+                self.le_send.setCurrentText(raw.decode("utf-8", errors="replace"))
+            except ValueError:
+                pass  # 非法 HEX，保留原文
+
     def _on_state_changed(self, connected: bool) -> None:
         from datetime import datetime
         if connected:
@@ -806,17 +864,51 @@ class RTTMonitorPage(QWidget):
             self.lbl_status_encoding.setText(f"编码: {encoding}")
 
     def _on_rtt_data(self, text: str) -> None:
-        """worker 已经 50ms 合并好，直接 insertText。"""
+        """worker 已经 50ms 合并好，直接 insertText。
+
+        支持：
+        - HEX 显示：每字节大写 HEX + 空格
+        - 自动断帧：两批数据间隔 > 阈值时自动插入换行
+        """
         if not text:
             return
+
+        # 自动断帧：两批数据间隔超过阈值时插入换行
+        now = self._time_mod.time()
+        if (self.chk_auto_frame.isChecked()
+                and self._last_rx_time > 0
+                and (now - self._last_rx_time) * 1000 > self.sp_frame_timeout.value()):
+            # 插入换行分隔不同帧
+            sb_pre = self.display.verticalScrollBar()
+            at_b = sb_pre.value() >= sb_pre.maximum() - 4
+            tc = self.display.textCursor()
+            tc.movePosition(QTextCursor.End)
+            if tc.columnNumber() != 0:
+                tc.insertText("\n")
+            if at_b and self.chk_auto_scroll.isChecked():
+                with self._programmatic_scroll_guard():
+                    sb_pre.setValue(sb_pre.maximum())
+        self._last_rx_time = now
+
         # 自动滚动判断必须在插入文本前
         sb = self.display.verticalScrollBar()
         at_bottom = sb.value() >= sb.maximum() - 4
 
         cursor = self.display.textCursor()
         cursor.movePosition(QTextCursor.End)
-        for seg, attrs in parse_ansi(text):
-            cursor.insertText(seg, self._fmt(attrs))
+
+        if self.chk_hex_display.isChecked():
+            # HEX 显示：将文本编码为字节，每字节大写 HEX + 空格
+            try:
+                raw = text.encode(self._cfg.get("rtt_encoding") or "utf-8",
+                                  errors="replace")
+            except LookupError:
+                raw = text.encode("utf-8", errors="replace")
+            hex_str = " ".join(f"{b:02X}" for b in raw)
+            cursor.insertText(hex_str + " ")
+        else:
+            for seg, attrs in parse_ansi(text):
+                cursor.insertText(seg, self._fmt(attrs))
 
         if at_bottom and self.chk_auto_scroll.isChecked():
             with self._programmatic_scroll_guard():
