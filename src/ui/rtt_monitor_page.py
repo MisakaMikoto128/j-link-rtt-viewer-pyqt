@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -259,32 +260,14 @@ class RTTMonitorPage(QWidget):
         self._right_panel = self._build_right_panel()
         main_split.addWidget(self._right_panel, 1)
 
-        outer.addLayout(main_split)
+        # ==== 收起态垂直图标条（默认隐藏，替代配置面板）====
+        # 必须在 _build_right_panel 之后，因为引用了 self.display
+        self._icon_bar = self._build_icon_bar()
+        self._icon_bar.setVisible(False)
+        # 插入到 config_panel 和 right_panel 之间
+        main_split.insertWidget(1, self._icon_bar)
 
-        # 收起状态下的快捷按钮栏（默认隐藏）
-        self._quick_toolbar = QWidget(self)
-        self._quick_toolbar.setVisible(False)
-        qt = QHBoxLayout(self._quick_toolbar)
-        qt.setContentsMargins(4, 2, 4, 2)
-        qt.setSpacing(4)
-        self._btn_quick_pause = TransparentToolButton(
-            FluentIcon.PAUSE, self._quick_toolbar)
-        _tip(self._btn_quick_pause, "暂停/恢复接收")
-        self._btn_quick_pause.setCheckable(True)
-        self._btn_quick_pause.toggled.connect(
-            self._worker.set_pause_receive_requested.emit)
-        self._btn_quick_clear = TransparentToolButton(
-            FluentIcon.DELETE, self._quick_toolbar)
-        _tip(self._btn_quick_clear, "清除显示")
-        self._btn_quick_clear.clicked.connect(self.display.clear)
-        self._btn_quick_save = TransparentToolButton(
-            FluentIcon.SAVE, self._quick_toolbar)
-        _tip(self._btn_quick_save, "保存当前")
-        self._btn_quick_save.clicked.connect(self._on_save_clicked)
-        qt.addWidget(self._btn_quick_pause)
-        qt.addWidget(self._btn_quick_clear)
-        qt.addWidget(self._btn_quick_save)
-        qt.addStretch(1)
+        outer.addLayout(main_split)
 
         # 窗口 resize 防抖 timer
         self._resize_timer = QTimer(self)
@@ -292,6 +275,40 @@ class RTTMonitorPage(QWidget):
         self._resize_timer.setInterval(100)
         self._resize_timer.timeout.connect(self._on_resize_debounce)
 
+    def _build_icon_bar(self) -> QWidget:
+        """收起态垂直图标条：固定 48px 宽，垂直排列常用操作按钮。"""
+        bar = QWidget(self)
+        bar.setObjectName("iconBar")
+        bar.setFixedWidth(48)
+        bar.setStyleSheet(
+            "QWidget#iconBar { background: transparent; "
+            "border-right: 1px solid rgba(128,128,128,0.15); }")
+        v = QVBoxLayout(bar)
+        v.setContentsMargins(6, 12, 6, 12)
+        v.setSpacing(8)
+
+        self._btn_quick_pause = TransparentToolButton(FluentIcon.PAUSE, bar)
+        self._btn_quick_pause.setFixedSize(36, 36)
+        _tip(self._btn_quick_pause, "暂停/恢复接收")
+        self._btn_quick_pause.setCheckable(True)
+        self._btn_quick_pause.toggled.connect(
+            self._worker.set_pause_receive_requested.emit)
+        v.addWidget(self._btn_quick_pause, 0, Qt.AlignHCenter)
+
+        self._btn_quick_clear = TransparentToolButton(FluentIcon.DELETE, bar)
+        self._btn_quick_clear.setFixedSize(36, 36)
+        _tip(self._btn_quick_clear, "清除显示")
+        self._btn_quick_clear.clicked.connect(self.display.clear)
+        v.addWidget(self._btn_quick_clear, 0, Qt.AlignHCenter)
+
+        self._btn_quick_save = TransparentToolButton(FluentIcon.SAVE, bar)
+        self._btn_quick_save.setFixedSize(36, 36)
+        _tip(self._btn_quick_save, "保存当前")
+        self._btn_quick_save.clicked.connect(self._on_save_clicked)
+        v.addWidget(self._btn_quick_save, 0, Qt.AlignHCenter)
+
+        v.addStretch(1)
+        return bar
     # ------------------------------------------------------------------
     # 左侧配置面板
     # ------------------------------------------------------------------
@@ -299,7 +316,7 @@ class RTTMonitorPage(QWidget):
         """构建左侧配置面板，返回容器 widget。"""
         panel = QWidget(self)
         panel.setObjectName("configPanel")
-        panel.setFixedWidth(240)
+        panel.setFixedWidth(260)
         panel.setStyleSheet(
             "QWidget#configPanel { background: transparent; }"
         )
@@ -326,8 +343,8 @@ class RTTMonitorPage(QWidget):
         pl.addWidget(scroll)
 
         v = QVBoxLayout(inner)
-        v.setContentsMargins(8, 8, 8, 8)
-        v.setSpacing(6)
+        v.setContentsMargins(12, 12, 12, 12)
+        v.setSpacing(8)
 
         # ---- 连接控制区 ----
         v.addWidget(StrongBodyLabel("连接设置"))
@@ -345,13 +362,13 @@ class RTTMonitorPage(QWidget):
         v.addWidget(self.cb_target)
 
         row_iface = QHBoxLayout()
-        row_iface.setSpacing(4)
+        row_iface.setSpacing(6)
         row_iface.addWidget(BodyLabel("接口"))
         self.cb_iface = ComboBox(inner)
         self.cb_iface.addItems(["SWD", "JTAG"])
         self.cb_iface.setCurrentText(self._cfg.get("interface"))
         row_iface.addWidget(self.cb_iface)
-        row_iface.addSpacing(8)
+        row_iface.addSpacing(16)
         row_iface.addWidget(BodyLabel("速度"))
         self.cb_speed = ComboBox(inner)
         for s in self._cfg.get_default_speeds():
@@ -364,7 +381,7 @@ class RTTMonitorPage(QWidget):
         v.addLayout(row_iface)
 
         row_ch = QHBoxLayout()
-        row_ch.setSpacing(4)
+        row_ch.setSpacing(6)
         row_ch.addWidget(BodyLabel("RTT 通道"))
         self.sp_channel = SpinBox(inner)
         self.sp_channel.setRange(0, 15)
@@ -378,14 +395,18 @@ class RTTMonitorPage(QWidget):
         v.addWidget(self.btn_connect)
 
         row_reset = QHBoxLayout()
-        row_reset.setSpacing(4)
+        row_reset.setSpacing(8)
         self.btn_reset = PushButton(FluentIcon.SYNC, "重置目标", inner)
         _tip(self.btn_reset, "F4 重置目标")
         self.btn_reset.setEnabled(False)
+        self.btn_reset.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.btn_reset_halt = PushButton(
             FluentIcon.PAUSE_BOLD, "重置并暂停", inner)
         _tip(self.btn_reset_halt, "复位 MCU 并停在复位状态（halt）")
         self.btn_reset_halt.setEnabled(False)
+        self.btn_reset_halt.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Fixed)
         row_reset.addWidget(self.btn_reset)
         row_reset.addWidget(self.btn_reset_halt)
         v.addLayout(row_reset)
@@ -427,6 +448,7 @@ class RTTMonitorPage(QWidget):
         v.addWidget(self.gb_info)
 
         # ---- 接收设置分组 ----
+        v.addSpacing(4)
         v.addWidget(StrongBodyLabel("接收设置"))
         self.chk_auto_scroll = CheckBox("自动滚动")
         self.chk_auto_scroll.setChecked(self._cfg.get("auto_scroll"))
@@ -446,7 +468,7 @@ class RTTMonitorPage(QWidget):
 
         # 自动断帧
         row_frame = QHBoxLayout()
-        row_frame.setSpacing(4)
+        row_frame.setSpacing(6)
         self.chk_auto_frame = CheckBox("自动断帧")
         self.sp_frame_timeout = SpinBox(inner)
         self.sp_frame_timeout.setRange(1, 200)
@@ -463,11 +485,12 @@ class RTTMonitorPage(QWidget):
         v.addLayout(row_frame)
 
         # ---- 发送设置分组 ----
+        v.addSpacing(4)
         v.addWidget(StrongBodyLabel("发送设置"))
 
         # 定时发送
         row_timed = QHBoxLayout()
-        row_timed.setSpacing(4)
+        row_timed.setSpacing(6)
         self.chk_timed_send = CheckBox("定时发送")
         self.sp_timed_interval = DoubleSpinBox(inner)
         self.sp_timed_interval.setRange(0.001, 999.0)
@@ -483,7 +506,7 @@ class RTTMonitorPage(QWidget):
 
         # CRC 脚本
         row_crc = QHBoxLayout()
-        row_crc.setSpacing(4)
+        row_crc.setSpacing(6)
         self.chk_crc_script = CheckBox("脚本")
         self.cb_crc_algo = ComboBox(inner)
         for display_name, _ in CRC_ALGORITHMS:
@@ -497,7 +520,7 @@ class RTTMonitorPage(QWidget):
 
         # 字号
         row_font = QHBoxLayout()
-        row_font.setSpacing(4)
+        row_font.setSpacing(6)
         row_font.addWidget(BodyLabel("字号"))
         self.btn_font_minus = TransparentToolButton(
             FluentIcon.ZOOM_OUT, inner)
@@ -523,7 +546,7 @@ class RTTMonitorPage(QWidget):
         v.addWidget(self.le_mark)
 
         row_mark = QHBoxLayout()
-        row_mark.setSpacing(4)
+        row_mark.setSpacing(8)
         self.btn_mark = PushButton("插入标记", inner)
         _tip(self.btn_mark, "在显示区插入分隔标记")
         self.btn_clear = PushButton("清除", inner)
@@ -547,7 +570,7 @@ class RTTMonitorPage(QWidget):
             "QWidget#rightPanel { background: transparent; }")
         v = QVBoxLayout(panel)
         v.setContentsMargins(8, 8, 8, 8)
-        v.setSpacing(4)
+        v.setSpacing(6)
 
         # ---- 显示区 ----
         self.display = PlainTextEdit(panel)
@@ -585,7 +608,7 @@ class RTTMonitorPage(QWidget):
         self.btn_send.setEnabled(False)
 
         send_row = QHBoxLayout()
-        send_row.setSpacing(4)
+        send_row.setSpacing(6)
         send_row.addWidget(self.le_send, 1)
         send_row.addWidget(self.chk_hex)
         send_row.addWidget(self.btn_send)
@@ -637,7 +660,7 @@ class RTTMonitorPage(QWidget):
     def _set_config_panel_visible(self, visible: bool) -> None:
         self._config_visible = visible
         self._config_panel.setVisible(visible)
-        self._quick_toolbar.setVisible(not visible)
+        self._icon_bar.setVisible(not visible)
 
     # ------------------------------------------------------------------
     # 信号接线
