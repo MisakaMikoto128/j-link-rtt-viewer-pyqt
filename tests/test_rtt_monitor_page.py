@@ -265,7 +265,7 @@ def test_auto_frame_inserts_newline_on_gap(rtt_page, qtbot):
     """开启自动断帧且间隔超阈值时应插入换行。"""
     page, worker, _ = rtt_page
     page.chk_auto_frame.setChecked(True)
-    page.sp_frame_timeout.setValue(5)  # 5ms 阈值
+    page.le_frame_timeout.setText("5")  # 5ms 阈值
     # 第一批数据
     worker.rtt_data_received.emit("frame1")
     qtbot.wait(30)  # 等 > 5ms

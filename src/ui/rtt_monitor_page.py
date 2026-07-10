@@ -31,10 +31,10 @@ from qfluentwidgets import (
     BodyLabel,
     CheckBox,
     ComboBox,
-    DoubleSpinBox,
     EditableComboBox,
     FluentIcon,
     HeaderCardWidget,
+    LineEdit,
     PlainTextEdit,
     PrimaryPushButton,
     PushButton,
@@ -466,19 +466,29 @@ class RTTMonitorPage(QWidget):
         row_frame = QHBoxLayout()
         row_frame.setSpacing(6)
         self.chk_auto_frame = CheckBox("自动断帧")
-        self.sp_frame_timeout = SpinBox(inner)
-        self.sp_frame_timeout.setRange(1, 200)
-        self.sp_frame_timeout.setValue(20)
-        self.sp_frame_timeout.setSuffix(" ms")
-        self.sp_frame_timeout.setMaximumWidth(80)
-        _tip(self.sp_frame_timeout,
-             "接收超时设置(1~200毫秒)，默认 20ms。\n"
+        self.le_frame_timeout = LineEdit(inner)
+        self.le_frame_timeout.setText("20")
+        self.le_frame_timeout.setFixedWidth(56)
+        self.le_frame_timeout.setClearButtonEnabled(True)
+        self.le_frame_timeout.setEnabled(False)
+        self.lbl_frame_unit = BodyLabel("ms")
+        self.btn_frame_help = TransparentToolButton(
+            FluentIcon.HELP, inner)
+        self.btn_frame_help.setFixedSize(28, 28)
+        _tip(self.btn_frame_help,
+             "接收超时设置（1~200 毫秒），默认 20ms。\n\n"
+             "___|bytes|___Δt___|bytes|___\n\n"
              "在接收连续数据流时，如果相邻两批数据的接收时间间隔\n"
-             "超过设定值，则判定为一帧数据结束，自动插入换行。")
+             "超过设定值，则判定为一帧数据结束，自动插入换行。\n\n"
+             "自动断帧：启用后，每个数据帧显示后自动添加换行符，\n"
+             "便于区分不同帧。")
         row_frame.addWidget(self.chk_auto_frame)
-        row_frame.addWidget(self.sp_frame_timeout)
+        row_frame.addWidget(self.le_frame_timeout)
+        row_frame.addWidget(self.lbl_frame_unit)
+        row_frame.addWidget(self.btn_frame_help)
         row_frame.addStretch(1)
         v.addLayout(row_frame)
+        self.chk_auto_frame.toggled.connect(self._on_auto_frame_toggled)
 
         # ---- 发送设置分组 ----
         v.addSpacing(4)
@@ -488,15 +498,15 @@ class RTTMonitorPage(QWidget):
         row_timed = QHBoxLayout()
         row_timed.setSpacing(6)
         self.chk_timed_send = CheckBox("定时发送")
-        self.sp_timed_interval = DoubleSpinBox(inner)
-        self.sp_timed_interval.setRange(0.001, 999.0)
-        self.sp_timed_interval.setDecimals(3)
-        self.sp_timed_interval.setValue(1.0)
-        self.sp_timed_interval.setSuffix(" s")
-        self.sp_timed_interval.setMaximumWidth(90)
-        _tip(self.sp_timed_interval, "定时发送间隔（0.001~999 秒）")
+        self.le_timed_interval = LineEdit(inner)
+        self.le_timed_interval.setText("1.0")
+        self.le_timed_interval.setFixedWidth(72)
+        self.le_timed_interval.setClearButtonEnabled(True)
+        self.le_timed_interval.setEnabled(False)
+        self.lbl_timed_unit = BodyLabel("秒")
         row_timed.addWidget(self.chk_timed_send)
-        row_timed.addWidget(self.sp_timed_interval)
+        row_timed.addWidget(self.le_timed_interval)
+        row_timed.addWidget(self.lbl_timed_unit)
         row_timed.addStretch(1)
         v.addLayout(row_timed)
 
@@ -851,9 +861,23 @@ class RTTMonitorPage(QWidget):
             except ValueError:
                 pass  # 非法 HEX，保留原文
 
+    # ---- 自动断帧 ----
+    def _on_auto_frame_toggled(self, checked: bool) -> None:
+        """自动断帧 checkbox 切换：启用/禁用超时输入和幫助按钮。"""
+        self.le_frame_timeout.setEnabled(checked)
+        self.btn_frame_help.setEnabled(checked)
+
+    def _get_frame_timeout_ms(self) -> int:
+        """从 LineEdit 解析自动断帧超时值，夹到 [1, 200]。"""
+        try:
+            return max(1, min(200, int(self.le_frame_timeout.text())))
+        except (ValueError, AttributeError):
+            return 20
+
     # ---- 定时发送 ----
     def _on_timed_send_toggled(self, checked: bool) -> None:
-        """定时发送 checkbox 切换：启动/停止定时器。"""
+        """定时发送 checkbox 切换：启动/停止定时器，启用/禁用输入。"""
+        self.le_timed_interval.setEnabled(checked)
         if checked:
             if not self._is_connected:
                 _infobar.warn(self, "提示", "未连接目标，定时发送将在连接后自动启动")
@@ -864,10 +888,18 @@ class RTTMonitorPage(QWidget):
             self._timed_send_timer.stop()
             self._timed_send_pending = False
 
+    def _get_timed_interval_sec(self) -> float:
+        """从 LineEdit 解析定时发送间隔，夹到 [0.001, 999]。"""
+        try:
+            v = float(self.le_timed_interval.text())
+            return max(0.001, min(999.0, v))
+        except (ValueError, AttributeError):
+            return 1.0
+
     def _start_timed_send_timer(self) -> None:
         """按当前 interval 启动/重启定时器。"""
         self._timed_send_timer.stop()
-        interval_ms = max(1, int(self.sp_timed_interval.value() * 1000))
+        interval_ms = max(1, int(self._get_timed_interval_sec() * 1000))
         self._timed_send_timer.setInterval(interval_ms)
         self._timed_send_timer.start()
         self._timed_send_pending = False
@@ -879,7 +911,7 @@ class RTTMonitorPage(QWidget):
             self._timed_send_pending = True
             return
         # 如果用户改了间隔，实时生效
-        interval_ms = max(1, int(self.sp_timed_interval.value() * 1000))
+        interval_ms = max(1, int(self._get_timed_interval_sec() * 1000))
         if self._timed_send_timer.interval() != interval_ms:
             self._timed_send_timer.setInterval(interval_ms)
         self._on_send_clicked()
@@ -992,7 +1024,7 @@ class RTTMonitorPage(QWidget):
         now = self._time_mod.time()
         if (self.chk_auto_frame.isChecked()
                 and self._last_rx_time > 0
-                and (now - self._last_rx_time) * 1000 > self.sp_frame_timeout.value()):
+                and (now - self._last_rx_time) * 1000 > self._get_frame_timeout_ms()):
             # 插入换行分隔不同帧
             sb_pre = self.display.verticalScrollBar()
             at_b = sb_pre.value() >= sb_pre.maximum() - 4
