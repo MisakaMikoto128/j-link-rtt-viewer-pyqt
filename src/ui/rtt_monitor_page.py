@@ -394,19 +394,15 @@ class RTTMonitorPage(QWidget):
         _tip(self.btn_connect, "F2 连接 / F3 断开")
         v.addWidget(self.btn_connect)
 
-        row_reset = QHBoxLayout()
-        row_reset.setSpacing(8)
+        row_reset = QVBoxLayout()
+        row_reset.setSpacing(4)
         self.btn_reset = PushButton(FluentIcon.SYNC, "重置目标", inner)
         _tip(self.btn_reset, "F4 重置目标")
         self.btn_reset.setEnabled(False)
-        self.btn_reset.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.btn_reset_halt = PushButton(
             FluentIcon.PAUSE_BOLD, "重置并暂停", inner)
         _tip(self.btn_reset_halt, "复位 MCU 并停在复位状态（halt）")
         self.btn_reset_halt.setEnabled(False)
-        self.btn_reset_halt.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Fixed)
         row_reset.addWidget(self.btn_reset)
         row_reset.addWidget(self.btn_reset_halt)
         v.addLayout(row_reset)
@@ -578,21 +574,13 @@ class RTTMonitorPage(QWidget):
         self.display.setMaximumBlockCount(
             self._cfg.get("max_display_lines"))
         self.display.setLineWrapMode(PlainTextEdit.WidgetWidth)
-        saved_h = int(self._cfg.get("rtt_display_height") or 500)
-        self.display.setFixedHeight(max(120, saved_h))
+        self.display.setMinimumHeight(120)
 
         # ---- 搜索栏（浮动在 right_panel 右上角，不随文本滚动）----
         self.search_bar = SearchBar(panel)
         self.search_bar.setVisible(False)
         self._cfg.theme_color_changed.connect(
             lambda _c: self.search_bar._apply_style())
-
-        # ---- resize handle ----
-        self.resize_handle = _VResizeHandle(self.display, panel)
-        self.resize_handle.heightChanged.connect(
-            lambda h: self._cfg.set("rtt_display_height", h))
-        self._cfg.theme_color_changed.connect(
-            lambda _c: self.resize_handle.update())
 
         # ---- 发送栏 ----
         self.le_send = EditableComboBox(panel)
@@ -634,8 +622,7 @@ class RTTMonitorPage(QWidget):
         status_row.addWidget(self.lbl_reset_count)
         status_row.addWidget(self.lbl_status_encoding)
 
-        v.addWidget(self.display)
-        v.addWidget(self.resize_handle)
+        v.addWidget(self.display, 1)
         v.addLayout(send_row)
         v.addLayout(status_row)
         return panel
