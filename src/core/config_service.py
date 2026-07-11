@@ -58,6 +58,8 @@ class ConfigService(QObject):
         "rtt_display_height": 500,
         # 会话标记颜色（用户插入标记 + 连接/断开自动标记共用）；hex string
         "mark_color": "#ffff55",
+        # 发送回显颜色：勾选"显示发送字符串"后在显示区追加的 » 行颜色；hex string
+        "send_text_color": "#FFA500",
         # 连接 / 断开时自动在 RTT 显示区插入一条分隔标记（便于会话分段）
         "auto_mark_on_connect": False,
         "auto_mark_on_disconnect": False,

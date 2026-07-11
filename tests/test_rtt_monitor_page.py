@@ -81,7 +81,7 @@ def test_hex_checkbox_persists_and_passes_to_send(rtt_page, qtbot):
     """勾上 Hex 后再发送，emit 时 hex 参数应为 True，且 cfg 已持久化。"""
     page, worker, cfg = rtt_page
     page._set_connected_ui(worker.get_device_info())
-    page.chk_hex.setChecked(True)
+    page.btn_hex_tx_down.setChecked(True)
     qtbot.wait(20)
     assert cfg.get("hex_send_mode") is True
     page.te_send.setPlainText("DEAD BEEF")
@@ -203,7 +203,7 @@ def test_hex_send_toggle_text_to_hex(rtt_page, qtbot):
     """勾选 Hex 时应将输入框文本转为 HEX 格式。"""
     page, _, _ = rtt_page
     page.te_send.setPlainText("hello")
-    page.chk_hex.setChecked(True)
+    page.btn_hex_tx_down.setChecked(True)
     qtbot.wait(20)
     assert page.te_send.toPlainText() == "68 65 6C 6C 6F"
 
@@ -211,10 +211,10 @@ def test_hex_send_toggle_text_to_hex(rtt_page, qtbot):
 def test_hex_send_toggle_hex_to_text(rtt_page, qtbot):
     """取消 Hex 时应将 HEX 转回文本。"""
     page, _, _ = rtt_page
-    page.chk_hex.setChecked(True)
+    page.btn_hex_tx_down.setChecked(True)
     qtbot.wait(10)
     page.te_send.setPlainText("68 65 6C 6C 6F")
-    page.chk_hex.setChecked(False)
+    page.btn_hex_tx_down.setChecked(False)
     qtbot.wait(20)
     assert page.te_send.toPlainText() == "hello"
 
