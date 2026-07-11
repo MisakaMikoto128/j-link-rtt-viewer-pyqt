@@ -3,16 +3,18 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QEnterEvent,
     QFont,
     QFontDatabase,
+    QKeySequence,
     QMouseEvent,
     QPainter,
     QPaintEvent,
     QResizeEvent,
+    QShortcut,
     QTextCharFormat,
     QTextCursor,
 )
@@ -750,7 +752,7 @@ class RTTMonitorPage(QWidget):
         send_btn_col.setSpacing(0)
         self.btn_send = PrimaryPushButton(FluentIcon.SEND_FILL, "", panel)
         self.btn_send.setFixedSize(48, 64)
-        self.btn_send.setIconSize(__import__("PySide6.QtCore").QSize(24, 24))
+        self.btn_send.setIconSize(QSize(24, 24))
         self.btn_send.setEnabled(False)
         _tip(self.btn_send, "发送 (Enter)")
         send_btn_col.addStretch(1)
@@ -833,8 +835,6 @@ class RTTMonitorPage(QWidget):
         self.chk_timed_send.toggled.connect(self._on_timed_send_toggled)
 
         # 发送文本框：Enter = 发送；Shift+Enter = 换行
-        from PySide6.QtWidgets import QShortcut
-        from PySide6.QtGui import QKeySequence
         _send_enter_shortcut = QShortcut(
             QKeySequence(Qt.Key_Return | Qt.Key_Enter), self.te_send)
         _send_enter_shortcut.setContext(Qt.WidgetWithChildrenShortcut)

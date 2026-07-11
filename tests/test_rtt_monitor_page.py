@@ -70,7 +70,7 @@ def test_send_text_routes_through_worker_and_persists_history(rtt_page, qtbot):
     """点击发送应 emit send_data_requested(text, hex=False) 并更新 send_history。"""
     page, worker, cfg = rtt_page
     page._set_connected_ui(worker.get_device_info())  # 解锁 btn_send
-    page.le_send.setText("hello world")
+    page.te_send.setPlainText("hello world")
     page.btn_send.click()
     qtbot.wait(20)
     assert worker._sent == [("hello world", False)]
@@ -84,7 +84,7 @@ def test_hex_checkbox_persists_and_passes_to_send(rtt_page, qtbot):
     page.chk_hex.setChecked(True)
     qtbot.wait(20)
     assert cfg.get("hex_send_mode") is True
-    page.le_send.setText("DEAD BEEF")
+    page.te_send.setPlainText("DEAD BEEF")
     page.btn_send.click()
     qtbot.wait(20)
     assert worker._sent == [("DEAD BEEF", True)]
@@ -95,7 +95,7 @@ def test_send_history_dedups_existing_entries(rtt_page, qtbot):
     page, worker, cfg = rtt_page
     page._set_connected_ui(worker.get_device_info())
     for t in ["a", "b", "a"]:
-        page.le_send.setText(t)
+        page.te_send.setPlainText(t)
         page.btn_send.click()
         qtbot.wait(10)
     hist = cfg.get("send_history")
@@ -106,7 +106,7 @@ def test_empty_text_does_not_send(rtt_page, qtbot):
     """空文本点发送应 no-op。"""
     page, worker, cfg = rtt_page
     page._set_connected_ui(worker.get_device_info())
-    page.le_send.setText("")
+    page.te_send.setPlainText("")
     page.btn_send.click()
     qtbot.wait(20)
     assert worker._sent == []
@@ -200,10 +200,10 @@ def test_programmatic_scroll_guard_blocks_auto_scroll_uncheck(rtt_page, qtbot):
 def test_hex_send_toggle_text_to_hex(rtt_page, qtbot):
     """勾选 Hex 时应将输入框文本转为 HEX 格式。"""
     page, _, _ = rtt_page
-    page.le_send.setText("hello")
+    page.te_send.setPlainText("hello")
     page.chk_hex.setChecked(True)
     qtbot.wait(20)
-    assert page.le_send.currentText() == "68 65 6C 6C 6F"
+    assert page.te_send.toPlainText() == "68 65 6C 6C 6F"
 
 
 def test_hex_send_toggle_hex_to_text(rtt_page, qtbot):
@@ -211,10 +211,10 @@ def test_hex_send_toggle_hex_to_text(rtt_page, qtbot):
     page, _, _ = rtt_page
     page.chk_hex.setChecked(True)
     qtbot.wait(10)
-    page.le_send.setText("68 65 6C 6C 6F")
+    page.te_send.setPlainText("68 65 6C 6C 6F")
     page.chk_hex.setChecked(False)
     qtbot.wait(20)
-    assert page.le_send.currentText() == "hello"
+    assert page.te_send.toPlainText() == "hello"
 
 
 # ---- CRC 脚本追加 ----
@@ -224,7 +224,7 @@ def test_crc_script_appends_crc_to_payload(rtt_page, qtbot):
     page._set_connected_ui(worker.get_device_info())
     page.chk_crc_script.setChecked(True)
     page.cb_crc_algo.setCurrentIndex(0)  # CRC-8
-    page.le_send.setText("AB")
+    page.te_send.setPlainText("AB")
     page.btn_send.click()
     qtbot.wait(20)
     assert len(worker._sent) == 1
@@ -294,3 +294,40 @@ def test_shortcut_find_fills_selected_text(rtt_page, qtbot):
     qtbot.wait(20)
     assert page.search_bar.le_search.text() == "world"
     assert page.search_bar.isVisible()
+
+
+# ---- 工具栏 / 脚本红色提示（UI 重构后行为）----
+def test_crc_script_toggle_shows_red_tip_and_red_border(rtt_page, qtbot):
+    """勾选 CRC 脚本应显示发送框上方红色提示条 + 红色边框。"""
+    page, _, _ = rtt_page
+    page.show()
+    assert not page.lbl_script_tip.isVisible()
+    page.chk_crc_script.setChecked(True)
+    qtbot.wait(20)
+    assert page.lbl_script_tip.isVisible()
+    # 取消勾选应隐藏
+    page.chk_crc_script.setChecked(False)
+    qtbot.wait(20)
+    assert not page.lbl_script_tip.isVisible()
+
+
+def test_toolbar_pause_syncs_with_left_panel_checkbox(rtt_page, qtbot):
+    """工具栏暂停按钮与左侧面板 chk_pause 应双向同步。"""
+    page, _, _ = rtt_page
+    page.btn_toolbar_pause.setChecked(True)
+    qtbot.wait(20)
+    assert page.chk_pause.isChecked()
+    page.chk_pause.setChecked(False)
+    qtbot.wait(20)
+    assert not page.btn_toolbar_pause.isChecked()
+
+
+def test_toolbar_clear_empties_display(rtt_page, qtbot):
+    """工具栏清空按钮应清空显示区。"""
+    page, worker, _ = rtt_page
+    worker.rtt_data_received.emit("some data\n")
+    qtbot.wait(30)
+    assert "some data" in page.display.toPlainText()
+    page.btn_toolbar_clear.click()
+    qtbot.wait(20)
+    assert page.display.toPlainText() == ""
