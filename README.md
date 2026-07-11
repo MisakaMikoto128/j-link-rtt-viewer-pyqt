@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![pylink-square](https://img.shields.io/badge/pylink--square-1.6.0-orange)](https://github.com/Square/pylink)
 
-| 正常模式 | 收窄模式（悬浮面板） |
+| 旧版主页 | 新版主页（v0.5.0） |
 |:---:|:---:|
 | ![home](img/home.png) | ![home2](img/home2.png) |
 
