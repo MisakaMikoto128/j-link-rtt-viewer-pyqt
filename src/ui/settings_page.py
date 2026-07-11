@@ -99,12 +99,9 @@ class SettingsPage(QWidget):
 
         # 主题模式
         self.cb_theme = ComboBox(self)
-        self.cb_theme.blockSignals(True)
         self.cb_theme.addItems(["跟随系统", "浅色", "深色"])
-        self.cb_theme.setCurrentIndex(-1)  # 清空 addItems 自动选中，避免闪烁
         theme_str = self._cfg.get("theme")
         self.cb_theme.setCurrentIndex({"auto": 0, "light": 1, "dark": 2}.get(theme_str, 0))
-        self.cb_theme.blockSignals(False)
         self.cb_theme.currentIndexChanged.connect(self._on_theme_changed)
         app_lay.addWidget(_SettingRow("主题模式", self.cb_theme))
 
@@ -132,12 +129,9 @@ class SettingsPage(QWidget):
         rtt_font_row = QHBoxLayout()
         rtt_font_row.addWidget(BodyLabel("RTT 显示字体"), 1)
         self.cb_rtt_font = EditableComboBox(self)
-        self.cb_rtt_font.blockSignals(True)
         self.cb_rtt_font.addItems(families)
-        self.cb_rtt_font.setCurrentIndex(-1)
         self.cb_rtt_font.setMinimumWidth(220)
         self.cb_rtt_font.setCurrentText(self._cfg.get("font_family") or "Consolas")
-        self.cb_rtt_font.blockSignals(False)
         # 自动补全：不区分大小写、子串匹配（输入"yahei"能找到"Microsoft YaHei"）
         completer_rtt = QCompleter(families, self)
         completer_rtt.setCaseSensitivity(Qt.CaseInsensitive)
@@ -159,13 +153,10 @@ class SettingsPage(QWidget):
         ui_font_row = QHBoxLayout()
         ui_font_row.addWidget(BodyLabel("UI 界面字体"), 1)
         self.cb_ui_font = EditableComboBox(self)
-        self.cb_ui_font.blockSignals(True)
         self.cb_ui_font.addItems(["（系统默认）"] + families)
-        self.cb_ui_font.setCurrentIndex(-1)
         self.cb_ui_font.setMinimumWidth(220)
         cur_ui_family = self._cfg.get("ui_font_family")
         self.cb_ui_font.setCurrentText(cur_ui_family if cur_ui_family else "（系统默认）")
-        self.cb_ui_font.blockSignals(False)
         # 自动补全（只补全 families，不含"系统默认"占位符）
         completer_ui = QCompleter(families, self)
         completer_ui.setCaseSensitivity(Qt.CaseInsensitive)
@@ -209,14 +200,11 @@ class SettingsPage(QWidget):
 
         # RTT 解码编码：默认 utf-8，可切换 gbk/utf-16-le/latin-1/ascii
         self.cb_encoding = ComboBox(self)
-        self.cb_encoding.blockSignals(True)
         self.cb_encoding.addItems(_ENCODING_DISPLAY_NAMES)
-        self.cb_encoding.setCurrentIndex(-1)  # 清空 addItems 自动选中，避免闪烁
         # 从 cfg 读取内部存储的编码名，映射到显示名
         cur_key: str = (self._cfg.get("rtt_encoding") or "utf-8").strip().lower()
         cur_display: str = _ENCODING_DISPLAY.get(cur_key, _ENCODING_DISPLAY["utf-8"])
         self.cb_encoding.setCurrentText(cur_display)
-        self.cb_encoding.blockSignals(False)
         self.cb_encoding.currentTextChanged.connect(self._on_encoding_changed)
         rtt_lay.addWidget(_SettingRow("RTT 解码编码", self.cb_encoding))
 
@@ -273,14 +261,11 @@ class SettingsPage(QWidget):
 
         # 重置模式：数据驱动 — 加 / 调序模式只动 _RESET_MODE_LABELS 一处
         self.cb_reset_mode = ComboBox(self)
-        self.cb_reset_mode.blockSignals(True)
         for _, label in _RESET_MODE_LABELS:
             self.cb_reset_mode.addItem(label)
-        self.cb_reset_mode.setCurrentIndex(-1)
         cur_mode = self._cfg.get("reset_mode")
         cur_idx = next((i for i, (m, _) in enumerate(_RESET_MODE_LABELS) if m == cur_mode), 0)
         self.cb_reset_mode.setCurrentIndex(cur_idx)
-        self.cb_reset_mode.blockSignals(False)
         self.cb_reset_mode.currentIndexChanged.connect(
             lambda i: self._cfg.set("reset_mode", _RESET_MODE_LABELS[i][0])
         )
