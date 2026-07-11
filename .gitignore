@@ -46,3 +46,5 @@ Thumbs.db
 *.bak
 .mimocode/mimocode.json
 AGENTS.md
+.pytest_tmp/*
+.workbuddy*

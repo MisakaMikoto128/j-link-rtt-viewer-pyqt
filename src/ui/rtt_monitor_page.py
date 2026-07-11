@@ -40,6 +40,7 @@ from qfluentwidgets import (
     PlainTextEdit,
     PrimaryPushButton,
     PushButton,
+    ScrollArea,
     SpinBox,
     StrongBodyLabel,
     ToolButton,
@@ -304,7 +305,7 @@ class RTTMonitorPage(QWidget):
             "border-right: 1px solid rgba(128,128,128,0.15); }"
         )
 
-        scroll = QScrollArea(panel)
+        scroll = ScrollArea(panel)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -326,7 +327,7 @@ class RTTMonitorPage(QWidget):
         pl.addWidget(scroll)
 
         v = QVBoxLayout(inner)
-        v.setContentsMargins(12, 10, 8, 10)
+        v.setContentsMargins(12, 10, 0, 10)
         v.setSpacing(6)
 
         # ════════════════════════════════════════════════════════════
