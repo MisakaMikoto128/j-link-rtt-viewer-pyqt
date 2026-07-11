@@ -46,7 +46,7 @@ from qfluentwidgets import (
     ToolButton,
     ToolTipFilter,
     TransparentToolButton,
-    themeColor,
+    themeColor, PrimaryToolButton, ToggleToolButton,
 )
 
 from core.ansi_parser import AnsiAttrs, parse_ansi
@@ -284,7 +284,7 @@ class RTTMonitorPage(QWidget):
         # 窗口 resize 防抖 timer
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
-        self._resize_timer.setInterval(100)
+        self._resize_timer.setInterval(30)
         self._resize_timer.timeout.connect(self._on_resize_debounce)
 
     # ------------------------------------------------------------------
@@ -648,8 +648,8 @@ class RTTMonitorPage(QWidget):
         toolbar_row.setContentsMargins(0, 0, 0, 0)
         toolbar_row.setSpacing(6)
 
-        # HEX 模式切换（接收方向）
-        self.btn_hex_rx_up = ToolButton(self._toolbar)
+        # HEX 模式切换（接收方向）—— 收窄工具栏的样式模板
+        self.btn_hex_rx_up = ToggleToolButton(self._toolbar)
         self.btn_hex_rx_up.setText("HEX ↑")
         self.btn_hex_rx_up.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_hex_rx_up.setFixedSize(56, 30)
@@ -659,13 +659,18 @@ class RTTMonitorPage(QWidget):
         self.btn_hex_rx_up.toggled.connect(self.chk_hex_display.setChecked)
         self.chk_hex_display.toggled.connect(self.btn_hex_rx_up.setChecked)
 
-        # HEX 发送模式
-        self.chk_hex = CheckBox("Hex", self._toolbar)
-        self.chk_hex.setChecked(self._cfg.get("hex_send_mode"))
-        self.chk_hex.setFixedWidth(50)
+        # HEX 发送模式（收窄工具栏入口）—— 与 btn_hex_rx_up 同款可勾选 ToolButton，
+        # 而非之前的 CheckBox，保证接收/发送两个 HEX 入口视觉一致
+        self.btn_hex_tx_down = ToggleToolButton(self._toolbar)
+        self.btn_hex_tx_down.setText("HEX ↓")
+        self.btn_hex_tx_down.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.btn_hex_tx_down.setFixedSize(56, 30)
+        _tip(self.btn_hex_tx_down, "发送 HEX 模式切换")
+        self.btn_hex_tx_down.setCheckable(True)
+        self.btn_hex_tx_down.setChecked(self._cfg.get("hex_send_mode"))
 
         # 暂停/恢复
-        self.btn_toolbar_pause = ToolButton(FluentIcon.PAUSE, self._toolbar)
+        self.btn_toolbar_pause = ToggleToolButton(FluentIcon.PAUSE, self._toolbar)
         self.btn_toolbar_pause.setFixedSize(36, 30)
         _tip(self.btn_toolbar_pause, "暂停/恢复接收")
         self.btn_toolbar_pause.setCheckable(True)
@@ -687,7 +692,7 @@ class RTTMonitorPage(QWidget):
         self.btn_toolbar_save.clicked.connect(self._on_save_clicked)
 
         toolbar_row.addWidget(self.btn_hex_rx_up)
-        toolbar_row.addWidget(self.chk_hex)
+        toolbar_row.addWidget(self.btn_hex_tx_down)
         toolbar_row.addWidget(self.btn_toolbar_pause)
         toolbar_row.addWidget(self.btn_toolbar_clear)
         toolbar_row.addWidget(self.btn_toolbar_save)
@@ -768,8 +773,9 @@ class RTTMonitorPage(QWidget):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        if hasattr(self, '_resize_timer'):
-            self._resize_timer.start()
+        # 阈值判断本身很轻量（一次比较+可能的 setVisible），不需要等真正
+        # resize 完成再触发，拖动过程中就应该实时响应，去掉防抖直接调用
+        self._on_resize_debounce()
 
     def _on_resize_debounce(self) -> None:
         w = self.width()
@@ -799,11 +805,11 @@ class RTTMonitorPage(QWidget):
         # 用户手动滚动 → 取消 chk_auto_scroll 勾选；用 _programmatic_scroll 标志
         # 区分程序性 setValue 和用户拖动
         self.display.verticalScrollBar().valueChanged.connect(self._on_display_scrolled)
-        self.chk_hex.toggled.connect(self._on_hex_send_toggled)
-        # 左侧面板"十六进制发送" ↔ 右侧工具栏 chk_hex 双向同步（同一状态两个入口）
-        self.chk_hex_left.setChecked(self.chk_hex.isChecked())
-        self.chk_hex_left.toggled.connect(self.chk_hex.setChecked)
-        self.chk_hex.toggled.connect(self.chk_hex_left.setChecked)
+        self.btn_hex_tx_down.toggled.connect(self._on_hex_send_toggled)
+        # 左侧面板"十六进制发送" ↔ 收窄工具栏 btn_hex_tx_down 双向同步（同一状态两个入口）
+        self.chk_hex_left.setChecked(self.btn_hex_tx_down.isChecked())
+        self.chk_hex_left.toggled.connect(self.btn_hex_tx_down.setChecked)
+        self.btn_hex_tx_down.toggled.connect(self.chk_hex_left.setChecked)
         self.btn_send.clicked.connect(self._on_send_clicked)
         self.chk_timed_send.toggled.connect(self._on_timed_send_toggled)
 
