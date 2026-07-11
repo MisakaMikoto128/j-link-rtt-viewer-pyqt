@@ -102,6 +102,16 @@ _DEFAULT_FG_QCOLOR = QColor("#dddddd")
 _DEFAULT_BG_QCOLOR = QColor("#222222")
 
 
+def _section_separator(parent: QWidget) -> QFrame:
+    """创建一条水平分隔线，用于左侧面板区域划分。"""
+    line = QFrame(parent)
+    line.setFixedHeight(1)
+    line.setFrameShape(QFrame.HLine)
+    line.setFrameShadow(QFrame.Sunken)
+    line.setStyleSheet("QFrame { color: rgba(128,128,128,0.25); max-height: 1px; }")
+    return line
+
+
 class _VResizeHandle(QFrame):
     """display 下方的水平拖动条 —— 极简观感，跟随主题色。
 
@@ -277,7 +287,11 @@ class RTTMonitorPage(QWidget):
         self._resize_timer.timeout.connect(self._on_resize_debounce)
 
     def _build_icon_bar(self) -> QWidget:
-        """收起态垂直图标条：固定 48px 宽，垂直排列常用操作按钮。"""
+        """收起态垂直图标条：固定 48px 宽，垂直排列常用操作按钮。
+
+        发送按钮不在图标条中——它位于右侧面板的发送区右侧，
+        与参考 UI（图3）一致：发送按钮在接收区和发送区之间。
+        """
         bar = QWidget(self)
         bar.setObjectName("iconBar")
         bar.setFixedWidth(48)
@@ -294,6 +308,12 @@ class RTTMonitorPage(QWidget):
         self._btn_quick_pause.setCheckable(True)
         self._btn_quick_pause.toggled.connect(
             self._worker.set_pause_receive_requested.emit)
+        # 双向同步工具栏暂停按钮
+        self._btn_quick_pause.toggled.connect(
+            lambda c: hasattr(self, 'btn_toolbar_pause') and
+            self.btn_toolbar_pause.setChecked(c))
+        if hasattr(self, 'btn_toolbar_pause'):
+            self.btn_toolbar_pause.toggled.connect(self._btn_quick_pause.setChecked)
         v.addWidget(self._btn_quick_pause, 0, Qt.AlignHCenter)
 
         self._btn_quick_clear = TransparentToolButton(FluentIcon.DELETE, bar)
@@ -314,7 +334,14 @@ class RTTMonitorPage(QWidget):
     # 左侧配置面板
     # ------------------------------------------------------------------
     def _build_left_panel(self) -> QWidget:
-        """构建左侧配置面板，返回容器 widget。"""
+        """构建左侧配置面板，返回容器 widget。
+
+        布局分为四个区域，用水平分隔线隔开：
+          1. 连接设置  — 目标设备 / 接口速度 / 通道 / 连接按钮 / 复位
+          2. 设备信息  — 可折叠卡片
+          3. 接收设置  — 滚动 / 暂停 / 电源 / 日志 / HEX显示 / 自动断帧
+          4. 发送设置  — 定时发送 / CRC脚本 / 字号 / 标记 / 清除保存
+        """
         panel = QWidget(self)
         panel.setObjectName("configPanel")
         panel.setFixedWidth(260)
@@ -344,13 +371,18 @@ class RTTMonitorPage(QWidget):
         pl.addWidget(scroll)
 
         v = QVBoxLayout(inner)
-        v.setContentsMargins(12, 12, 12, 12)
-        v.setSpacing(8)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(6)
 
-        # ---- 连接控制区 ----
-        v.addWidget(StrongBodyLabel("连接设置"))
-        v.addWidget(BodyLabel("目标设备"))
+        # ════════════════════════════════════════════════════════════
+        # 区域 1：连接设置
+        # ════════════════════════════════════════════════════════════
+        _lbl_conn = StrongBodyLabel("连接设置")
+        _lbl_conn.setStyleSheet("font-size: 13px; margin-top: 2px;")
+        v.addWidget(_lbl_conn)
+
         self.cb_target = EditableComboBox(inner)
+        self.cb_target.setPlaceholderText("目标设备")
         chip_list = self._cfg.get_chip_list()
         self.cb_target.addItems(chip_list)
         last_mcu = self._cfg.get("target_mcu")
@@ -369,7 +401,7 @@ class RTTMonitorPage(QWidget):
         self.cb_iface.addItems(["SWD", "JTAG"])
         self.cb_iface.setCurrentText(self._cfg.get("interface"))
         row_iface.addWidget(self.cb_iface)
-        row_iface.addSpacing(16)
+        row_iface.addSpacing(12)
         row_iface.addWidget(BodyLabel("速度"))
         self.cb_speed = ComboBox(inner)
         for s in self._cfg.get_default_speeds():
@@ -395,8 +427,8 @@ class RTTMonitorPage(QWidget):
         _tip(self.btn_connect, "F2 连接 / F3 断开")
         v.addWidget(self.btn_connect)
 
-        row_reset = QVBoxLayout()
-        row_reset.setSpacing(4)
+        row_reset = QHBoxLayout()
+        row_reset.setSpacing(6)
         self.btn_reset = PushButton(FluentIcon.SYNC, "重置目标", inner)
         _tip(self.btn_reset, "F4 重置目标")
         self.btn_reset.setEnabled(False)
@@ -408,7 +440,12 @@ class RTTMonitorPage(QWidget):
         row_reset.addWidget(self.btn_reset_halt)
         v.addLayout(row_reset)
 
-        # ---- 设备信息卡片（可折叠）----
+        # ---- 分隔线 ----
+        v.addWidget(_section_separator(inner))
+
+        # ════════════════════════════════════════════════════════════
+        # 区域 2：设备信息（可折叠）
+        # ════════════════════════════════════════════════════════════
         self.gb_info = HeaderCardWidget(inner)
         self.gb_info.setTitle("设备信息")
         self.btn_info_toggle = TransparentToolButton(
@@ -444,9 +481,16 @@ class RTTMonitorPage(QWidget):
         self.btn_info_toggle.clicked.connect(self._toggle_info_card)
         v.addWidget(self.gb_info)
 
-        # ---- 接收设置分组 ----
-        v.addSpacing(4)
-        v.addWidget(StrongBodyLabel("接收设置"))
+        # ---- 分隔线 ----
+        v.addWidget(_section_separator(inner))
+
+        # ════════════════════════════════════════════════════════════
+        # 区域 3：接收设置
+        # ════════════════════════════════════════════════════════════
+        _lbl_rx = StrongBodyLabel("接收设置")
+        _lbl_rx.setStyleSheet("font-size: 13px; margin-top: 2px;")
+        v.addWidget(_lbl_rx)
+
         self.chk_auto_scroll = CheckBox("自动滚动")
         self.chk_auto_scroll.setChecked(self._cfg.get("auto_scroll"))
         v.addWidget(self.chk_auto_scroll)
@@ -467,21 +511,18 @@ class RTTMonitorPage(QWidget):
         row_frame = QHBoxLayout()
         row_frame.setSpacing(6)
         self.chk_auto_frame = CheckBox("自动断帧")
-        # LineEdit 原生控件（自带边框），"ms" 通过 hBoxLayout 放入输入框内部
         _INPUT_W = 80
         self.le_frame_timeout = LineEdit(inner)
         self.le_frame_timeout.setText("20")
         self.le_frame_timeout.setFixedWidth(_INPUT_W)
         self.le_frame_timeout.setClearButtonEnabled(False)
-        self.le_frame_timeout.setAlignment(Qt.AlignCenter)
-        # "ms" 作为后缀标签放入 LineEdit 的 hBoxLayout（在原生边框内部）
+        self.le_frame_timeout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         _lbl_ms = QLabel("ms", self.le_frame_timeout)
         _lbl_ms.setStyleSheet(
             "color: rgba(128,128,128,0.6); font-size: 11px; "
             "background: transparent; border: none;")
         self.le_frame_timeout.hBoxLayout.addWidget(_lbl_ms, 0, Qt.AlignVCenter)
         self.le_frame_timeout.setTextMargins(0, 0, 22, 0)
-        # ? 帮助按钮（PushButton "?" 正方形，点击弹出 PopupTeachingTip）
         self.btn_frame_help = PushButton("?", inner)
         self.btn_frame_help.setFixedSize(33, 33)
         self.btn_frame_help.clicked.connect(self._on_frame_help_clicked)
@@ -491,7 +532,6 @@ class RTTMonitorPage(QWidget):
             "超过设定值，则判定为一帧数据结束，自动插入换行。\n\n"
             "自动断帧：启用后，每个数据帧显示后自动添加换行符，\n"
             "便于区分不同帧。")
-        # 容器
         _frame_group = QWidget(inner)
         _frame_group.setStyleSheet("background: transparent;")
         _fg_lay = QHBoxLayout(_frame_group)
@@ -505,26 +545,29 @@ class RTTMonitorPage(QWidget):
         v.addLayout(row_frame)
         self.chk_auto_frame.toggled.connect(self._on_auto_frame_toggled)
 
-        # ---- 发送设置分组 ----
-        v.addSpacing(4)
-        v.addWidget(StrongBodyLabel("发送设置"))
+        # ---- 分隔线 ----
+        v.addWidget(_section_separator(inner))
+
+        # ════════════════════════════════════════════════════════════
+        # 区域 4：发送设置 + 标记
+        # ════════════════════════════════════════════════════════════
+        _lbl_tx = StrongBodyLabel("发送设置")
+        _lbl_tx.setStyleSheet("font-size: 13px; margin-top: 2px;")
+        v.addWidget(_lbl_tx)
 
         # 定时发送
         row_timed = QHBoxLayout()
         row_timed.setSpacing(6)
         self.chk_timed_send = CheckBox("定时发送")
-        # LineEdit 原生控件，宽度与自动断帧行一致
         self.le_timed_interval = LineEdit(inner)
         self.le_timed_interval.setText("1.0")
         self.le_timed_interval.setFixedWidth(_INPUT_W)
         self.le_timed_interval.setClearButtonEnabled(False)
-        self.le_timed_interval.setAlignment(Qt.AlignCenter)
-        # 单位按钮 "秒"（正方形 ToolButton，padding 比 PushButton 小可容纳中文）
+        self.le_timed_interval.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.btn_timed_unit = ToolButton(inner)
         self.btn_timed_unit.setText("秒")
         self.btn_timed_unit.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_timed_unit.setFixedSize(33, 33)
-        # 容器
         _timed_group = QWidget(inner)
         _timed_group.setStyleSheet("background: transparent;")
         _tg_lay = QHBoxLayout(_timed_group)
@@ -551,7 +594,7 @@ class RTTMonitorPage(QWidget):
         row_crc.addStretch(1)
         v.addLayout(row_crc)
 
-        # 字号
+        # 字号控制
         row_font = QHBoxLayout()
         row_font.setSpacing(6)
         row_font.addWidget(BodyLabel("字号"))
@@ -572,7 +615,14 @@ class RTTMonitorPage(QWidget):
         row_font.addStretch(1)
         v.addLayout(row_font)
 
+        # ---- 分隔线 ----
+        v.addWidget(_section_separator(inner))
+
         # 标记 / 保存 / 清空
+        _lbl_mark = StrongBodyLabel("标记与保存")
+        _lbl_mark.setStyleSheet("font-size: 13px; margin-top: 2px;")
+        v.addWidget(_lbl_mark)
+
         self.le_mark = EditableComboBox(inner)
         self.le_mark.setPlaceholderText("会话标记文本…")
         self._mark_history: list[str] = []
@@ -596,7 +646,15 @@ class RTTMonitorPage(QWidget):
     # 右侧数据区
     # ------------------------------------------------------------------
     def _build_right_panel(self) -> QWidget:
-        """构建右侧数据收发区，返回容器 widget。"""
+        """构建右侧数据收发区，返回容器 widget。
+
+        布局（从上到下）：
+          1. 显示区 (display, PlainTextEdit, stretch=1)
+          2. 工具栏行 — HEX↑ / HEX↓ / 暂停 / 清空 / 发送
+          3. 发送输入区 (PlainTextEdit ~6行) + 右侧大发送按钮
+             · 脚本启用时顶部红色提示条
+          4. 底部状态栏
+        """
         panel = QWidget(self)
         panel.setObjectName("rightPanel")
         panel.setStyleSheet(
@@ -619,24 +677,91 @@ class RTTMonitorPage(QWidget):
         self._cfg.theme_color_changed.connect(
             lambda _c: self.search_bar._apply_style())
 
-        # ---- 发送栏 ----
-        self.le_send = EditableComboBox(panel)
-        self.le_send.setPlaceholderText(
-            "输入要发送的数据 (Hex 模式下用 16 进制字符)")
-        history = list(self._cfg.get("send_history") or [])
-        if history:
-            self.le_send.addItems(list(reversed(history)))
-            self.le_send.setCurrentText("")
+        # ════════════════════════════════════════════════════════════
+        # 工具栏行（位于显示区和发送区之间）
+        # ════════════════════════════════════════════════════════════
+        toolbar_row = QHBoxLayout()
+        toolbar_row.setSpacing(6)
+
+        # HEX 模式切换（接收方向）
+        self.btn_hex_rx_up = ToolButton(panel)
+        self.btn_hex_rx_up.setText("HEX ↑")
+        self.btn_hex_rx_up.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.btn_hex_rx_up.setFixedSize(56, 30)
+        _tip(self.btn_hex_rx_up, "接收 HEX 显示切换")
+        self.btn_hex_rx_up.setCheckable(True)
+        # 同步 chk_hex_display ↔ btn_hex_rx_up（纯 UI 状态，不持久化）
+        self.btn_hex_rx_up.toggled.connect(self.chk_hex_display.setChecked)
+        self.chk_hex_display.toggled.connect(self.btn_hex_rx_up.setChecked)
+
+        # HEX 发送模式
         self.chk_hex = CheckBox("Hex")
         self.chk_hex.setChecked(self._cfg.get("hex_send_mode"))
-        self.btn_send = PushButton(FluentIcon.SEND, "发送", panel)
-        self.btn_send.setEnabled(False)
+        self.chk_hex.setFixedWidth(50)
 
-        send_row = QHBoxLayout()
-        send_row.setSpacing(6)
-        send_row.addWidget(self.le_send, 1)
-        send_row.addWidget(self.chk_hex)
-        send_row.addWidget(self.btn_send)
+        # 暂停/恢复
+        self.btn_toolbar_pause = ToolButton(FluentIcon.PAUSE, panel)
+        self.btn_toolbar_pause.setFixedSize(36, 30)
+        _tip(self.btn_toolbar_pause, "暂停/恢复接收")
+        self.btn_toolbar_pause.setCheckable(True)
+        self.btn_toolbar_pause.toggled.connect(
+            self._worker.set_pause_receive_requested.emit)
+        # 与左侧 chk_pause 双向同步
+        self.btn_toolbar_pause.toggled.connect(self.chk_pause.setChecked)
+        self.chk_pause.toggled.connect(self.btn_toolbar_pause.setChecked)
+
+        # 清空显示
+        self.btn_toolbar_clear = ToolButton(FluentIcon.DELETE, panel)
+        self.btn_toolbar_clear.setFixedSize(36, 30)
+        _tip(self.btn_toolbar_clear, "清除显示")
+        self.btn_toolbar_clear.clicked.connect(self.display.clear)
+
+        toolbar_row.addWidget(self.btn_hex_rx_up)
+        toolbar_row.addWidget(self.chk_hex)
+        toolbar_row.addWidget(self.btn_toolbar_pause)
+        toolbar_row.addWidget(self.btn_toolbar_clear)
+        toolbar_row.addStretch(1)
+
+        # ════════════════════════════════════════════════════════════
+        # 发送区：红色脚本提示 + 多行文本框 + 大发送按钮
+        # ════════════════════════════════════════════════════════════
+        # 脚本启用时显示的红色提示条（默认隐藏）
+        self.lbl_script_tip = BodyLabel("⚠ CRC 脚本已启用 — 发送内容将自动追加 CRC 校验码")
+        self.lbl_script_tip.setStyleSheet(
+            "color: #cc0000; background: rgba(255,0,0,0.06); "
+            "padding: 3px 8px; border-radius: 3px; font-size: 12px;")
+        self.lbl_script_tip.setVisible(False)
+        self.lbl_script_tip.setWordWrap(True)
+
+        # 发送文本框（多行 PlainTextEdit，约 6 行高度）
+        self.te_send = PlainTextEdit(panel)
+        self.te_send.setPlaceholderText(
+            "输入要发送的数据…\n"
+            "(Hex 模式下用 16 进制字符)")
+        self.te_send.setMinimumHeight(100)   # 约 6 行
+        self.te_send.setMaximumHeight(160)  # 不超过 ~9 行
+        font = self.te_send.font()
+        font.setPointSize(12)
+        self.te_send.setFont(font)
+
+        # 右侧发送按钮（竖向居中于发送框）
+        send_btn_col = QVBoxLayout()
+        send_btn_col.setContentsMargins(0, 0, 0, 0)
+        send_btn_col.setSpacing(0)
+        self.btn_send = PrimaryPushButton(FluentIcon.SEND_FILL, "", panel)
+        self.btn_send.setFixedSize(48, 64)
+        self.btn_send.setIconSize(__import__("PySide6.QtCore").QSize(24, 24))
+        self.btn_send.setEnabled(False)
+        _tip(self.btn_send, "发送 (Enter)")
+        send_btn_col.addStretch(1)
+        send_btn_col.addWidget(self.btn_send, 0, Qt.AlignHCenter)
+        send_btn_col.addStretch(1)
+
+        # 发送区水平布局：文本框 stretch=1 + 按钮
+        send_area = QHBoxLayout()
+        send_area.setSpacing(6)
+        send_area.addWidget(self.te_send, 1)
+        send_area.addLayout(send_btn_col)
 
         # ---- 底部状态栏 ----
         self.lbl_status_state = BodyLabel("● 未连接")
@@ -660,7 +785,9 @@ class RTTMonitorPage(QWidget):
         status_row.addWidget(self.lbl_status_encoding)
 
         v.addWidget(self.display, 1)
-        v.addLayout(send_row)
+        v.addLayout(toolbar_row)
+        v.addWidget(self.lbl_script_tip)
+        v.addLayout(send_area)
         v.addLayout(status_row)
         return panel
 
@@ -704,6 +831,17 @@ class RTTMonitorPage(QWidget):
         self.chk_hex.toggled.connect(self._on_hex_send_toggled)
         self.btn_send.clicked.connect(self._on_send_clicked)
         self.chk_timed_send.toggled.connect(self._on_timed_send_toggled)
+
+        # 发送文本框：Enter = 发送；Shift+Enter = 换行
+        from PySide6.QtWidgets import QShortcut
+        from PySide6.QtGui import QKeySequence
+        _send_enter_shortcut = QShortcut(
+            QKeySequence(Qt.Key_Return | Qt.Key_Enter), self.te_send)
+        _send_enter_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        _send_enter_shortcut.activated.connect(self._on_send_clicked)
+
+        # CRC 脚本：勾选时显示红色提示条
+        self.chk_crc_script.toggled.connect(self._on_crc_script_toggled)
 
         # 字号 ± 按钮：直接走 cfg.set → font_changed → _apply_font
         self.btn_font_minus.clicked.connect(lambda: self._adjust_font_size(-1))
@@ -816,7 +954,7 @@ class RTTMonitorPage(QWidget):
         self._worker.set_rtt_channel_requested.emit(ch)
 
     def _on_send_clicked(self) -> None:
-        text = self.le_send.currentText()
+        text = self.te_send.toPlainText().strip()
         if not text:
             return
         is_hex = self.chk_hex.isChecked()
@@ -845,28 +983,33 @@ class RTTMonitorPage(QWidget):
 
         self._worker.send_data_requested.emit(text, is_hex)
         # 加入历史（去重 + 末尾追加）—— 存用户原始输入，不存 CRC 追加后的
-        orig_text = self.le_send.currentText()
-        hist = list(self._cfg.get("send_history"))
+        orig_text = self.te_send.toPlainText().strip()
+        hist = list(self._cfg.get("send_history") or [])
         if orig_text in hist:
             hist.remove(orig_text)
         hist.append(orig_text)
         self._cfg.set("send_history", hist)
-        # 同步刷新下拉项：最新在最前
-        self.le_send.blockSignals(True)
-        self.le_send.clear()
-        self.le_send.addItems(list(reversed(hist)))
-        self.le_send.setText("")
-        self.le_send.blockSignals(False)
+
+    def _on_crc_script_toggled(self, checked: bool) -> None:
+        """CRC 脚本 checkbox 切换：显示/隐藏红色提示条。"""
+        self.lbl_script_tip.setVisible(checked)
+        # 发送框边框也跟着变红（通过 stylesheet 动态切换）
+        if checked:
+            self.te_send.setStyleSheet(
+                "QPlainTextEdit { border: 1.5px solid #cc0000; "
+                "border-radius: 4px; }")
+        else:
+            self.te_send.setStyleSheet("")
 
     def _on_hex_send_toggled(self, checked: bool) -> None:
-        """HEX 发送模式切换：双向转换输入框内容。
+        """HEX 发送模式切换：双向转换发送框内容。
 
         checked=True  → 文本 → HEX："hello" → "68 65 6C 6C 6F"
         checked=False → HEX → 文本："68 65 6C 6C 6F" → "hello"
         转换失败（非法 HEX）则保留原文。
         """
         self._cfg.set("hex_send_mode", checked)
-        cur = self.le_send.currentText()
+        cur = self.te_send.toPlainText()
         if not cur:
             return
         if checked:
@@ -874,7 +1017,7 @@ class RTTMonitorPage(QWidget):
             try:
                 raw = cur.encode("utf-8")
                 hex_str = " ".join(f"{b:02X}" for b in raw)
-                self.le_send.setText(hex_str)
+                self.te_send.setPlainText(hex_str)
             except Exception:
                 pass
         else:
@@ -884,7 +1027,7 @@ class RTTMonitorPage(QWidget):
                 if len(cleaned) % 2 != 0:
                     cleaned += "0"
                 raw = bytes.fromhex(cleaned)
-                self.le_send.setText(raw.decode("utf-8", errors="replace"))
+                self.te_send.setPlainText(raw.decode("utf-8", errors="replace"))
             except ValueError:
                 pass  # 非法 HEX，保留原文
 
