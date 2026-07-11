@@ -3,7 +3,17 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QAbstractAnimation,
+    QEasingCurve,
+    QEvent,
+    QPoint,
+    QPropertyAnimation,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor,
     QEnterEvent,
@@ -21,6 +31,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QCompleter,
     QFrame,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -46,6 +57,7 @@ from qfluentwidgets import (
     ToolButton,
     ToolTipFilter,
     TransparentToolButton,
+    isDarkTheme,
     themeColor, PrimaryToolButton, ToggleToolButton,
 )
 
@@ -266,26 +278,166 @@ class RTTMonitorPage(QWidget):
         outer.setSpacing(0)
 
         # ---- 主布局：左右分栏 ----
-        main_split = QHBoxLayout()
-        main_split.setContentsMargins(0, 0, 0, 0)
-        main_split.setSpacing(0)
+        self._main_split = QHBoxLayout()
+        self._main_split.setContentsMargins(0, 0, 0, 0)
+        self._main_split.setSpacing(0)
 
-        # ==== 左侧配置面板（固定宽度，内部可滚动）====
+        # ==== 左侧配置面板（正常模式固定宽度；收窄模式悬浮卡片）====
         self._config_visible = True
         self._config_panel = self._build_left_panel()
-        main_split.addWidget(self._config_panel)
+        self._main_split.addWidget(self._config_panel)
 
         # ==== 右侧数据区（stretch=1，占满剩余空间）====
         self._right_panel = self._build_right_panel()
-        main_split.addWidget(self._right_panel, 1)
+        self._main_split.addWidget(self._right_panel, 1)
 
-        outer.addLayout(main_split)
+        outer.addLayout(self._main_split)
+
+        # ==== 悬浮卡片容器（收窄模式下承载 _config_panel）====
+        # 不参与布局流，类似 SearchBar 以浮动方式叠加在页面上。
+        # 初始保持隐藏；进入收窄模式时把 _config_panel 重新 parent 进来。
+        self._floating_card = self._build_floating_card()
 
         # 窗口 resize 防抖 timer
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
         self._resize_timer.setInterval(30)
         self._resize_timer.timeout.connect(self._on_resize_debounce)
+
+    # ------------------------------------------------------------------
+    # 悬浮卡片容器（收窄模式承载左侧面板）
+    # ------------------------------------------------------------------
+    def _build_floating_card(self) -> QWidget:
+        """构建悬浮卡片容器。
+
+        设计参考 SearchBar：作为页面的浮动子控件，不参与布局流，通过 move()
+        定位。收窄模式下 _config_panel 被 reparent 到这里，通过
+        btn_panel_toggle 控制显隐，显隐过程带 fade + slide 动画。
+
+        为什么不复用 QSplitter / 布局：收窄模式下左侧面板需要"浮"在右侧数据区
+        之上，而不是挤压右侧布局——这样弹出卡片时应用仍处于收窄模式，
+        右侧显示区宽度不会因卡片弹出而变化。
+        """
+        card = QWidget(self)
+        card.setObjectName("floatingCard")
+        card.setAttribute(Qt.WA_StyledBackground, True)
+        card.setFixedWidth(280)
+        card.setVisible(False)
+
+        # 卡片内部布局：承载 _config_panel，无内边距让面板填满卡片
+        self._floating_card_layout = QVBoxLayout(card)
+        self._floating_card_layout.setContentsMargins(0, 0, 0, 0)
+        self._floating_card_layout.setSpacing(0)
+
+        # 透明度效果：用于 fade 动画（初始 0.0 — 隐藏时不可见）
+        self._card_opacity = QGraphicsOpacityEffect(card)
+        self._card_opacity.setOpacity(0.0)
+        card.setGraphicsEffect(self._card_opacity)
+
+        # 位移动画：用于 slide 动画
+        self._card_pos_anim = QPropertyAnimation(card, b"pos", card)
+        self._card_pos_anim.setDuration(220)
+        self._card_pos_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        # 透明度动画：用于 fade 动画
+        self._card_opacity_anim = QPropertyAnimation(
+            self._card_opacity, b"opacity", card)
+        self._card_opacity_anim.setDuration(220)
+        self._card_opacity_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._card_opacity_anim.finished.connect(self._on_card_anim_finished)
+
+        # 先赋值再应用样式：_apply_card_style 内部引用 self._floating_card
+        self._floating_card = card
+        self._apply_card_style()
+        return card
+
+    def _apply_card_style(self) -> None:
+        """按当前深浅色主题刷新卡片样式。"""
+        dark = isDarkTheme()
+        if dark:
+            bg = "rgba(45, 45, 48, 250)"
+            border = "#3c3c3c"
+        else:
+            bg = "rgba(252, 252, 252, 250)"
+            border = "#d0d0d0"
+        self._floating_card.setStyleSheet(f"""
+            QWidget#floatingCard {{
+                background: {bg};
+                border: 1px solid {border};
+                border-radius: 8px;
+            }}
+        """)
+
+    def _stop_card_animations(self) -> None:
+        """停止正在进行的卡片动画（stop 不触发 finished 信号）。"""
+        self._card_pos_anim.stop()
+        self._card_opacity_anim.stop()
+
+    def _show_floating_card(self) -> None:
+        """展开悬浮卡片：fade 0→1 + slide 从左侧 40px 滑入。
+
+        只有 X 方向位移，Y 始终等于 target.y()，不会出现"先弹 X 再移 Y"。
+        """
+        self._stop_card_animations()
+        self._apply_card_style()  # 确保主题正确
+
+        # 计算目标位置
+        margin = 8
+        target = QPoint(margin, margin)
+        self._floating_card.setFixedHeight(max(100, self.height() - 2 * margin))
+
+        was_visible = self._floating_card.isVisible()
+        if not was_visible:
+            # 首次/隐藏后重新显示：从目标左侧 40px 处滑入，Y 与 target 一致
+            start_pos = QPoint(target.x() - 40, target.y())
+            start_opacity = 0.0
+            self._floating_card.move(start_pos)
+            self._card_opacity.setOpacity(0.0)
+        else:
+            # 中途反转：从当前位置/透明度继续
+            start_pos = self._floating_card.pos()
+            start_opacity = self._card_opacity.opacity()
+
+        self._floating_card.setVisible(True)
+        self._floating_card.raise_()
+
+        self._card_pos_anim.setStartValue(start_pos)
+        self._card_pos_anim.setEndValue(target)
+        self._card_opacity_anim.setStartValue(start_opacity)
+        self._card_opacity_anim.setEndValue(1.0)
+        self._card_pos_anim.start()
+        self._card_opacity_anim.start()
+
+    def _hide_floating_card(self) -> None:
+        """收起悬浮卡片：fade 1→0 + slide 向左滑出 40px。"""
+        self._stop_card_animations()
+        start_pos = self._floating_card.pos()
+        start_opacity = self._card_opacity.opacity()
+        end_pos = QPoint(start_pos.x() - 40, start_pos.y())
+
+        self._card_pos_anim.setStartValue(start_pos)
+        self._card_pos_anim.setEndValue(end_pos)
+        self._card_opacity_anim.setStartValue(start_opacity)
+        self._card_opacity_anim.setEndValue(0.0)
+        self._card_pos_anim.start()
+        self._card_opacity_anim.start()
+
+    def _on_card_anim_finished(self) -> None:
+        """动画结束：若是收起方向则隐藏卡片，避免遮挡下层交互。"""
+        if self._card_opacity.opacity() < 0.5:
+            self._floating_card.setVisible(False)
+
+    def _reposition_floating_card(self) -> None:
+        """窗口 resize 时重新计算卡片位置/高度。
+
+        动画进行中只更新高度（避免和位移动画打架），位置等动画结束后再校正。
+        """
+        if not self._floating_card.isVisible():
+            return
+        margin = 8
+        self._floating_card.setFixedHeight(max(100, self.height() - 2 * margin))
+        if self._card_pos_anim.state() != QAbstractAnimation.State.Running:
+            self._floating_card.move(margin, margin)
 
     # ------------------------------------------------------------------
     # 左侧配置面板
@@ -648,6 +800,13 @@ class RTTMonitorPage(QWidget):
         toolbar_row.setContentsMargins(0, 0, 0, 0)
         toolbar_row.setSpacing(6)
 
+        # 左侧配置面板的悬浮卡片开关（仅收窄模式可见）
+        # 点击展开/收起悬浮卡片，卡片承载完整左侧配置面板内容
+        self.btn_panel_toggle = ToggleToolButton(FluentIcon.CHEVRON_RIGHT, self._toolbar)
+        self.btn_panel_toggle.setFixedSize(36, 30)
+        self.btn_panel_toggle.setCheckable(True)
+        _tip(self.btn_panel_toggle, "显示/隐藏配置面板")
+
         # HEX 模式切换（接收方向）—— 收窄工具栏的样式模板
         self.btn_hex_rx_up = ToggleToolButton(self._toolbar)
         self.btn_hex_rx_up.setText("HEX ↑")
@@ -699,13 +858,15 @@ class RTTMonitorPage(QWidget):
         _tip(self.btn_toolbar_connect, "连接/断开")
         self.btn_toolbar_connect.clicked.connect(self._on_connect_clicked)
 
+        # 所有按钮靠右——悬浮卡片从左侧 280px 弹出时不遮挡任何按钮
+        toolbar_row.addStretch(1)
         toolbar_row.addWidget(self.btn_hex_rx_up)
         toolbar_row.addWidget(self.btn_hex_tx_down)
         toolbar_row.addWidget(self.btn_toolbar_pause)
         toolbar_row.addWidget(self.btn_toolbar_clear)
         toolbar_row.addWidget(self.btn_toolbar_connect)
         toolbar_row.addWidget(self.btn_toolbar_save)
-        toolbar_row.addStretch(1)
+        toolbar_row.addWidget(self.btn_panel_toggle)
         self._toolbar.setVisible(False)  # 默认隐藏，仅收窄模式显示
 
         # ════════════════════════════════════════════════════════════
@@ -785,6 +946,8 @@ class RTTMonitorPage(QWidget):
         # 阈值判断本身很轻量（一次比较+可能的 setVisible），不需要等真正
         # resize 完成再触发，拖动过程中就应该实时响应，去掉防抖直接调用
         self._on_resize_debounce()
+        # 悬浮卡片跟随窗口尺寸重定位（仅可见时）
+        self._reposition_floating_card()
 
     def _on_resize_debounce(self) -> None:
         w = self.width()
@@ -794,10 +957,46 @@ class RTTMonitorPage(QWidget):
             self._set_config_panel_visible(True)
 
     def _set_config_panel_visible(self, visible: bool) -> None:
+        """切换正常/收窄模式。
+
+        正常模式：_config_panel 放回 _main_split 布局，占固定 280px。
+        收窄模式：_config_panel 重新 parent 到悬浮卡片，布局流中移除，
+                 右侧数据区占满全宽；卡片默认隐藏，由 btn_panel_toggle 控制。
+
+        关键：弹出/收起悬浮卡片不会改变 _config_visible，因此不会触发
+        模式切换——收窄模式下弹出卡片仍保持收窄模式。
+        """
         self._config_visible = visible
-        self._config_panel.setVisible(visible)
-        # 收窄模式：显示接收/发送区之间的工具栏行
+        if visible:
+            # ── 正常模式：面板放回布局流 ──
+            # 若面板当前在悬浮卡片里，重新 parent 回本页面
+            if self._config_panel.parent() is not self._floating_card:
+                pass  # 已在布局中，无需操作
+            else:
+                self._floating_card_layout.removeWidget(self._config_panel)
+                self._config_panel.setParent(self)
+            self._main_split.insertWidget(0, self._config_panel)
+            # 隐藏悬浮卡片 + 复位 toggle 按钮（不触发 toggled 信号）
+            self._stop_card_animations()
+            self._floating_card.setVisible(False)
+            self.btn_panel_toggle.blockSignals(True)
+            self.btn_panel_toggle.setChecked(False)
+            self.btn_panel_toggle.blockSignals(False)
+        else:
+            # ── 收窄模式：面板移入悬浮卡片 ──
+            self._main_split.removeWidget(self._config_panel)
+            self._config_panel.setParent(self._floating_card)
+            self._floating_card_layout.addWidget(self._config_panel)
+            # 卡片保持隐藏，等用户点 toggle 按钮才展开
+        # 收窄工具栏可见性
         self._toolbar.setVisible(not visible)
+
+    def _on_panel_toggle_toggled(self, checked: bool) -> None:
+        """btn_panel_toggle 切换：展开/收起悬浮卡片。"""
+        if checked:
+            self._show_floating_card()
+        else:
+            self._hide_floating_card()
 
     # ------------------------------------------------------------------
     # 信号接线
@@ -811,6 +1010,8 @@ class RTTMonitorPage(QWidget):
         self.chk_power.toggled.connect(self._worker.set_power_output_requested.emit)
         self.sp_channel.valueChanged.connect(self._on_channel_changed)
         self.chk_auto_scroll.toggled.connect(self._on_auto_scroll_toggled)
+        # 收窄模式：悬浮卡片开关
+        self.btn_panel_toggle.toggled.connect(self._on_panel_toggle_toggled)
         # 用户手动滚动 → 取消 chk_auto_scroll 勾选；用 _programmatic_scroll 标志
         # 区分程序性 setValue 和用户拖动
         self.display.verticalScrollBar().valueChanged.connect(self._on_display_scrolled)

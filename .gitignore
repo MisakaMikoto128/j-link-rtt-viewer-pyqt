@@ -48,3 +48,4 @@ Thumbs.db
 AGENTS.md
 .pytest_tmp/*
 .workbuddy*
+.mimocode/.cron-lock
