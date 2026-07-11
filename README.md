@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![pylink-square](https://img.shields.io/badge/pylink--square-1.6.0-orange)](https://github.com/Square/pylink)
 
-![home](img/home.png)
+![home](img/home2.png)
 
 ## ✨ 功能
 
