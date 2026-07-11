@@ -326,7 +326,7 @@ class RTTMonitorPage(QWidget):
         pl.addWidget(scroll)
 
         v = QVBoxLayout(inner)
-        v.setContentsMargins(12, 10, 12, 10)
+        v.setContentsMargins(12, 10, 8, 10)
         v.setSpacing(6)
 
         # ════════════════════════════════════════════════════════════
@@ -602,7 +602,7 @@ class RTTMonitorPage(QWidget):
         panel.setStyleSheet(
             "QWidget#rightPanel { background: transparent; }")
         v = QVBoxLayout(panel)
-        v.setContentsMargins(8, 8, 8, 8)
+        v.setContentsMargins(0, 8, 8, 8)
         v.setSpacing(6)
 
         # ---- 显示区 ----
@@ -690,7 +690,7 @@ class RTTMonitorPage(QWidget):
 
         # 发送按钮：正方形，高度=输入框高度，始终 enabled
         # 未连接时点击 → 提示"未连接目标"
-        self.btn_send = PrimaryPushButton(FluentIcon.SEND, "", panel)
+        self.btn_send = PushButton(FluentIcon.SEND, "", panel)
         self.btn_send.setFixedSize(_SEND_H, _SEND_H)
         self.btn_send.setIconSize(QSize(36, 36))
         _tip(self.btn_send, "发送 (Enter) · 未连接时点击提示")
