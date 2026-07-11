@@ -4,9 +4,18 @@
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-11
+
 ### Features
 
-- **RTT 监控页新增「重置并暂停」按钮**（重置目标按钮旁）：复位 MCU 后让 CPU 停在复位状态（`reset(halt=True)`），不运行、不断开重连，用于调试上电瞬间状态。
+- **搜索 / 替换浮动栏** — Ctrl+F 查找 / Ctrl+H 替换，支持正则 / 全词 / 大小写匹配，匹配高亮 + 染色替换，VSCode 风格浮动栏叠加在显示区右上角，Esc 关闭。
+- **HEX 显示 / 发送** — 接收区一键切换十六进制查看（每字节大写 HEX），发送区支持 HEX 模式双向切换，收窄工具栏与左侧面板入口同步。
+- **定时发送** — 按设定间隔（ms）自动重复发送当前输入框内容，支持文本 / HEX 两种模式。
+- **CRC 发送脚本** — 内置 CRC-8 / CRC-16 / CRC-32 算法（含 CCITT / Modbus 等变体），发送时自动追加校验值到 payload 末尾，可开关；启用时发送框红色边框提示。
+- **自动断帧** — 按空闲间隙（可配 ms）自动插入换行，无需 MCU 端配合即可分行显示连续流。
+- **RTT 监控页 UI 重构** — 左右分栏布局（左侧配置 280px + 右侧数据区），左侧面板划分为连接 / 设备信息 / 接收设置 / 发送设置四个区域；发送框改为多行 PlainTextEdit；收窄模式工具栏行位于显示区和发送区之间。
+- **收窄模式悬浮面板** — 窗口宽度 < 900px 时左侧配置面板自动转为悬浮卡片，由 ToolToggleButton（CHEVRON_RIGHT）控制显隐，fade + slide 220ms 动画，弹出卡片不退出收窄模式。
+- **重置并暂停按钮** — 复位 MCU 后让 CPU 停在复位状态（`reset(halt=True)`），不运行、不断开重连，用于调试上电瞬间状态。
 - **固件分析视图扩展**：烧录页底部符号面板用 SegmentedWidget 切换「符号 / 段 / 占用汇总」三视图，共用同一已选 axf/elf。
   - **段 Sections**：列出 SHF_ALLOC 段的地址 / 大小 / RWX / 对齐。
   - **占用汇总 Summary**：采用 arm-none-eabi-size 的 Berkeley 统计方式汇总 text/data/bss + Flash/RAM 总量；并显示 Entry point、Cortex-M 初始 SP、Reset_Handler。
@@ -14,16 +23,19 @@
 
 ### Fixes
 
+- **窗口最小宽度 900 → 480**：原最小宽度等于收窄阈值，窗口永远缩不到收窄模式。
 - **`_open_elf` 漏 catch `ELFError`**：内容损坏但扩展名是 `.axf` 的文件，会让 `SymbolTableView.load` / `read_sections` / `read_memory_summary` / `read_elf_meta` 直接抛 `ELFError`，UI 层无机会消化。修复后 `_open_elf` 内部 catch + close 文件句柄，统一抛 `FileParseError`。
+- **收窄模式工具栏按钮被悬浮卡片遮挡**：所有按钮右对齐，避免被 280px 宽的悬浮卡片覆盖。
 
 ### Performance
 
 - **RTT `_fmt` 预构造 QColor**：16 色 ANSI 调色板 + 默认前/背景在模块加载时一次性 `QColor(hex)` 构造好，热路径直接查 dict。微基准 1.51× 提速；高吞吐流减少每段的 alloc/parse 开销。
+- **RTT 读循环改用 threading.Thread**：替代 QTimer 轮询，读线程完全独立于 Qt 事件循环，UI 侧 50ms 节流合并 insertText，避免高频信号阻塞主线程。
 
 ### Testing
 
 - **新增 pytest-qt + offscreen UI 测试脚手架**：`QT_QPA_PLATFORM=offscreen` 全程无窗口、无焦点，CI 友好。
-  - 共 50 个 UI 用例，4 秒内跑完：SymbolTableView (7)、FlashPage (7)、RTTMonitorPage (12)、MemoryViewerPage (11)、SettingsPage (10)、截图烟雾 (3)。
+  - 共 190+ 个 UI 用例：SymbolTableView / FlashPage / RTTMonitorPage / MemoryViewerPage / SettingsPage / 悬浮面板 / CRC / 搜索栏。
   - 公共 fixture：`isolated_appdata`（monkeypatch APPDATA → tmp，不污染真 `user_prefs.json`）、`fixtures_dir`、`screenshot_dir`。
   - 跨页 worker 替身：`FakeWorker` / `FakeMemWorker` 复刻 JLinkWorker 信号集，解耦真 pylink / QThread。
   - `_open_elf` 的 `ELFError` 漏 catch 由本次 `test_load_corrupt_elf_does_not_crash` 首次复现。
