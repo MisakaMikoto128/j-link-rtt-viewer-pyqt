@@ -4,7 +4,7 @@ from __future__ import annotations
 import base64
 
 from PySide6.QtCore import QByteArray, QThread
-from PySide6.QtGui import QCloseEvent, QFont, QIcon, QKeySequence, QShortcut, QShowEvent
+from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QShortcut, QShowEvent
 from PySide6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, NavigationItemPosition
@@ -59,11 +59,7 @@ class MainWindow(FluentWindow):
         self._cfg.rtt_poll_interval_changed.connect(self.worker.set_poll_interval_requested)
         self._cfg.rtt_encoding_changed.connect(self.worker.set_encoding_requested)
 
-        # 5. UI 界面字体（应用到 QApplication，影响侧边栏/按钮/标签等所有 fluent 控件）
-        self._cfg.ui_font_changed.connect(self._apply_ui_font)
-        self._apply_ui_font(self._cfg.get("ui_font_family"), self._cfg.get("ui_font_size"))
-
-        # 6. 全局快捷键 —— 不依赖当前页面焦点，F2/F3/F4 在任意子页都生效。
+        # 5. 全局快捷键 —— 不依赖当前页面焦点，F2/F3/F4 在任意子页都生效。
         # 路由到 rtt_page 的方法，由方法自己根据按钮状态判断是否执行（幂等）。
         QShortcut(QKeySequence("F2"), self, self.rtt_page.on_shortcut_connect)
         QShortcut(QKeySequence("F3"), self, self.rtt_page.on_shortcut_disconnect)
@@ -86,25 +82,6 @@ class MainWindow(FluentWindow):
         # 最小宽度需小于 _COLLAPSE_WIDTH(900)，否则收窄模式永远无法触发
         self.setMinimumSize(480, 540)
         self._restore_geometry()
-
-    def _apply_ui_font(self, family: str, size: int) -> None:
-        """应用 UI 全局字体。
-
-        * family="" 且 size<=0 → 恢复 fluent 默认
-        * 仅 family 有值时 size 自动补 9pt
-        * 仅 size 有值时 family 留空（系统默认字体 + 指定字号）
-        """
-        app = QApplication.instance()
-        if app is None:
-            return
-        family = (family or "").strip()
-        if not family and size <= 0:
-            # 完全默认
-            app.setFont(QFont("", 9))
-            return
-        if size <= 0:
-            size = 9
-        app.setFont(QFont(family, size))
 
     def _restore_geometry(self) -> None:
         geom_b64 = self._cfg.get("window_geometry")

@@ -68,8 +68,8 @@ class _SettingRow(QWidget):
         super().__init__(parent)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 4, 0, 4)
-        lay.addWidget(BodyLabel(title), 1)
-        lay.addWidget(widget)
+        lay.addWidget(BodyLabel(title), 1, Qt.AlignVCenter)
+        lay.addWidget(widget, 0, Qt.AlignVCenter)
 
 
 class SettingsPage(QWidget):
@@ -148,34 +148,6 @@ class SettingsPage(QWidget):
         wrap2 = QWidget(self)
         wrap2.setLayout(rtt_font_row)
         app_lay.addWidget(wrap2)
-
-        # UI 界面字体：EditableComboBox + SpinBox + 恢复默认
-        ui_font_row = QHBoxLayout()
-        ui_font_row.addWidget(BodyLabel("UI 界面字体"), 1)
-        self.cb_ui_font = EditableComboBox(self)
-        self.cb_ui_font.addItems(["（系统默认）"] + families)
-        self.cb_ui_font.setMinimumWidth(220)
-        cur_ui_family = self._cfg.get("ui_font_family")
-        self.cb_ui_font.setCurrentText(cur_ui_family if cur_ui_family else "（系统默认）")
-        # 自动补全（只补全 families，不含"系统默认"占位符）
-        completer_ui = QCompleter(families, self)
-        completer_ui.setCaseSensitivity(Qt.CaseInsensitive)
-        completer_ui.setFilterMode(Qt.MatchContains)
-        self.cb_ui_font.setCompleter(completer_ui)
-        self.cb_ui_font.currentTextChanged.connect(self._on_ui_family_changed)
-        ui_font_row.addWidget(self.cb_ui_font)
-        self.sp_ui_font_size = SpinBox(self)
-        self.sp_ui_font_size.setRange(8, 24)
-        self.sp_ui_font_size.setValue(max(8, int(self._cfg.get("ui_font_size") or 9)))
-        self.sp_ui_font_size.setSuffix(" pt")
-        self.sp_ui_font_size.valueChanged.connect(self._on_ui_font_size_changed)
-        ui_font_row.addWidget(self.sp_ui_font_size)
-        self.btn_ui_font_reset = PushButton("恢复默认", self)
-        self.btn_ui_font_reset.clicked.connect(self._on_reset_ui_font)
-        ui_font_row.addWidget(self.btn_ui_font_reset)
-        wrap_ui = QWidget(self)
-        wrap_ui.setLayout(ui_font_row)
-        app_lay.addWidget(wrap_ui)
 
         root.addWidget(appearance)
 
@@ -342,35 +314,11 @@ class SettingsPage(QWidget):
             return
         self._cfg.set("font_size", v)
 
-    def _on_ui_family_changed(self, family: str) -> None:
-        family = (family or "").strip()
-        if family in ("", "（系统默认）"):
-            self._cfg.set("ui_font_family", "")
-        else:
-            self._cfg.set("ui_font_family", family)
-
-    def _on_ui_font_size_changed(self, v: int) -> None:
-        if v <= 0:
-            return
-        self._cfg.set("ui_font_size", v)
-
     def _on_encoding_changed(self, display_name: str) -> None:
         """编码下拉切换：从显示名映射到内部存储的小写标准名。"""
         key: str = _ENCODING_FROM_DISPLAY.get(display_name, "utf-8")
         self._cfg.set("rtt_encoding", key)
         _infobar.ok(self, "已切换 RTT 编码", f"新编码：{display_name}（立即生效）")
-
-    def _on_reset_ui_font(self) -> None:
-        self._cfg.set("ui_font_family", "")
-        self._cfg.set("ui_font_size", 0)
-        # 同步控件显示（block signals 避免再次触发 cfg.set）
-        self.cb_ui_font.blockSignals(True)
-        self.cb_ui_font.setCurrentText("（系统默认）")
-        self.cb_ui_font.blockSignals(False)
-        self.sp_ui_font_size.blockSignals(True)
-        self.sp_ui_font_size.setValue(9)
-        self.sp_ui_font_size.blockSignals(False)
-        _infobar.ok(self, "已恢复默认", "UI 界面字体已重置")
 
     def _on_pick_log_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择日志目录", self.lbl_log_dir.text())

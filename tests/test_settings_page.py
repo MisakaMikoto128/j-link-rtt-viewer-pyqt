@@ -99,15 +99,3 @@ def test_font_size_spinbox_persists_and_emits(settings_page, qtbot):
     qtbot.wait(20)
     assert cfg.get("font_size") == 16
     assert any(sz == 16 for _, sz in received)
-
-
-def test_ui_font_reset_button_clears_family_and_size(settings_page, qtbot):
-    """点击「恢复默认」应把 ui_font_family/size 清空（用 fluent 默认）。"""
-    page, cfg = settings_page
-    cfg.set("ui_font_family", "Comic Sans MS")
-    cfg.set("ui_font_size", 14)
-    cfg.flush()
-    page.btn_ui_font_reset.click()
-    qtbot.wait(20)
-    assert cfg.get("ui_font_family") == ""
-    assert cfg.get("ui_font_size") == 0

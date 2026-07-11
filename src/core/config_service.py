@@ -23,7 +23,6 @@ class ConfigService(QObject):
     theme_changed = Signal(str)             # "light" / "dark" / "auto"
     theme_color_changed = Signal(str)       # hex e.g. "#28afe9"
     font_changed = Signal(str, int)         # (family, size) — RTT 显示区字体
-    ui_font_changed = Signal(str, int)      # (family, size) — UI 界面字体（QApplication.setFont）
     memory_font_size_changed = Signal(int)  # 内存页 hex dump 字号（family 与 RTT 共用 font_family）
     max_display_lines_changed = Signal(int) # new max block count for QPlainTextEdit
     rtt_poll_interval_changed = Signal(int) # poll timer interval in ms
@@ -42,9 +41,6 @@ class ConfigService(QObject):
         "font_size": 13,
         # 内存页 hex dump 字号（family 沿用 font_family）
         "memory_font_size": 12,
-        # UI 界面字体（侧边栏/按钮/标签）。空 family 或 size=0 表示使用 fluent 默认
-        "ui_font_family": "",
-        "ui_font_size": 0,
         "max_display_lines": 10000,
         "rtt_poll_interval_ms": 100,   # RTT 轮询间隔（ms）—— 旧版叫 rx_timeout_ms，已迁移
         "rtt_encoding": "utf-8",       # RTT 解码编码：utf-8 / gbk / utf-16-le / latin-1 / ascii
@@ -213,8 +209,6 @@ class ConfigService(QObject):
             self.theme_color_changed.emit(value)
         elif key in ("font_family", "font_size"):
             self.font_changed.emit(self._data["font_family"], self._data["font_size"])
-        elif key in ("ui_font_family", "ui_font_size"):
-            self.ui_font_changed.emit(self._data["ui_font_family"], self._data["ui_font_size"])
         elif key == "memory_font_size":
             self.memory_font_size_changed.emit(self._data["memory_font_size"])
         elif key == "rtt_encoding":
