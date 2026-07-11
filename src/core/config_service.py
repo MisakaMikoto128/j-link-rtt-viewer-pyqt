@@ -44,6 +44,8 @@ class ConfigService(QObject):
         "max_display_lines": 10000,
         "rtt_poll_interval_ms": 100,   # RTT 轮询间隔（ms）—— 旧版叫 rx_timeout_ms，已迁移
         "rtt_encoding": "utf-8",       # RTT 解码编码：utf-8 / gbk / utf-16-le / latin-1 / ascii
+        # 发送换行符：\\r\\n (CRLF) / \\n (LF) / \\r (CR) / "" (无)
+        "send_line_ending": "\r\n",
         "log_dir": "",              # 空 → 用默认 %APPDATA%/JLinkRTTViewer/logs
         "window_geometry": "",      # base64 of QByteArray
         "hex_send_mode": False,

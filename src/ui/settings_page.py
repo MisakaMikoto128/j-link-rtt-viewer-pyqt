@@ -60,6 +60,16 @@ _ENCODING_DISPLAY_NAMES: list[str] = [
     "UTF-8", "GBK", "UTF-16-LE", "Latin-1", "ASCII",
 ]
 
+# --- 发送换行符选项 ---
+_SEND_LINE_ENDING_DISPLAY: dict[str, str] = {
+    "\r\n": "CRLF (\\r\\n)",
+    "\n": "LF (\\n)",
+    "\r": "CR (\\r)",
+    "": "无",
+}
+_SEND_LINE_ENDING_FROM_DISPLAY: dict[str, str] = {v: k for k, v in _SEND_LINE_ENDING_DISPLAY.items()}
+_SEND_LINE_ENDING_NAMES: list[str] = ["CRLF (\\r\\n)", "LF (\\n)", "CR (\\r)", "无"]
+
 
 class _SettingRow(QWidget):
     """通用：左标题 + 右控件 的一行。"""
@@ -181,6 +191,15 @@ class SettingsPage(QWidget):
         self.cb_encoding.setCurrentText(cur_display)
         self.cb_encoding.currentTextChanged.connect(self._on_encoding_changed)
         rtt_lay.addWidget(_SettingRow("RTT 解码编码", self.cb_encoding))
+
+        # 发送换行符：CRLF / LF / CR / 无
+        self.cb_line_ending = ComboBox(self)
+        self.cb_line_ending.addItems(_SEND_LINE_ENDING_NAMES)
+        cur_le: str = self._cfg.get("send_line_ending") or "\r\n"
+        cur_le_display: str = _SEND_LINE_ENDING_DISPLAY.get(cur_le, _SEND_LINE_ENDING_DISPLAY["\r\n"])
+        self.cb_line_ending.setCurrentText(cur_le_display)
+        self.cb_line_ending.currentTextChanged.connect(self._on_line_ending_changed)
+        rtt_lay.addWidget(_SettingRow("发送换行符", self.cb_line_ending))
 
         log_row = QHBoxLayout()
         log_row.setContentsMargins(0, 4, 0, 4)
@@ -323,6 +342,11 @@ class SettingsPage(QWidget):
         key: str = _ENCODING_FROM_DISPLAY.get(display_name, "utf-8")
         self._cfg.set("rtt_encoding", key)
         _infobar.ok(self, "已切换 RTT 编码", f"新编码：{display_name}（立即生效）")
+
+    def _on_line_ending_changed(self, display_name: str) -> None:
+        """换行符下拉切换：从显示名映射到内部值。"""
+        value: str = _SEND_LINE_ENDING_FROM_DISPLAY.get(display_name, "\r\n")
+        self._cfg.set("send_line_ending", value)
 
     def _on_pick_log_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择日志目录", self.lbl_log_dir.text())

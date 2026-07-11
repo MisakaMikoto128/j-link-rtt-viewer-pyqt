@@ -73,7 +73,7 @@ def test_send_text_routes_through_worker_and_persists_history(rtt_page, qtbot):
     page.te_send.setPlainText("hello world")
     page.btn_send.click()
     qtbot.wait(20)
-    assert worker._sent == [("hello world", False)]
+    assert worker._sent == [("hello world\r\n", False)]
     assert "hello world" in cfg.get("send_history")
 
 

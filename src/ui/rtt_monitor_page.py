@@ -1368,8 +1368,13 @@ class RTTMonitorPage(QWidget):
                 _infobar.warn(self, "CRC 错误", str(exc))
                 return
 
+        # 非 HEX 模式时追加换行符（用户可在设置中选择 CRLF/LF/CR/无）
+        if not is_hex:
+            ending = self._cfg.get('send_line_ending') or '\r\n'
+            text += ending
+
         self._worker.send_data_requested.emit(text, is_hex)
-        # 加入历史（去重 + 末尾追加）—— 存用户原始输入，不存 CRC 追加后的
+        # 加入历史（去重 + 末尾追加）—— 存用户原始输入，不存换行符和 CRC 追加后的
         orig_text = self.te_send.toPlainText().strip()
         hist = list(self._cfg.get("send_history") or [])
         if orig_text in hist:
