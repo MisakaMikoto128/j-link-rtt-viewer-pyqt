@@ -40,6 +40,7 @@ from qfluentwidgets import (
     PushButton,
     SpinBox,
     StrongBodyLabel,
+    ToolButton,
     ToolTipFilter,
     TransparentToolButton,
     themeColor,
@@ -466,27 +467,41 @@ class RTTMonitorPage(QWidget):
         row_frame = QHBoxLayout()
         row_frame.setSpacing(6)
         self.chk_auto_frame = CheckBox("自动断帧")
+        # LineEdit 原生控件（自带边框），"ms" 通过 hBoxLayout 放入输入框内部
+        _INPUT_W = 80
         self.le_frame_timeout = LineEdit(inner)
         self.le_frame_timeout.setText("20")
-        self.le_frame_timeout.setFixedWidth(56)
-        self.le_frame_timeout.setClearButtonEnabled(True)
-        self.le_frame_timeout.setEnabled(False)
-        self.lbl_frame_unit = BodyLabel("ms")
-        self.btn_frame_help = TransparentToolButton(
-            FluentIcon.HELP, inner)
-        self.btn_frame_help.setFixedSize(28, 28)
-        _tip(self.btn_frame_help,
-             "接收超时设置（1~200 毫秒），默认 20ms。\n\n"
-             "___|bytes|___Δt___|bytes|___\n\n"
-             "在接收连续数据流时，如果相邻两批数据的接收时间间隔\n"
-             "超过设定值，则判定为一帧数据结束，自动插入换行。\n\n"
-             "自动断帧：启用后，每个数据帧显示后自动添加换行符，\n"
-             "便于区分不同帧。")
+        self.le_frame_timeout.setFixedWidth(_INPUT_W)
+        self.le_frame_timeout.setClearButtonEnabled(False)
+        self.le_frame_timeout.setAlignment(Qt.AlignCenter)
+        # "ms" 作为后缀标签放入 LineEdit 的 hBoxLayout（在原生边框内部）
+        _lbl_ms = QLabel("ms", self.le_frame_timeout)
+        _lbl_ms.setStyleSheet(
+            "color: rgba(128,128,128,0.6); font-size: 11px; "
+            "background: transparent; border: none;")
+        self.le_frame_timeout.hBoxLayout.addWidget(_lbl_ms, 0, Qt.AlignVCenter)
+        self.le_frame_timeout.setTextMargins(0, 0, 22, 0)
+        # ? 帮助按钮（PushButton "?" 正方形，点击弹出 PopupTeachingTip）
+        self.btn_frame_help = PushButton("?", inner)
+        self.btn_frame_help.setFixedSize(33, 33)
+        self.btn_frame_help.clicked.connect(self._on_frame_help_clicked)
+        self._frame_help_content = (
+            "接收超时设置（1~200 毫秒），默认 20ms。\n\n"
+            "在接收连续数据流时，如果相邻两批数据的接收时间间隔\n"
+            "超过设定值，则判定为一帧数据结束，自动插入换行。\n\n"
+            "自动断帧：启用后，每个数据帧显示后自动添加换行符，\n"
+            "便于区分不同帧。")
+        # 容器
+        _frame_group = QWidget(inner)
+        _frame_group.setStyleSheet("background: transparent;")
+        _fg_lay = QHBoxLayout(_frame_group)
+        _fg_lay.setContentsMargins(0, 0, 0, 0)
+        _fg_lay.setSpacing(2)
+        _fg_lay.addWidget(self.le_frame_timeout)
+        _fg_lay.addWidget(self.btn_frame_help)
         row_frame.addWidget(self.chk_auto_frame)
-        row_frame.addWidget(self.le_frame_timeout)
-        row_frame.addWidget(self.lbl_frame_unit)
-        row_frame.addWidget(self.btn_frame_help)
         row_frame.addStretch(1)
+        row_frame.addWidget(_frame_group)
         v.addLayout(row_frame)
         self.chk_auto_frame.toggled.connect(self._on_auto_frame_toggled)
 
@@ -498,16 +513,28 @@ class RTTMonitorPage(QWidget):
         row_timed = QHBoxLayout()
         row_timed.setSpacing(6)
         self.chk_timed_send = CheckBox("定时发送")
+        # LineEdit 原生控件，宽度与自动断帧行一致
         self.le_timed_interval = LineEdit(inner)
         self.le_timed_interval.setText("1.0")
-        self.le_timed_interval.setFixedWidth(72)
-        self.le_timed_interval.setClearButtonEnabled(True)
-        self.le_timed_interval.setEnabled(False)
-        self.lbl_timed_unit = BodyLabel("秒")
+        self.le_timed_interval.setFixedWidth(_INPUT_W)
+        self.le_timed_interval.setClearButtonEnabled(False)
+        self.le_timed_interval.setAlignment(Qt.AlignCenter)
+        # 单位按钮 "秒"（正方形 ToolButton，padding 比 PushButton 小可容纳中文）
+        self.btn_timed_unit = ToolButton(inner)
+        self.btn_timed_unit.setText("秒")
+        self.btn_timed_unit.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.btn_timed_unit.setFixedSize(33, 33)
+        # 容器
+        _timed_group = QWidget(inner)
+        _timed_group.setStyleSheet("background: transparent;")
+        _tg_lay = QHBoxLayout(_timed_group)
+        _tg_lay.setContentsMargins(0, 0, 0, 0)
+        _tg_lay.setSpacing(2)
+        _tg_lay.addWidget(self.le_timed_interval)
+        _tg_lay.addWidget(self.btn_timed_unit)
         row_timed.addWidget(self.chk_timed_send)
-        row_timed.addWidget(self.le_timed_interval)
-        row_timed.addWidget(self.lbl_timed_unit)
         row_timed.addStretch(1)
+        row_timed.addWidget(_timed_group)
         v.addLayout(row_timed)
 
         # CRC 脚本
@@ -861,11 +888,33 @@ class RTTMonitorPage(QWidget):
             except ValueError:
                 pass  # 非法 HEX，保留原文
 
+    def _on_frame_help_clicked(self) -> None:
+        """? 按钮点击：弹出 PopupTeachingTip，点击外部自动关闭。"""
+        from qfluentwidgets import (
+            PopupTeachingTip,
+            TeachingTipTailPosition,
+            TeachingTipView,
+        )
+        view = TeachingTipView(
+            title="自动断帧",
+            content=self._frame_help_content,
+            isClosable=True,
+            tailPosition=TeachingTipTailPosition.TOP,
+        )
+        self._frame_tip = PopupTeachingTip.make(
+            view,
+            target=self.btn_frame_help,
+            duration=-1,
+            tailPosition=TeachingTipTailPosition.TOP,
+            parent=self,
+        )
+        view.closed.connect(self._frame_tip.close)
+
     # ---- 自动断帧 ----
     def _on_auto_frame_toggled(self, checked: bool) -> None:
-        """自动断帧 checkbox 切换：启用/禁用超时输入和幫助按钮。"""
-        self.le_frame_timeout.setEnabled(checked)
-        self.btn_frame_help.setEnabled(checked)
+        """自动断帧 checkbox 切换：选中 = 功能启用，参数锁定（禁用编辑）。"""
+        self.le_frame_timeout.setEnabled(not checked)
+        self.btn_frame_help.setEnabled(not checked)
 
     def _get_frame_timeout_ms(self) -> int:
         """从 LineEdit 解析自动断帧超时值，夹到 [1, 200]。"""
@@ -876,8 +925,9 @@ class RTTMonitorPage(QWidget):
 
     # ---- 定时发送 ----
     def _on_timed_send_toggled(self, checked: bool) -> None:
-        """定时发送 checkbox 切换：启动/停止定时器，启用/禁用输入。"""
-        self.le_timed_interval.setEnabled(checked)
+        """定时发送 checkbox 切换：选中 = 功能启用，参数锁定（禁用编辑）。"""
+        self.le_timed_interval.setEnabled(not checked)
+        self.btn_timed_unit.setEnabled(not checked)
         if checked:
             if not self._is_connected:
                 _infobar.warn(self, "提示", "未连接目标，定时发送将在连接后自动启动")
