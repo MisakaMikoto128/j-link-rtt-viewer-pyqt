@@ -231,7 +231,9 @@ class RTTMonitorPage(QWidget):
 
         # 复位计数：连接成功时重置为 0，每次 reset 操作 +1
         self._reset_count = 0
-
+        # 发送次数计数（对应状态栏"发送: N"）   
+        self._send_count = 0
+        
         # 自动断帧：上次接收数据的时间戳
         import time as _time_mod
         self._last_rx_time: float = 0.0
@@ -727,19 +729,28 @@ class RTTMonitorPage(QWidget):
         self.lbl_status_state = BodyLabel("● 未连接")
         self.lbl_status_state.setStyleSheet("color: #888888;")
         self.lbl_status_state.setMinimumWidth(100)
-        self.lbl_status_rate = BodyLabel("")
+        self.lbl_status_rate = BodyLabel("0 B/s · 0 行/s")
         self.lbl_status_rate.setMinimumWidth(120)
-        self.lbl_status_total = BodyLabel("")
+        self.lbl_status_total = BodyLabel("总 0 B · 0 行 · 00:00:00")
         self.lbl_status_total.setMinimumWidth(160)
+        # 发送/接收计数（贴近"发送: N  接收: N - M"的简洁风格）
+        self.lbl_status_tx = BodyLabel("发送: 0")
+        self.lbl_status_tx.setMinimumWidth(80)
+        self.lbl_status_rx = BodyLabel("接收: 0 - 0")
+        self.lbl_status_rx.setMinimumWidth(100)
         self.lbl_status_encoding = BodyLabel("")
-        self.lbl_reset_count = BodyLabel("")
+        self.lbl_reset_count = BodyLabel("复位: 0")
 
         status_row = QHBoxLayout()
-        status_row.setContentsMargins(0, 0, 0, 0)
-        status_row.setSpacing(8)
+        status_row.setContentsMargins(4, 0, 4, 0)
+        status_row.setSpacing(16)
         status_row.addWidget(self.lbl_status_state)
+        status_row.addStretch(1)
         status_row.addWidget(self.lbl_status_rate)
         status_row.addWidget(self.lbl_status_total)
+        status_row.addStretch(1)
+        status_row.addWidget(self.lbl_status_tx)
+        status_row.addWidget(self.lbl_status_rx)
         status_row.addStretch(1)
         status_row.addWidget(self.lbl_reset_count)
         status_row.addWidget(self.lbl_status_encoding)
@@ -954,6 +965,8 @@ class RTTMonitorPage(QWidget):
             hist.remove(orig_text)
         hist.append(orig_text)
         self._cfg.set("send_history", hist)
+        self._send_count += 1
+        self.lbl_status_tx.setText(f"发送: {self._send_count}")
 
     def _on_crc_script_toggled(self, checked: bool) -> None:
         """CRC 脚本 checkbox 切换：顶部边框上色 + 由上而下的红色渐变背景。
@@ -1149,15 +1162,19 @@ class RTTMonitorPage(QWidget):
         # 状态栏复位
         self.lbl_status_state.setText("● 未连接")
         self.lbl_status_state.setStyleSheet("color: #888888;")
-        self.lbl_status_rate.setText("")
-        self.lbl_status_total.setText("")
-        self.lbl_reset_count.setText("")
+        self.lbl_status_rate.setText("0 B/s · 0 行/s")
+        self.lbl_status_total.setText("总 0 B · 0 行 · 00:00:00")
+        self.lbl_reset_count.setText("复位: 0")
         self.gb_info.setTitle("设备信息")
         # 清除上次统计 delta 基线
         self._stats_prev_bytes = 0
         self._stats_prev_lines = 0
+        self._send_count = 0
+        self.lbl_status_tx.setText("发送: 0")
+        self.lbl_status_rx.setText("接收: 0 - 0")
         # 断开时停止定时发送
         self._timed_send_timer.stop()
+        
 
     def _update_stats(self) -> None:
         """1s 一次：从 worker 同步取吞吐，UI 端算 delta 显示。"""
@@ -1165,8 +1182,8 @@ class RTTMonitorPage(QWidget):
             return
         total_b, total_l, start_ts = self._worker.get_stats()
         if start_ts == 0:
-            self.lbl_status_rate.setText("")
-            self.lbl_status_total.setText("")
+            self.lbl_status_rate.setText("0 B/s · 0 行/s")
+            self.lbl_status_total.setText("总 0 B · 0 行 · 00:00:00")
             self._stats_prev_bytes = 0
             self._stats_prev_lines = 0
             return
@@ -1181,6 +1198,7 @@ class RTTMonitorPage(QWidget):
         hh, mm, ss = secs // 3600, (secs % 3600) // 60, secs % 60
         duration = f"{hh:02d}:{mm:02d}:{ss:02d}"
         self.lbl_status_total.setText(f"总 {_human_bytes(total_b)} · {total_l} 行 · {duration}")
+        self.lbl_status_rx.setText(f"接收: {total_b} - {total_l}")
 
     def _update_encoding_label(self, encoding: str) -> None:
         if hasattr(self, "lbl_status_encoding"):
