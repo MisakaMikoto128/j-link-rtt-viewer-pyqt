@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="img/app_icon.png" width="128" height="128" alt="J-Link RTT Viewer">
+</p>
+
 # J-Link RTT Viewer (PyQt)
 
 > Fluent 风格的 SEGGER J-Link RTT 实时查看 + MCU 内存读写工具，PySide6 + qfluentwidgets 重写版。
