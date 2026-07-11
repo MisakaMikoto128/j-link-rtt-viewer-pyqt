@@ -578,6 +578,11 @@ class RTTMonitorPage(QWidget):
         row_timed.addStretch(1)
         row_timed.addWidget(_timed_group)
         v.addLayout(row_timed)
+        
+        # 十六进制发送（左侧面板入口，与右侧工具栏 chk_hex 双向同步）
+        self.chk_hex_left = CheckBox("十六进制发送")
+        self.chk_hex_left.setFixedHeight(_CTRL_H)
+        v.addWidget(self.chk_hex_left)
 
         # CRC 脚本
         row_crc = QHBoxLayout()
@@ -692,9 +697,9 @@ class RTTMonitorPage(QWidget):
         # 脚本启用时 → 输入框红色边框 + 朝内渐变（不加独立标签）
         # ════════════════════════════════════════════════════════════
         self.te_send = PlainTextEdit(panel)
-        self.te_send.setPlaceholderText(
-            "输入要发送的数据…\n"
-            "(Hex 模式下用 16 进制字符)")
+        # self.te_send.setPlaceholderText(
+        #     "输入要发送的数据…\n"
+        #     "(Hex 模式下用 16 进制字符)")
         _SEND_H = 110  # 约 6 行，发送按钮同高
         self.te_send.setFixedHeight(_SEND_H)
         font = self.te_send.font()
@@ -709,7 +714,7 @@ class RTTMonitorPage(QWidget):
         _tip(self.btn_send, "发送 (Enter) · 未连接时点击提示")
         send_btn_col = QVBoxLayout()
         send_btn_col.setContentsMargins(0, 0, 0, 0)
-        send_btn_col.setSpacing(0)
+        send_btn_col.setSpacing(1)
         send_btn_col.addWidget(self.btn_send)
 
         # 发送区水平布局：文本框 stretch=1 + 按钮
@@ -784,6 +789,10 @@ class RTTMonitorPage(QWidget):
         # 区分程序性 setValue 和用户拖动
         self.display.verticalScrollBar().valueChanged.connect(self._on_display_scrolled)
         self.chk_hex.toggled.connect(self._on_hex_send_toggled)
+        # 左侧面板"十六进制发送" ↔ 右侧工具栏 chk_hex 双向同步（同一状态两个入口）
+        self.chk_hex_left.setChecked(self.chk_hex.isChecked())
+        self.chk_hex_left.toggled.connect(self.chk_hex.setChecked)
+        self.chk_hex.toggled.connect(self.chk_hex_left.setChecked)
         self.btn_send.clicked.connect(self._on_send_clicked)
         self.chk_timed_send.toggled.connect(self._on_timed_send_toggled)
 
@@ -1175,7 +1184,7 @@ class RTTMonitorPage(QWidget):
 
     def _update_encoding_label(self, encoding: str) -> None:
         if hasattr(self, "lbl_status_encoding"):
-            self.lbl_status_encoding.setText(f"编码: {encoding}")
+            self.lbl_status_encoding.setText(f"编码: {encoding.upper()}")
 
     def _on_rtt_data(self, text: str) -> None:
         """worker 已经 50ms 合并好，直接 insertText。
