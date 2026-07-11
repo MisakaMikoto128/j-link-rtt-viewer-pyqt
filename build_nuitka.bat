@@ -20,7 +20,7 @@ python -m nuitka ^
     --include-package-data=qfluentwidgets ^
     --include-package=pylink ^
     --include-package-data=pylink ^
-    --include-package=pyelftools ^
+    --include-package=elftools ^
     --include-package=intelhex ^
     --include-data-files=src\config.json=config.json ^
     --include-data-files=assets\icons\app_icon.ico=app_icon.ico ^
