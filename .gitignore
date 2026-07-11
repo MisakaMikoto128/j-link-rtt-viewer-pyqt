@@ -21,6 +21,11 @@ dist/
 *.spec
 *.exe.manifest
 
+# WiX（MSI 打包中间产物）
+installer/files.wxs
+*.wixpdb
+*.wixobj
+
 # Nuitka
 *.build/
 *.dist/
@@ -51,3 +56,6 @@ AGENTS.md
 .mimocode/.cron-lock
 nuitka-crash-report.xml
 .codegraph/*
+.reasonix/*
+tools/*
+installer/*

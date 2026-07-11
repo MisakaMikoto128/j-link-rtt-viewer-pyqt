@@ -27,7 +27,7 @@ class ConfigService(QObject):
     memory_font_size_changed = Signal(int)  # 内存页 hex dump 字号（family 与 RTT 共用 font_family）
     max_display_lines_changed = Signal(int) # new max block count for QPlainTextEdit
     rtt_poll_interval_changed = Signal(int) # poll timer interval in ms
-    rtt_encoding_changed = Signal(str)      # RTT 解码编码（utf-8 / gbk / utf-16-le / ...）
+    rtt_encoding_changed = Signal(str)      # RTT 解码编码（utf-8 / gbk / utf-16-le / latin-1 / ascii）
     reset_mode_changed = Signal(str)        # "normal" / "auto_reconnect" — RTT 页用来更新按钮文字
 
     DEFAULTS: dict[str, Any] = {

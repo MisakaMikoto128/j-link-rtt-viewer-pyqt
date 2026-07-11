@@ -88,17 +88,23 @@ class MainWindow(FluentWindow):
         self._restore_geometry()
 
     def _apply_ui_font(self, family: str, size: int) -> None:
-        """应用 UI 全局字体。空 family 或 size<=0 → 恢复 fluent 默认（QApplication 出厂 font）。"""
+        """应用 UI 全局字体。
+
+        * family="" 且 size<=0 → 恢复 fluent 默认
+        * 仅 family 有值时 size 自动补 9pt
+        * 仅 size 有值时 family 留空（系统默认字体 + 指定字号）
+        """
         app = QApplication.instance()
         if app is None:
             return
-        if family and size > 0:
-            font = QFont(family, size)
-            app.setFont(font)
-        else:
-            # 恢复默认：用一个全新 QApplication 创建时的默认 font 不容易拿到，
-            # 这里用空字符串构造 + 默认字号 9（fluent 标准）作为兜底
+        family = (family or "").strip()
+        if not family and size <= 0:
+            # 完全默认
             app.setFont(QFont("", 9))
+            return
+        if size <= 0:
+            size = 9
+        app.setFont(QFont(family, size))
 
     def _restore_geometry(self) -> None:
         geom_b64 = self._cfg.get("window_geometry")

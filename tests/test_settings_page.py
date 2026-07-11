@@ -53,7 +53,7 @@ def test_encoding_combo_persists_and_emits(settings_page, qtbot):
     page, cfg = settings_page
     received: list[str] = []
     cfg.rtt_encoding_changed.connect(lambda e: received.append(e))
-    page.cb_encoding.setCurrentText("gbk")
+    page.cb_encoding.setCurrentText("GBK")
     qtbot.wait(20)
     assert cfg.get("rtt_encoding") == "gbk"
     assert "gbk" in received

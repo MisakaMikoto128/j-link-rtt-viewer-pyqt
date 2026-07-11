@@ -504,7 +504,7 @@ class JLinkWorker(QObject):
 
     @Slot(str)
     def _on_set_encoding(self, encoding: str) -> None:
-        """切换 RTT 解码编码（utf-8/gbk/utf-16-le/...）。立即重建 decoder。"""
+        """切换 RTT 解码编码（utf-8 / gbk / utf-16-le / latin-1 / ascii）。立即重建 decoder。"""
         if not encoding:
             return
         if encoding == self._encoding:

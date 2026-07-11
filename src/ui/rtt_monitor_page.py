@@ -121,6 +121,12 @@ _DEFAULT_BG_QCOLOR = QColor("#222222")
 
 _DEFAULT_SEND_ECHO_COLOR = "#FFA500"  # 发送回显默认色（橙色）
 
+# 编码显示名映射（权威定义在 settings_page._ENCODING_DISPLAY，此处为本地副本）
+_ENCODING_LABEL_MAP: dict[str, str] = {
+    "utf-8": "UTF-8", "gbk": "GBK", "utf-16-le": "UTF-16-LE",
+    "latin-1": "Latin-1", "ascii": "ASCII",
+}
+
 # 色盘弹窗预设色 —— 参照 Office 经典调色板
 _COLOR_GRID_PRESETS: list[str] = [
     "#FFFFFF", "#F2F2F2", "#E7E6E6", "#BFBFBF", "#A6A6A6", "#808080",
@@ -1639,7 +1645,8 @@ class RTTMonitorPage(QWidget):
 
     def _update_encoding_label(self, encoding: str) -> None:
         if hasattr(self, "lbl_status_encoding"):
-            self.lbl_status_encoding.setText(f"编码: {encoding.upper()}")
+            display: str = _ENCODING_LABEL_MAP.get(encoding, encoding.upper())
+            self.lbl_status_encoding.setText(f"编码: {display}")
 
     def _on_rtt_data(self, text: str) -> None:
         """worker 已经 50ms 合并好，直接 insertText。

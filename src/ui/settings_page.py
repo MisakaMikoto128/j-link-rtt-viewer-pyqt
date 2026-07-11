@@ -44,6 +44,23 @@ _RESET_MODE_LABELS = [
 ]
 
 
+# --- RTT 解码编码显示名映射 ---
+# 内部存储使用小写标准名（如 utf-8, latin-1），UI 显示使用规范化名称
+_ENCODING_DISPLAY: dict[str, str] = {
+    "utf-8": "UTF-8",
+    "gbk": "GBK",
+    "utf-16-le": "UTF-16-LE",
+    "latin-1": "Latin-1",
+    "ascii": "ASCII",
+}
+# 反向映射：显示名 → 内部名
+_ENCODING_FROM_DISPLAY: dict[str, str] = {v: k for k, v in _ENCODING_DISPLAY.items()}
+# ComboBox 显示列表（保持顺序）
+_ENCODING_DISPLAY_NAMES: list[str] = [
+    "UTF-8", "GBK", "UTF-16-LE", "Latin-1", "ASCII",
+]
+
+
 class _SettingRow(QWidget):
     """通用：左标题 + 右控件 的一行。"""
 
@@ -183,11 +200,11 @@ class SettingsPage(QWidget):
 
         # RTT 解码编码：默认 utf-8，可切换 gbk/utf-16-le/latin-1/ascii
         self.cb_encoding = ComboBox(self)
-        self.cb_encoding.addItems(["utf-8", "gbk", "utf-16-le", "latin-1", "ascii"])
-        cur_enc = (self._cfg.get("rtt_encoding") or "utf-8").lower()
-        if self.cb_encoding.findText(cur_enc) < 0:
-            self.cb_encoding.addItem(cur_enc)
-        self.cb_encoding.setCurrentText(cur_enc)
+        self.cb_encoding.addItems(_ENCODING_DISPLAY_NAMES)
+        # 从 cfg 读取内部存储的编码名，映射到显示名
+        cur_key: str = (self._cfg.get("rtt_encoding") or "utf-8").strip().lower()
+        cur_display: str = _ENCODING_DISPLAY.get(cur_key, _ENCODING_DISPLAY["utf-8"])
+        self.cb_encoding.setCurrentText(cur_display)
         self.cb_encoding.currentTextChanged.connect(self._on_encoding_changed)
         rtt_lay.addWidget(_SettingRow("RTT 解码编码", self.cb_encoding))
 
@@ -337,12 +354,11 @@ class SettingsPage(QWidget):
             return
         self._cfg.set("ui_font_size", v)
 
-    def _on_encoding_changed(self, enc: str) -> None:
-        enc = (enc or "utf-8").strip().lower()
-        if not enc:
-            return
-        self._cfg.set("rtt_encoding", enc)
-        _infobar.ok(self, "已切换 RTT 编码", f"新编码：{enc}（立即生效）")
+    def _on_encoding_changed(self, display_name: str) -> None:
+        """编码下拉切换：从显示名映射到内部存储的小写标准名。"""
+        key: str = _ENCODING_FROM_DISPLAY.get(display_name, "utf-8")
+        self._cfg.set("rtt_encoding", key)
+        _infobar.ok(self, "已切换 RTT 编码", f"新编码：{display_name}（立即生效）")
 
     def _on_reset_ui_font(self) -> None:
         self._cfg.set("ui_font_family", "")
