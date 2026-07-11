@@ -107,6 +107,7 @@ class SettingsPage(QWidget):
 
         # 主题色
         color_row = QHBoxLayout()
+        color_row.setContentsMargins(0, 4, 0, 4)
         color_row.addWidget(BodyLabel("主题色"), 1)
         self.lbl_color = QLabel(self._cfg.get("theme_color"))
         self.lbl_color.setStyleSheet(
@@ -127,6 +128,7 @@ class SettingsPage(QWidget):
         # 改用内嵌选择而非 QFontDialog——后者在 fluent 主题下会因 "MS Sans Serif"
         # DirectWrite 失败、字号返回 -1 等问题卡死/污染配置
         rtt_font_row = QHBoxLayout()
+        rtt_font_row.setContentsMargins(0, 4, 0, 4)
         rtt_font_row.addWidget(BodyLabel("RTT 显示字体"), 1)
         self.cb_rtt_font = EditableComboBox(self)
         self.cb_rtt_font.addItems(families)
@@ -181,6 +183,7 @@ class SettingsPage(QWidget):
         rtt_lay.addWidget(_SettingRow("RTT 解码编码", self.cb_encoding))
 
         log_row = QHBoxLayout()
+        log_row.setContentsMargins(0, 4, 0, 4)
         log_row.addWidget(BodyLabel("日志保存目录"), 1)
         self.lbl_log_dir = QLabel(self._cfg.get("log_dir") or str(get_log_dir()))
         log_row.addWidget(self.lbl_log_dir)
@@ -203,6 +206,7 @@ class SettingsPage(QWidget):
 
         # 标记颜色（用户插入标记 + 自动标记都用）
         mark_color_row = QHBoxLayout()
+        mark_color_row.setContentsMargins(0, 4, 0, 4)
         mark_color_row.addWidget(BodyLabel("标记颜色"), 1)
         self.lbl_mark_color = QLabel(self._cfg.get("mark_color"))
         self.lbl_mark_color.setStyleSheet(
