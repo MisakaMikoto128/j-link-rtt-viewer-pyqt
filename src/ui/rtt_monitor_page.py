@@ -691,10 +691,19 @@ class RTTMonitorPage(QWidget):
         _tip(self.btn_toolbar_save, "保存当前")
         self.btn_toolbar_save.clicked.connect(self._on_save_clicked)
 
+        # 连接/断开切换（收窄模式入口，同步主页 btn_connect 状态）
+        # 不用 toggled 自动翻转 checked——checked 完全由 _set_connected_ui/
+        # _set_disconnected_ui 驱动，按钮点击只负责触发连接/断开动作
+        self.btn_toolbar_connect = ToggleToolButton(FluentIcon.PLAY, self._toolbar)
+        self.btn_toolbar_connect.setFixedSize(36, 30)
+        _tip(self.btn_toolbar_connect, "连接/断开")
+        self.btn_toolbar_connect.clicked.connect(self._on_connect_clicked)
+
         toolbar_row.addWidget(self.btn_hex_rx_up)
         toolbar_row.addWidget(self.btn_hex_tx_down)
         toolbar_row.addWidget(self.btn_toolbar_pause)
         toolbar_row.addWidget(self.btn_toolbar_clear)
+        toolbar_row.addWidget(self.btn_toolbar_connect)
         toolbar_row.addWidget(self.btn_toolbar_save)
         toolbar_row.addStretch(1)
         self._toolbar.setVisible(False)  # 默认隐藏，仅收窄模式显示
@@ -1155,7 +1164,10 @@ class RTTMonitorPage(QWidget):
         # 卡片标题加摘要
         self.gb_info.setTitle(f"设备信息 — {target} / {iface} / {speed} kHz")
 
-    def _set_disconnected_ui(self) -> None:
+        self.btn_toolbar_connect.setChecked(True)
+        self.btn_toolbar_connect.setIcon(FluentIcon.PAUSE)
+
+    def     _set_disconnected_ui(self) -> None:
         self._is_connected = False
         self.btn_connect.setEnabled(True)
         self.btn_connect.setText("连接")
@@ -1178,6 +1190,9 @@ class RTTMonitorPage(QWidget):
         self._send_count = 0
         self.lbl_status_tx.setText("发送: 0")
         self.lbl_status_rx.setText("接收: 0 - 0")
+
+        self.btn_toolbar_connect.setChecked(False)
+        self.btn_toolbar_connect.setIcon(FluentIcon.PLAY)
         # 断开时停止定时发送
         self._timed_send_timer.stop()
         
