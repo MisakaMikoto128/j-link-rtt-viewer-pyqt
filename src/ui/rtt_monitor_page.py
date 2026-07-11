@@ -298,7 +298,7 @@ class RTTMonitorPage(QWidget):
         """
         panel = QWidget(self)
         panel.setObjectName("configPanel")
-        panel.setFixedWidth(260)
+        panel.setFixedWidth(280)
         panel.setStyleSheet(
             "QWidget#configPanel { background: transparent; "
             "border-right: 1px solid rgba(128,128,128,0.15); }"
@@ -682,24 +682,22 @@ class RTTMonitorPage(QWidget):
         self.te_send.setPlaceholderText(
             "输入要发送的数据…\n"
             "(Hex 模式下用 16 进制字符)")
-        self.te_send.setMinimumHeight(100)   # 约 6 行
-        self.te_send.setMaximumHeight(160)
+        _SEND_H = 110  # 约 6 行，发送按钮同高
+        self.te_send.setFixedHeight(_SEND_H)
         font = self.te_send.font()
         font.setPointSize(12)
         self.te_send.setFont(font)
 
-        # 发送按钮（文字+图标，正常尺寸，竖向居中于发送框）
+        # 发送按钮：正方形，高度=输入框高度，始终 enabled
+        # 未连接时点击 → 提示"未连接目标"
+        self.btn_send = PrimaryPushButton(FluentIcon.SEND, "", panel)
+        self.btn_send.setFixedSize(_SEND_H, _SEND_H)
+        self.btn_send.setIconSize(QSize(36, 36))
+        _tip(self.btn_send, "发送 (Enter) · 未连接时点击提示")
         send_btn_col = QVBoxLayout()
         send_btn_col.setContentsMargins(0, 0, 0, 0)
         send_btn_col.setSpacing(0)
-        self.btn_send = PrimaryPushButton(FluentIcon.SEND, "发送", panel)
-        self.btn_send.setFixedHeight(36)
-        self.btn_send.setMinimumWidth(72)
-        self.btn_send.setEnabled(False)
-        _tip(self.btn_send, "发送 (Enter)")
-        send_btn_col.addStretch(1)
-        send_btn_col.addWidget(self.btn_send, 0, Qt.AlignVCenter)
-        send_btn_col.addStretch(1)
+        send_btn_col.addWidget(self.btn_send)
 
         # 发送区水平布局：文本框 stretch=1 + 按钮
         send_area = QHBoxLayout()
@@ -896,6 +894,9 @@ class RTTMonitorPage(QWidget):
         self._worker.set_rtt_channel_requested.emit(ch)
 
     def _on_send_clicked(self) -> None:
+        if not self._is_connected:
+            _infobar.warn(self, "未连接目标", "请先连接 J-Link 和目标设备后再发送")
+            return
         text = self.te_send.toPlainText().strip()
         if not text:
             return
@@ -1088,7 +1089,6 @@ class RTTMonitorPage(QWidget):
         self.btn_connect.setIcon(FluentIcon.PAUSE)
         self.btn_reset.setEnabled(True)
         self.btn_reset_halt.setEnabled(True)
-        self.btn_send.setEnabled(True)
         self.chk_power.setEnabled(True)
         for key, lbl in self._info_labels.items():
             lbl.setText(str(info.get(key, "-")))
@@ -1115,7 +1115,6 @@ class RTTMonitorPage(QWidget):
         self.btn_connect.setIcon(FluentIcon.PLAY)
         self.btn_reset.setEnabled(False)
         self.btn_reset_halt.setEnabled(False)
-        self.btn_send.setEnabled(False)
         self.chk_power.setEnabled(False)
         for lbl in self._info_labels.values():
             lbl.setText("-")

@@ -134,10 +134,11 @@ def test_reset_halt_button_routes_with_halt_mode_regardless_of_cfg(rtt_page, qtb
 
 
 def test_state_changed_to_connected_enables_send_and_reset(rtt_page, qtbot):
-    """connection_state_changed(True) 后，发送 + 两个重置按钮都应 enabled。"""
+    """connection_state_changed(True) 后，两个重置按钮应 enabled。"""
     page, worker, _ = rtt_page
     worker.connection_state_changed.emit(True)
     qtbot.wait(20)
+    # 发送按钮始终 enabled（未连接时点击提示，不 disable）
     assert page.btn_send.isEnabled()
     assert page.btn_reset.isEnabled()
     assert page.btn_reset_halt.isEnabled()
@@ -145,13 +146,14 @@ def test_state_changed_to_connected_enables_send_and_reset(rtt_page, qtbot):
 
 
 def test_state_changed_to_disconnected_resets_ui(rtt_page, qtbot):
-    """connection_state_changed(False) 应禁掉发送/重置且复位状态文本。"""
+    """connection_state_changed(False) 应禁掉重置且复位状态文本，发送按钮仍 enabled。"""
     page, worker, _ = rtt_page
     worker.connection_state_changed.emit(True)
     qtbot.wait(20)
     worker.connection_state_changed.emit(False)
     qtbot.wait(20)
-    assert not page.btn_send.isEnabled()
+    # 发送按钮始终 enabled
+    assert page.btn_send.isEnabled()
     assert not page.btn_reset.isEnabled()
     assert page._is_connected is False
     assert "未连接" in page.lbl_status_state.text()
