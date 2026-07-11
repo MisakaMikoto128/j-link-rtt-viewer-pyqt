@@ -146,3 +146,12 @@ pylink-square 2.x 在 SEGGER J-Link DLL 下有 breaking change：`rtt_start` / `
 - [SEGGER](https://www.segger.com/) — J-Link 调试器 + RTT 协议
 - [Square](https://github.com/Square/pylink) — pylink-square
 - [zhiyiYo](https://github.com/zhiyiYo) — PyQt-Fluent-Widgets
+
+### AI 辅助开发
+
+本项目在开发过程中使用了以下 AI 模型辅助编码、设计与测试：
+
+- [Qoder](https://qoder.com/) — 代码生成与重构
+- CLM-5.2 — 代码生成与调试
+- [小米 MiMo](https://github.com/XiaomiMiMo) — 代码生成与审查
+- Hy3 — 代码生成与测试
