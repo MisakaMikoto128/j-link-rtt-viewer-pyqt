@@ -13,7 +13,7 @@
 
 | 旧版主页 | 新版主页（v0.5.0） |
 |:---:|:---:|
-| ![home](img/home.png) | ![home2](img/home2.png) |
+| <img src="img/home.png" width="420"> | <img src="img/home2.png" width="420"> |
 
 ## ✨ 功能
 
