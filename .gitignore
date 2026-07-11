@@ -49,3 +49,5 @@ AGENTS.md
 .pytest_tmp/*
 .workbuddy*
 .mimocode/.cron-lock
+nuitka-crash-report.xml
+.codegraph/*
