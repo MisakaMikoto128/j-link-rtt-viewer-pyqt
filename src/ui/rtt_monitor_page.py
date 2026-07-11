@@ -273,13 +273,6 @@ class RTTMonitorPage(QWidget):
         self._right_panel = self._build_right_panel()
         main_split.addWidget(self._right_panel, 1)
 
-        # ==== 收起态垂直图标条（默认隐藏，替代配置面板）====
-        # 必须在 _build_right_panel 之后，因为引用了 self.display
-        self._icon_bar = self._build_icon_bar()
-        self._icon_bar.setVisible(False)
-        # 插入到 config_panel 和 right_panel 之间
-        main_split.insertWidget(1, self._icon_bar)
-
         outer.addLayout(main_split)
 
         # 窗口 resize 防抖 timer
@@ -288,50 +281,6 @@ class RTTMonitorPage(QWidget):
         self._resize_timer.setInterval(100)
         self._resize_timer.timeout.connect(self._on_resize_debounce)
 
-    def _build_icon_bar(self) -> QWidget:
-        """收起态垂直图标条：固定 48px 宽，垂直排列常用操作按钮。
-
-        发送按钮不在图标条中——它位于右侧面板的发送区右侧，
-        与参考 UI（图3）一致：发送按钮在接收区和发送区之间。
-        """
-        bar = QWidget(self)
-        bar.setObjectName("iconBar")
-        bar.setFixedWidth(48)
-        bar.setStyleSheet(
-            "QWidget#iconBar { background: transparent; "
-            "border-right: 1px solid rgba(128,128,128,0.15); }")
-        v = QVBoxLayout(bar)
-        v.setContentsMargins(6, 12, 6, 12)
-        v.setSpacing(8)
-
-        self._btn_quick_pause = TransparentToolButton(FluentIcon.PAUSE, bar)
-        self._btn_quick_pause.setFixedSize(36, 36)
-        _tip(self._btn_quick_pause, "暂停/恢复接收")
-        self._btn_quick_pause.setCheckable(True)
-        self._btn_quick_pause.toggled.connect(
-            self._worker.set_pause_receive_requested.emit)
-        # 双向同步工具栏暂停按钮
-        self._btn_quick_pause.toggled.connect(
-            lambda c: hasattr(self, 'btn_toolbar_pause') and
-            self.btn_toolbar_pause.setChecked(c))
-        if hasattr(self, 'btn_toolbar_pause'):
-            self.btn_toolbar_pause.toggled.connect(self._btn_quick_pause.setChecked)
-        v.addWidget(self._btn_quick_pause, 0, Qt.AlignHCenter)
-
-        self._btn_quick_clear = TransparentToolButton(FluentIcon.DELETE, bar)
-        self._btn_quick_clear.setFixedSize(36, 36)
-        _tip(self._btn_quick_clear, "清除显示")
-        self._btn_quick_clear.clicked.connect(self.display.clear)
-        v.addWidget(self._btn_quick_clear, 0, Qt.AlignHCenter)
-
-        self._btn_quick_save = TransparentToolButton(FluentIcon.SAVE, bar)
-        self._btn_quick_save.setFixedSize(36, 36)
-        _tip(self._btn_quick_save, "保存当前")
-        self._btn_quick_save.clicked.connect(self._on_save_clicked)
-        v.addWidget(self._btn_quick_save, 0, Qt.AlignHCenter)
-
-        v.addStretch(1)
-        return bar
     # ------------------------------------------------------------------
     # 左侧配置面板
     # ------------------------------------------------------------------
@@ -720,10 +669,17 @@ class RTTMonitorPage(QWidget):
         _tip(self.btn_toolbar_clear, "清除显示")
         self.btn_toolbar_clear.clicked.connect(self.display.clear)
 
+        # 保存
+        self.btn_toolbar_save = ToolButton(FluentIcon.SAVE, self._toolbar)
+        self.btn_toolbar_save.setFixedSize(36, 30)
+        _tip(self.btn_toolbar_save, "保存当前")
+        self.btn_toolbar_save.clicked.connect(self._on_save_clicked)
+
         toolbar_row.addWidget(self.btn_hex_rx_up)
         toolbar_row.addWidget(self.chk_hex)
         toolbar_row.addWidget(self.btn_toolbar_pause)
         toolbar_row.addWidget(self.btn_toolbar_clear)
+        toolbar_row.addWidget(self.btn_toolbar_save)
         toolbar_row.addStretch(1)
         self._toolbar.setVisible(False)  # 默认隐藏，仅收窄模式显示
 
@@ -807,7 +763,6 @@ class RTTMonitorPage(QWidget):
     def _set_config_panel_visible(self, visible: bool) -> None:
         self._config_visible = visible
         self._config_panel.setVisible(visible)
-        self._icon_bar.setVisible(not visible)
         # 收窄模式：显示接收/发送区之间的工具栏行
         self._toolbar.setVisible(not visible)
 
