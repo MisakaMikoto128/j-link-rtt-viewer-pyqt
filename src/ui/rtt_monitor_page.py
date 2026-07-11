@@ -301,8 +301,7 @@ class RTTMonitorPage(QWidget):
         panel.setObjectName("configPanel")
         panel.setFixedWidth(280)
         panel.setStyleSheet(
-            "QWidget#configPanel { background: transparent; "
-            "border-right: 1px solid rgba(128,128,128,0.15); }"
+            "QWidget#configPanel { background: transparent; }"
         )
 
         scroll = ScrollArea(panel)
@@ -327,14 +326,15 @@ class RTTMonitorPage(QWidget):
         pl.addWidget(scroll)
 
         v = QVBoxLayout(inner)
-        v.setContentsMargins(12, 10, 16, 10)
+        v.setContentsMargins(12, 10, 8, 10)
         v.setSpacing(6)
 
         # ════════════════════════════════════════════════════════════
         # 区域 1：连接设置
         # ════════════════════════════════════════════════════════════
         v.addWidget(StrongBodyLabel("连接设置"))
-
+        _INPUT_W = 120
+        _CTRL_H = 33
         self.cb_target = EditableComboBox(inner)
         self.cb_target.setPlaceholderText("目标设备")
         chip_list = self._cfg.get_chip_list()
@@ -354,10 +354,12 @@ class RTTMonitorPage(QWidget):
         self.cb_iface = ComboBox(inner)
         self.cb_iface.addItems(["SWD", "JTAG"])
         self.cb_iface.setCurrentText(self._cfg.get("interface"))
+        self.cb_iface.setFixedHeight(_CTRL_H)
         row_iface.addWidget(self.cb_iface)
         row_iface.addSpacing(12)
         row_iface.addWidget(BodyLabel("速度"))
         self.cb_speed = ComboBox(inner)
+        self.cb_speed.setFixedHeight(_CTRL_H)
         for s in self._cfg.get_default_speeds():
             self.cb_speed.addItem(str(s))
         cur_speed = str(self._cfg.get("speed_khz"))
@@ -373,6 +375,7 @@ class RTTMonitorPage(QWidget):
         self.sp_channel = SpinBox(inner)
         self.sp_channel.setRange(0, 15)
         self.sp_channel.setValue(self._cfg.get("rtt_channel"))
+        self.sp_channel.setFixedHeight(_CTRL_H)
         row_ch.addWidget(self.sp_channel)
         row_ch.addStretch(1)
         v.addLayout(row_ch)
@@ -445,17 +448,22 @@ class RTTMonitorPage(QWidget):
 
         self.chk_auto_scroll = CheckBox("自动滚动")
         self.chk_auto_scroll.setChecked(self._cfg.get("auto_scroll"))
+        self.chk_auto_scroll.setFixedHeight(_CTRL_H)
         v.addWidget(self.chk_auto_scroll)
         self.chk_pause = CheckBox("暂停接收")
+        self.chk_pause.setFixedHeight(_CTRL_H)
         v.addWidget(self.chk_pause)
         self.chk_power = CheckBox("电源输出")
+        self.chk_power.setFixedHeight(_CTRL_H)
         self.chk_power.setEnabled(False)
         v.addWidget(self.chk_power)
         self.chk_log_rec = CheckBox("实时日志记录")
+        self.chk_log_rec.setFixedHeight(_CTRL_H)
         v.addWidget(self.chk_log_rec)
 
         # HEX 显示
         self.chk_hex_display = CheckBox("十六进制显示")
+        self.chk_hex_display.setFixedHeight(_CTRL_H)
         _tip(self.chk_hex_display, "将接收到的每个字节以大写的 HEX 格式显示")
         v.addWidget(self.chk_hex_display)
 
@@ -463,10 +471,11 @@ class RTTMonitorPage(QWidget):
         row_frame = QHBoxLayout()
         row_frame.setSpacing(6)
         self.chk_auto_frame = CheckBox("自动断帧")
-        _INPUT_W = 80
+        self.chk_auto_frame.setFixedHeight(_CTRL_H)
+
         self.le_frame_timeout = LineEdit(inner)
         self.le_frame_timeout.setText("20")
-        self.le_frame_timeout.setFixedWidth(_INPUT_W)
+        self.le_frame_timeout.setFixedSize(_INPUT_W, _CTRL_H)
         self.le_frame_timeout.setClearButtonEnabled(False)
         self.le_frame_timeout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         _lbl_ms = QLabel("ms", self.le_frame_timeout)
@@ -475,8 +484,8 @@ class RTTMonitorPage(QWidget):
             "background: transparent; border: none;")
         self.le_frame_timeout.hBoxLayout.addWidget(_lbl_ms, 0, Qt.AlignVCenter)
         self.le_frame_timeout.setTextMargins(0, 0, 22, 0)
-        self.btn_frame_help = PushButton("?", inner)
-        self.btn_frame_help.setFixedSize(33, 33)
+        self.btn_frame_help = ToolButton(FluentIcon.QUESTION, inner)
+        self.btn_frame_help.setFixedSize(_CTRL_H, _CTRL_H)
         self.btn_frame_help.clicked.connect(self._on_frame_help_clicked)
         self._frame_help_content = (
             "接收超时设置（1~200 毫秒），默认 20ms。\n\n"
@@ -514,6 +523,29 @@ class RTTMonitorPage(QWidget):
         row_mark.addWidget(self.btn_save)
         v.addLayout(row_mark)
 
+        # 字号控制（原发送设置区块，挪到这里）
+        row_font = QHBoxLayout()
+        row_font.setSpacing(6)
+        row_font.addWidget(BodyLabel("字号"))
+        row_font.addStretch(1)
+        self.btn_font_minus = TransparentToolButton(inner)
+        self.btn_font_minus.setText("A-")
+        self.btn_font_minus.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.btn_font_minus.setFixedSize(44, 44)
+        _tip(self.btn_font_minus, "字号 −1")
+        self.lbl_font_size = BodyLabel(f"{self._cfg.get('font_size')}")
+        self.lbl_font_size.setAlignment(Qt.AlignCenter)
+        self.lbl_font_size.setFixedWidth(28)
+        self.btn_font_plus = TransparentToolButton(inner)
+        self.btn_font_plus.setText("A+")
+        self.btn_font_plus.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.btn_font_plus.setFixedSize(44, 44)
+        _tip(self.btn_font_plus, "字号 +1")
+        row_font.addWidget(self.btn_font_minus)
+        row_font.addWidget(self.lbl_font_size)
+        row_font.addWidget(self.btn_font_plus)
+        v.addLayout(row_font)
+
         # ---- 分隔线 ----
         v.addWidget(_section_separator(inner))
 
@@ -528,13 +560,13 @@ class RTTMonitorPage(QWidget):
         self.chk_timed_send = CheckBox("定时发送")
         self.le_timed_interval = LineEdit(inner)
         self.le_timed_interval.setText("1.0")
-        self.le_timed_interval.setFixedWidth(_INPUT_W)
+        self.le_timed_interval.setFixedSize(_INPUT_W, _CTRL_H)
         self.le_timed_interval.setClearButtonEnabled(False)
         self.le_timed_interval.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.btn_timed_unit = ToolButton(inner)
         self.btn_timed_unit.setText("秒")
         self.btn_timed_unit.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.btn_timed_unit.setFixedSize(33, 33)
+        self.btn_timed_unit.setFixedSize(_CTRL_H, _CTRL_H)
         _timed_group = QWidget(inner)
         _timed_group.setStyleSheet("background: transparent;")
         _tg_lay = QHBoxLayout(_timed_group)
@@ -552,35 +584,15 @@ class RTTMonitorPage(QWidget):
         row_crc.setSpacing(6)
         self.chk_crc_script = CheckBox("脚本")
         self.cb_crc_algo = ComboBox(inner)
+        self.cb_crc_algo.setFixedHeight(_CTRL_H)
         for display_name, _ in CRC_ALGORITHMS:
             self.cb_crc_algo.addItem(display_name)
         self.cb_crc_algo.setCurrentIndex(1)  # 默认 CRC-16/MODBUS
         _tip(self.cb_crc_algo, "发送时追加 CRC 后缀（算法选）")
         row_crc.addWidget(self.chk_crc_script)
-        row_crc.addWidget(self.cb_crc_algo)
         row_crc.addStretch(1)
+        row_crc.addWidget(self.cb_crc_algo)
         v.addLayout(row_crc)
-
-        # 字号控制
-        row_font = QHBoxLayout()
-        row_font.setSpacing(6)
-        row_font.addWidget(BodyLabel("字号"))
-        self.btn_font_minus = TransparentToolButton(
-            FluentIcon.ZOOM_OUT, inner)
-        self.btn_font_minus.setFixedSize(28, 28)
-        _tip(self.btn_font_minus, "字号 −1")
-        self.lbl_font_size = BodyLabel(f"{self._cfg.get('font_size')}")
-        self.lbl_font_size.setAlignment(Qt.AlignCenter)
-        self.lbl_font_size.setFixedWidth(28)
-        self.btn_font_plus = TransparentToolButton(
-            FluentIcon.ZOOM_IN, inner)
-        self.btn_font_plus.setFixedSize(28, 28)
-        _tip(self.btn_font_plus, "字号 +1")
-        row_font.addWidget(self.btn_font_minus)
-        row_font.addWidget(self.lbl_font_size)
-        row_font.addWidget(self.btn_font_plus)
-        row_font.addStretch(1)
-        v.addLayout(row_font)
 
         v.addStretch(1)
         return panel
@@ -603,7 +615,7 @@ class RTTMonitorPage(QWidget):
         panel.setStyleSheet(
             "QWidget#rightPanel { background: transparent; }")
         v = QVBoxLayout(panel)
-        v.setContentsMargins(0, 8, 8, 8)
+        v.setContentsMargins(8, 8, 8, 8)
         v.setSpacing(6)
 
         # ---- 显示区 ----
@@ -691,7 +703,7 @@ class RTTMonitorPage(QWidget):
 
         # 发送按钮：正方形，高度=输入框高度，始终 enabled
         # 未连接时点击 → 提示"未连接目标"
-        self.btn_send = PushButton(FluentIcon.SEND, "", panel)
+        self.btn_send = ToolButton(FluentIcon.SEND, panel)
         self.btn_send.setFixedSize(_SEND_H, _SEND_H)
         self.btn_send.setIconSize(QSize(36, 36))
         _tip(self.btn_send, "发送 (Enter) · 未连接时点击提示")
@@ -935,24 +947,30 @@ class RTTMonitorPage(QWidget):
         self._cfg.set("send_history", hist)
 
     def _on_crc_script_toggled(self, checked: bool) -> None:
-        """CRC 脚本 checkbox 切换：给发送框加红色边框 + 朝内渐变背景。
-
-        不加独立标签——渐变效果直接画在输入框边框上，更干净。
-        保存原始 styleSheet，取消时恢复，避免清掉 qfluentwidgets 主题样式。
+        """CRC 脚本 checkbox 切换：顶部边框上色 + 由上而下的红色渐变背景。
+        需要同时覆盖 :focus 和 :hover 状态，否则获得焦点/鼠标悬浮时顶部颜色
+        被 qfluentwidgets 默认的状态样式覆盖掉。
         """
         if checked:
             self._te_send_orig_ss = self.te_send.styleSheet()
-            self.te_send.setStyleSheet(
-                self._te_send_orig_ss
-                + "\nQPlainTextEdit {"
-                "  border: 2px solid #cc3300;"
-                "  border-radius: 5px;"
+            _crc_css = (
+                "\nQPlainTextEdit {"
+                "  border-top: 2px solid #cc3300;"
                 "  background: qlineargradient("
                 "    x1:0, y1:0, x2:0, y2:1,"
-                "    stop:0 rgba(204,51,0,0.10),"
-                "    stop:0.15 rgba(204,51,0,0.04),"
-                "    stop:0.4 rgba(204,51,0,0));"
-                "}")
+                "    stop:0 rgba(204,51,0,0.14),"
+                "    stop:0.05 rgba(204,51,0,0.06),"
+                "    stop:0.1 rgba(204,51,0,0.02),"
+                "    stop:0.15 rgba(204,51,0,0));"
+                "}"
+                "\nQPlainTextEdit:hover {"
+                "  border-top: 2px solid #cc3300;"
+                "}"
+                "\nQPlainTextEdit:focus {"
+                "  border-top: 2px solid #cc3300;"
+                "}"
+            )
+            self.te_send.setStyleSheet(self._te_send_orig_ss + _crc_css)
         else:
             orig = getattr(self, "_te_send_orig_ss", None)
             if orig is not None:
