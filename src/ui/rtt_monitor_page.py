@@ -327,7 +327,7 @@ class RTTMonitorPage(QWidget):
         pl.addWidget(scroll)
 
         v = QVBoxLayout(inner)
-        v.setContentsMargins(12, 10, 0, 10)
+        v.setContentsMargins(12, 10, 16, 10)
         v.setSpacing(6)
 
         # ════════════════════════════════════════════════════════════
