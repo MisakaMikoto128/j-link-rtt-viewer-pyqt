@@ -83,7 +83,8 @@ class MainWindow(FluentWindow):
         # 显式约束最小尺寸，让窗口在 Windows 任务栏占据底部时仍能完整显示底部
         # 控件（搜索栏/发送栏）。子控件 sizeHint 累积过大会让 Qt 计算出
         # 1500+ px 的 mintrack，结果窗口被 Windows 强制压扁导致底部被任务栏遮挡。
-        self.setMinimumSize(900, 540)
+        # 最小宽度需小于 _COLLAPSE_WIDTH(900)，否则收窄模式永远无法触发
+        self.setMinimumSize(480, 540)
         self._restore_geometry()
 
     def _apply_ui_font(self, family: str, size: int) -> None:
