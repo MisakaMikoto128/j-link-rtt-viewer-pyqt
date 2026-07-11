@@ -298,17 +298,16 @@ def test_shortcut_find_fills_selected_text(rtt_page, qtbot):
 
 # ---- 工具栏 / 脚本红色提示（UI 重构后行为）----
 def test_crc_script_toggle_shows_red_tip_and_red_border(rtt_page, qtbot):
-    """勾选 CRC 脚本应显示发送框上方红色提示条 + 红色边框。"""
+    """勾选 CRC 脚本应给发送框加红色渐变边框（非独立标签）。"""
     page, _, _ = rtt_page
-    page.show()
-    assert not page.lbl_script_tip.isVisible()
+    before = page.te_send.styleSheet()
     page.chk_crc_script.setChecked(True)
     qtbot.wait(20)
-    assert page.lbl_script_tip.isVisible()
-    # 取消勾选应隐藏
+    ss = page.te_send.styleSheet()
+    assert "#cc3300" in ss and "qlineargradient" in ss
     page.chk_crc_script.setChecked(False)
     qtbot.wait(20)
-    assert not page.lbl_script_tip.isVisible()
+    assert page.te_send.styleSheet() == before
 
 
 def test_toolbar_pause_syncs_with_left_panel_checkbox(rtt_page, qtbot):

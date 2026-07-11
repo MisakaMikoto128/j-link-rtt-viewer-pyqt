@@ -680,13 +680,16 @@ class RTTMonitorPage(QWidget):
             lambda _c: self.search_bar._apply_style())
 
         # ════════════════════════════════════════════════════════════
-        # 工具栏行（位于显示区和发送区之间）
+        # 收窄模式工具栏行（位于显示区和发送区之间，仅在左侧面板隐藏时显示）
         # ════════════════════════════════════════════════════════════
-        toolbar_row = QHBoxLayout()
+        self._toolbar = QWidget(panel)
+        self._toolbar.setObjectName("narrowToolbar")
+        toolbar_row = QHBoxLayout(self._toolbar)
+        toolbar_row.setContentsMargins(0, 0, 0, 0)
         toolbar_row.setSpacing(6)
 
         # HEX 模式切换（接收方向）
-        self.btn_hex_rx_up = ToolButton(panel)
+        self.btn_hex_rx_up = ToolButton(self._toolbar)
         self.btn_hex_rx_up.setText("HEX ↑")
         self.btn_hex_rx_up.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_hex_rx_up.setFixedSize(56, 30)
@@ -697,23 +700,22 @@ class RTTMonitorPage(QWidget):
         self.chk_hex_display.toggled.connect(self.btn_hex_rx_up.setChecked)
 
         # HEX 发送模式
-        self.chk_hex = CheckBox("Hex")
+        self.chk_hex = CheckBox("Hex", self._toolbar)
         self.chk_hex.setChecked(self._cfg.get("hex_send_mode"))
         self.chk_hex.setFixedWidth(50)
 
         # 暂停/恢复
-        self.btn_toolbar_pause = ToolButton(FluentIcon.PAUSE, panel)
+        self.btn_toolbar_pause = ToolButton(FluentIcon.PAUSE, self._toolbar)
         self.btn_toolbar_pause.setFixedSize(36, 30)
         _tip(self.btn_toolbar_pause, "暂停/恢复接收")
         self.btn_toolbar_pause.setCheckable(True)
         self.btn_toolbar_pause.toggled.connect(
             self._worker.set_pause_receive_requested.emit)
-        # 与左侧 chk_pause 双向同步
         self.btn_toolbar_pause.toggled.connect(self.chk_pause.setChecked)
         self.chk_pause.toggled.connect(self.btn_toolbar_pause.setChecked)
 
         # 清空显示
-        self.btn_toolbar_clear = ToolButton(FluentIcon.DELETE, panel)
+        self.btn_toolbar_clear = ToolButton(FluentIcon.DELETE, self._toolbar)
         self.btn_toolbar_clear.setFixedSize(36, 30)
         _tip(self.btn_toolbar_clear, "清除显示")
         self.btn_toolbar_clear.clicked.connect(self.display.clear)
@@ -723,40 +725,33 @@ class RTTMonitorPage(QWidget):
         toolbar_row.addWidget(self.btn_toolbar_pause)
         toolbar_row.addWidget(self.btn_toolbar_clear)
         toolbar_row.addStretch(1)
+        self._toolbar.setVisible(False)  # 默认隐藏，仅收窄模式显示
 
         # ════════════════════════════════════════════════════════════
-        # 发送区：红色脚本提示 + 多行文本框 + 大发送按钮
+        # 发送区：多行文本框 + 发送按钮
+        # 脚本启用时 → 输入框红色边框 + 朝内渐变（不加独立标签）
         # ════════════════════════════════════════════════════════════
-        # 脚本启用时显示的红色提示条（默认隐藏）
-        self.lbl_script_tip = BodyLabel("⚠ CRC 脚本已启用 — 发送内容将自动追加 CRC 校验码")
-        self.lbl_script_tip.setStyleSheet(
-            "color: #cc0000; background: rgba(255,0,0,0.06); "
-            "padding: 3px 8px; border-radius: 3px; font-size: 12px;")
-        self.lbl_script_tip.setVisible(False)
-        self.lbl_script_tip.setWordWrap(True)
-
-        # 发送文本框（多行 PlainTextEdit，约 6 行高度）
         self.te_send = PlainTextEdit(panel)
         self.te_send.setPlaceholderText(
             "输入要发送的数据…\n"
             "(Hex 模式下用 16 进制字符)")
         self.te_send.setMinimumHeight(100)   # 约 6 行
-        self.te_send.setMaximumHeight(160)  # 不超过 ~9 行
+        self.te_send.setMaximumHeight(160)
         font = self.te_send.font()
         font.setPointSize(12)
         self.te_send.setFont(font)
 
-        # 右侧发送按钮（竖向居中于发送框）
+        # 发送按钮（文字+图标，正常尺寸，竖向居中于发送框）
         send_btn_col = QVBoxLayout()
         send_btn_col.setContentsMargins(0, 0, 0, 0)
         send_btn_col.setSpacing(0)
-        self.btn_send = PrimaryPushButton(FluentIcon.SEND_FILL, "", panel)
-        self.btn_send.setFixedSize(48, 64)
-        self.btn_send.setIconSize(QSize(24, 24))
+        self.btn_send = PrimaryPushButton(FluentIcon.SEND, "发送", panel)
+        self.btn_send.setFixedHeight(36)
+        self.btn_send.setMinimumWidth(72)
         self.btn_send.setEnabled(False)
         _tip(self.btn_send, "发送 (Enter)")
         send_btn_col.addStretch(1)
-        send_btn_col.addWidget(self.btn_send, 0, Qt.AlignHCenter)
+        send_btn_col.addWidget(self.btn_send, 0, Qt.AlignVCenter)
         send_btn_col.addStretch(1)
 
         # 发送区水平布局：文本框 stretch=1 + 按钮
@@ -787,8 +782,7 @@ class RTTMonitorPage(QWidget):
         status_row.addWidget(self.lbl_status_encoding)
 
         v.addWidget(self.display, 1)
-        v.addLayout(toolbar_row)
-        v.addWidget(self.lbl_script_tip)
+        v.addWidget(self._toolbar)
         v.addLayout(send_area)
         v.addLayout(status_row)
         return panel
@@ -814,6 +808,8 @@ class RTTMonitorPage(QWidget):
         self._config_visible = visible
         self._config_panel.setVisible(visible)
         self._icon_bar.setVisible(not visible)
+        # 收窄模式：显示接收/发送区之间的工具栏行
+        self._toolbar.setVisible(not visible)
 
     # ------------------------------------------------------------------
     # 信号接线
@@ -991,15 +987,29 @@ class RTTMonitorPage(QWidget):
         self._cfg.set("send_history", hist)
 
     def _on_crc_script_toggled(self, checked: bool) -> None:
-        """CRC 脚本 checkbox 切换：显示/隐藏红色提示条。"""
-        self.lbl_script_tip.setVisible(checked)
-        # 发送框边框也跟着变红（通过 stylesheet 动态切换）
+        """CRC 脚本 checkbox 切换：给发送框加红色边框 + 朝内渐变背景。
+
+        不加独立标签——渐变效果直接画在输入框边框上，更干净。
+        保存原始 styleSheet，取消时恢复，避免清掉 qfluentwidgets 主题样式。
+        """
         if checked:
+            self._te_send_orig_ss = self.te_send.styleSheet()
             self.te_send.setStyleSheet(
-                "QPlainTextEdit { border: 1.5px solid #cc0000; "
-                "border-radius: 4px; }")
+                self._te_send_orig_ss
+                + "\nQPlainTextEdit {"
+                "  border: 2px solid #cc3300;"
+                "  border-radius: 5px;"
+                "  background: qlineargradient("
+                "    x1:0, y1:0, x2:0, y2:1,"
+                "    stop:0 rgba(204,51,0,0.10),"
+                "    stop:0.15 rgba(204,51,0,0.04),"
+                "    stop:0.4 rgba(204,51,0,0));"
+                "}")
         else:
-            self.te_send.setStyleSheet("")
+            orig = getattr(self, "_te_send_orig_ss", None)
+            if orig is not None:
+                self.te_send.setStyleSheet(orig)
+                self._te_send_orig_ss = None
 
     def _on_hex_send_toggled(self, checked: bool) -> None:
         """HEX 发送模式切换：双向转换发送框内容。
