@@ -105,12 +105,15 @@ _DEFAULT_BG_QCOLOR = QColor("#222222")
 
 
 def _section_separator(parent: QWidget) -> QFrame:
-    """创建一条水平分隔线，用于左侧面板区域划分。"""
+    """创建一条水平分隔线，用于左侧面板区域划分。
+
+    不用 QFrame.HLine + Sunken —— 那种 frame 在 1px 高度下不渲染
+    （需要 2px 才能画上下两条线）。直接用背景色填一个 1px 高的 bar。
+    """
     line = QFrame(parent)
     line.setFixedHeight(1)
-    line.setFrameShape(QFrame.HLine)
-    line.setFrameShadow(QFrame.Sunken)
-    line.setStyleSheet("QFrame { color: rgba(128,128,128,0.25); max-height: 1px; }")
+    line.setStyleSheet(
+        "QFrame { background-color: rgba(128,128,128,0.3); border: none; }")
     return line
 
 
@@ -297,7 +300,8 @@ class RTTMonitorPage(QWidget):
         panel.setObjectName("configPanel")
         panel.setFixedWidth(260)
         panel.setStyleSheet(
-            "QWidget#configPanel { background: transparent; }"
+            "QWidget#configPanel { background: transparent; "
+            "border-right: 1px solid rgba(128,128,128,0.15); }"
         )
 
         scroll = QScrollArea(panel)
@@ -328,9 +332,7 @@ class RTTMonitorPage(QWidget):
         # ════════════════════════════════════════════════════════════
         # 区域 1：连接设置
         # ════════════════════════════════════════════════════════════
-        _lbl_conn = StrongBodyLabel("连接设置")
-        _lbl_conn.setStyleSheet("font-size: 13px; margin-top: 2px;")
-        v.addWidget(_lbl_conn)
+        v.addWidget(StrongBodyLabel("连接设置"))
 
         self.cb_target = EditableComboBox(inner)
         self.cb_target.setPlaceholderText("目标设备")
@@ -438,9 +440,7 @@ class RTTMonitorPage(QWidget):
         # ════════════════════════════════════════════════════════════
         # 区域 3：接收设置
         # ════════════════════════════════════════════════════════════
-        _lbl_rx = StrongBodyLabel("接收设置")
-        _lbl_rx.setStyleSheet("font-size: 13px; margin-top: 2px;")
-        v.addWidget(_lbl_rx)
+        v.addWidget(StrongBodyLabel("接收设置"))
 
         self.chk_auto_scroll = CheckBox("自动滚动")
         self.chk_auto_scroll.setChecked(self._cfg.get("auto_scroll"))
@@ -496,15 +496,30 @@ class RTTMonitorPage(QWidget):
         v.addLayout(row_frame)
         self.chk_auto_frame.toggled.connect(self._on_auto_frame_toggled)
 
+        # ---- 标记 / 保存 / 清空（归入接收设置区域）----
+        self.le_mark = EditableComboBox(inner)
+        self.le_mark.setPlaceholderText("会话标记文本…")
+        self._mark_history: list[str] = []
+        v.addWidget(self.le_mark)
+
+        row_mark = QHBoxLayout()
+        row_mark.setSpacing(8)
+        self.btn_mark = PushButton("插入标记", inner)
+        _tip(self.btn_mark, "在显示区插入分隔标记")
+        self.btn_clear = PushButton("清除", inner)
+        self.btn_save = PushButton("💾 保存", inner)
+        row_mark.addWidget(self.btn_mark)
+        row_mark.addWidget(self.btn_clear)
+        row_mark.addWidget(self.btn_save)
+        v.addLayout(row_mark)
+
         # ---- 分隔线 ----
         v.addWidget(_section_separator(inner))
 
         # ════════════════════════════════════════════════════════════
         # 区域 4：发送设置 + 标记
         # ════════════════════════════════════════════════════════════
-        _lbl_tx = StrongBodyLabel("发送设置")
-        _lbl_tx.setStyleSheet("font-size: 13px; margin-top: 2px;")
-        v.addWidget(_lbl_tx)
+        v.addWidget(StrongBodyLabel("发送设置"))
 
         # 定时发送
         row_timed = QHBoxLayout()
@@ -565,30 +580,6 @@ class RTTMonitorPage(QWidget):
         row_font.addWidget(self.btn_font_plus)
         row_font.addStretch(1)
         v.addLayout(row_font)
-
-        # ---- 分隔线 ----
-        v.addWidget(_section_separator(inner))
-
-        # 标记 / 保存 / 清空
-        _lbl_mark = StrongBodyLabel("标记与保存")
-        _lbl_mark.setStyleSheet("font-size: 13px; margin-top: 2px;")
-        v.addWidget(_lbl_mark)
-
-        self.le_mark = EditableComboBox(inner)
-        self.le_mark.setPlaceholderText("会话标记文本…")
-        self._mark_history: list[str] = []
-        v.addWidget(self.le_mark)
-
-        row_mark = QHBoxLayout()
-        row_mark.setSpacing(8)
-        self.btn_mark = PushButton("插入标记", inner)
-        _tip(self.btn_mark, "在显示区插入分隔标记")
-        self.btn_clear = PushButton("清除", inner)
-        self.btn_save = PushButton("💾 保存", inner)
-        row_mark.addWidget(self.btn_mark)
-        row_mark.addWidget(self.btn_clear)
-        row_mark.addWidget(self.btn_save)
-        v.addLayout(row_mark)
 
         v.addStretch(1)
         return panel
