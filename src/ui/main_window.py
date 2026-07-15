@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import base64
 
-from PySide6.QtCore import QByteArray, QThread
+from PySide6.QtCore import QByteArray, QEvent, QThread
 from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QShortcut, QShowEvent
 from PySide6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, NavigationItemPosition
 
 from core.config_service import ConfigService
+from core.i18n_service import switch_language as _switch_language
 from core.jlink_worker import JLinkWorker
 from core.logger import get_logger
 
@@ -29,8 +30,6 @@ class MainWindow(FluentWindow):
         # 1. 创建 worker + 独立 QThread（不是 worker 自己继承 QThread！）
         self.worker_thread = QThread(self)
         self.worker = JLinkWorker()
-        # 初始编码在 thread.start() 前同步设置——不能用 set_encoding_requested.emit，
-        # 那会和 initialize() 内 connect 形成竞态导致信号被丢弃。
         self.worker.set_initial_encoding(cfg.get("rtt_encoding"))
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.initialize)
@@ -43,24 +42,21 @@ class MainWindow(FluentWindow):
         self.settings_page = SettingsPage(cfg, self)
         self.about_page = AboutPage(self)
 
-        # 3. 导航
-        self.addSubInterface(self.rtt_page, FIF.SPEED_HIGH, "RTT 监控")
-        self.addSubInterface(self.memory_page, FIF.CODE, "内存查看")
-        self.addSubInterface(self.flash_page, FIF.SEND_FILL, "固件烧录")
+        # 3. 导航 — 存储 route_key → tr_key 映射，用于语言切换时刷新
+        self._nav_items: list[tuple[str, str]] = []
+        self._add_nav(self.rtt_page, FIF.SPEED_HIGH, "RTT 监控")
+        self._add_nav(self.memory_page, FIF.CODE, "内存查看")
+        self._add_nav(self.flash_page, FIF.SEND_FILL, "固件烧录")
         self.navigationInterface.addSeparator()
-        self.addSubInterface(
-            self.settings_page, FIF.SETTING, "设置", NavigationItemPosition.BOTTOM
-        )
-        self.addSubInterface(
-            self.about_page, FIF.INFO, "关于", NavigationItemPosition.BOTTOM
-        )
+        self._add_nav(self.settings_page, FIF.SETTING, "设置", NavigationItemPosition.BOTTOM)
+        self._add_nav(self.about_page, FIF.INFO, "关于", NavigationItemPosition.BOTTOM)
 
         # 4. ConfigService 的 rtt_poll_interval_changed / rtt_encoding_changed 信号连到 worker
         self._cfg.rtt_poll_interval_changed.connect(self.worker.set_poll_interval_requested)
         self._cfg.rtt_encoding_changed.connect(self.worker.set_encoding_requested)
+        self._cfg.language_changed.connect(_switch_language)
 
-        # 5. 全局快捷键 —— 不依赖当前页面焦点，F2/F3/F4 在任意子页都生效。
-        # 路由到 rtt_page 的方法，由方法自己根据按钮状态判断是否执行（幂等）。
+        # 5. 全局快捷键
         QShortcut(QKeySequence("F2"), self, self.rtt_page.on_shortcut_connect)
         QShortcut(QKeySequence("F3"), self, self.rtt_page.on_shortcut_disconnect)
         QShortcut(QKeySequence("F4"), self, self.rtt_page.on_shortcut_reset)
@@ -68,20 +64,34 @@ class MainWindow(FluentWindow):
         QShortcut(QKeySequence("Ctrl+H"), self, self.rtt_page.on_shortcut_replace)
 
         # 7. 窗口属性
-        self.setWindowTitle("J-Link RTT Viewer")
-        # 直接从文件加载 icon —— 不依赖 app.setWindowIcon 调用顺序，
-        # 避免 caller 顺序变就静默丢图标。setWindowIcon 触发 FluentTitleBar
-        # 的 windowIconChanged 信号，标题栏左上角才会刷新。
+        self.setWindowTitle(self.tr("J-Link RTT Viewer"))
         from core._paths import find_app_icon
         icon_path = find_app_icon()
         if icon_path is not None:
             self.setWindowIcon(QIcon(str(icon_path)))
-        # 显式约束最小尺寸，让窗口在 Windows 任务栏占据底部时仍能完整显示底部
-        # 控件（搜索栏/发送栏）。子控件 sizeHint 累积过大会让 Qt 计算出
-        # 1500+ px 的 mintrack，结果窗口被 Windows 强制压扁导致底部被任务栏遮挡。
-        # 最小宽度需小于 _COLLAPSE_WIDTH(900)，否则收窄模式永远无法触发
         self.setMinimumSize(480, 540)
         self._restore_geometry()
+
+    def _add_nav(self, widget, icon, text_key, position=NavigationItemPosition.TOP) -> None:
+        """添加导航项并记录 route_key → tr_key 映射。"""
+        self.addSubInterface(widget, icon, self.tr(text_key), position)
+        self._nav_items.append((widget.objectName(), text_key))
+
+    def changeEvent(self, event: QEvent) -> None:
+        """语言切换时刷新导航项文字 + 窗口标题。"""
+        if event.type() == QEvent.Type.LanguageChange:
+            self._retranslate_ui()
+        super().changeEvent(event)
+
+    def _retranslate_ui(self) -> None:
+        self.setWindowTitle(self.tr("J-Link RTT Viewer"))
+        for route_key, text_key in self._nav_items:
+            item = self.navigationInterface.widget(route_key)
+            if item is not None:
+                try:
+                    item.setText(self.tr(text_key))
+                except Exception:
+                    pass  # 某些导航 widget 可能没有 setText
 
     def _restore_geometry(self) -> None:
         geom_b64 = self._cfg.get("window_geometry")

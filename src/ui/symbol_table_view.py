@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QEvent
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -62,13 +62,18 @@ _BINDINGS = [
     ("WEAK",   "Weak",   "弱",   "弱符号 (STB_WEAK)"),
 ]
 
-# Type 列 pill 配色：(底色, 文字色)。QColor 在模块加载时构造一次，
-# 避免给上万行符号逐行 new QColor。
+_HINT_TEXT = (
+    "默认仅显示 Functions 函数 与 Variables 变量。"
+    "File markers / Sections / Other 是编译器生成的辅助符号"
+    "（源文件名标记、段符号、无类型符号等），需要时点亮对应类别查看。"
+)
+
+# Type 列 pill 配色
 _TYPE_QCOLORS = {
-    "FUNC":    (QColor("#ede9fe"), QColor("#6d28d9")),   # 紫
-    "OBJECT":  (QColor("#dbeafe"), QColor("#1d4ed8")),   # 蓝
-    "FILE":    (QColor("#f1f5f9"), QColor("#475569")),   # 灰
-    "SECTION": (QColor("#ccfbf1"), QColor("#0f766e")),   # 青
+    "FUNC":    (QColor("#ede9fe"), QColor("#6d28d9")),
+    "OBJECT":  (QColor("#dbeafe"), QColor("#1d4ed8")),
+    "FILE":    (QColor("#f1f5f9"), QColor("#475569")),
+    "SECTION": (QColor("#ccfbf1"), QColor("#0f766e")),
 }
 _TYPE_QCOLOR_DEFAULT = (QColor("#f1f5f9"), QColor("#475569"))
 
@@ -99,8 +104,8 @@ class _NumericItem(QTableWidgetItem):
 class SymbolTableView(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self._symbols: list[Symbol] = []  # 当前文件的全部符号
-        self._section_sizes: dict[str, int] = {}  # {段名: 段大小}，算占比用
+        self._symbols: list[Symbol] = []
+        self._section_sizes: dict[str, int] = {}
         self._current_path: str | None = None
         self._cat_chips: dict[str, PillPushButton] = {}
         self._bind_chips: dict[str, PillPushButton] = {}
@@ -111,34 +116,35 @@ class SymbolTableView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        # ---- 标题行：标题 + 统计 + 复制 ----
+        # ---- 标题行 ----
         top = QHBoxLayout()
-        self.lbl_title = StrongBodyLabel("符号表 Symbol Table")
+        self.lbl_title = StrongBodyLabel(self.tr("符号表 Symbol Table"))
         top.addWidget(self.lbl_title)
         self.lbl_count = CaptionLabel("")
         self.lbl_count.setStyleSheet("color: #6b7280;")
         top.addWidget(self.lbl_count)
         top.addStretch(1)
-        self.btn_copy = PushButton("复制选中 Copy")
-        self.btn_copy.setToolTip("复制选中行：名称 + 地址 + 大小")
+        self.btn_copy = PushButton(self.tr("复制选中 Copy"))
+        self.btn_copy.setToolTip(self.tr("复制选中行：名称 + 地址 + 大小"))
         top.addWidget(self.btn_copy)
         layout.addLayout(top)
 
         # ---- 搜索框 ----
         self.search = SearchLineEdit()
-        self.search.setPlaceholderText("按名称过滤  Filter by name…")
+        self.search.setPlaceholderText(self.tr("按名称过滤  Filter by name…"))
         self.search.setClearButtonEnabled(True)
         layout.addWidget(self.search)
 
         # ---- 类别 chip 行 ----
         cat_row = QHBoxLayout()
         cat_row.setSpacing(8)
-        cat_row.addWidget(BodyLabel("显示 Show"))
+        self._lbl_show = BodyLabel(self.tr("显示 Show"))
+        cat_row.addWidget(self._lbl_show)
         for key, en, zh, icon, tip in _CATEGORIES:
-            chip = PillPushButton(icon, f"{en} {zh}")
+            chip = PillPushButton(icon, self.tr(f"{en} {zh}"))
             chip.setCheckable(True)
             chip.setChecked(key in _DEFAULT_CATEGORIES)
-            chip.setToolTip(tip)
+            chip.setToolTip(self.tr(tip))
             chip.toggled.connect(self._apply_filter)
             self._cat_chips[key] = chip
             cat_row.addWidget(chip)
@@ -148,12 +154,13 @@ class SymbolTableView(QWidget):
         # ---- 绑定 chip 行 ----
         bind_row = QHBoxLayout()
         bind_row.setSpacing(8)
-        bind_row.addWidget(BodyLabel("绑定 Binding"))
+        self._lbl_binding = BodyLabel(self.tr("绑定 Binding"))
+        bind_row.addWidget(self._lbl_binding)
         for key, en, zh, tip in _BINDINGS:
-            chip = PillPushButton(f"{en} {zh}")
+            chip = PillPushButton(self.tr(f"{en} {zh}"))
             chip.setCheckable(True)
-            chip.setChecked(True)  # 默认三种绑定都显示
-            chip.setToolTip(tip)
+            chip.setChecked(True)
+            chip.setToolTip(self.tr(tip))
             chip.toggled.connect(self._apply_filter)
             self._bind_chips[key] = chip
             bind_row.addWidget(chip)
@@ -168,9 +175,6 @@ class SymbolTableView(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().setVisible(False)
-        # 列宽用固定/可拖动而非 ResizeToContents：后者每次模型变更都要扫描
-        # 全表所有行重算列宽，大符号表(上万行)切换 chip 时会明显卡顿。
-        # Name 拉伸占满，其余给定合理初始宽度、用户可拖。
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for i in range(1, len(_COLUMNS)):
@@ -180,10 +184,7 @@ class SymbolTableView(QWidget):
         layout.addWidget(self.table, 1)
 
         # ---- 底部说明 ----
-        self.lbl_hint = CaptionLabel(
-            "默认仅显示 Functions 函数 与 Variables 变量。"
-            "File markers / Sections / Other 是编译器生成的辅助符号"
-            "（源文件名标记、段符号、无类型符号等），需要时点亮对应类别查看。")
+        self.lbl_hint = CaptionLabel(self.tr(_HINT_TEXT))
         self.lbl_hint.setStyleSheet("color: #6b7280;")
         self.lbl_hint.setWordWrap(True)
         layout.addWidget(self.lbl_hint)
@@ -191,9 +192,35 @@ class SymbolTableView(QWidget):
         self.search.textChanged.connect(self._apply_filter)
         self.btn_copy.clicked.connect(self._copy_selected)
 
+    # ------------------------------------------------------------------
+    # i18n 重翻译
+    # ------------------------------------------------------------------
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() == QEvent.Type.LanguageChange:
+            self._retranslate_ui()
+        super().changeEvent(event)
+
+    def _retranslate_ui(self) -> None:
+        self.lbl_title.setText(self.tr("符号表 Symbol Table"))
+        self.btn_copy.setText(self.tr("复制选中 Copy"))
+        self.btn_copy.setToolTip(self.tr("复制选中行：名称 + 地址 + 大小"))
+        self.search.setPlaceholderText(self.tr("按名称过滤  Filter by name…"))
+        self._lbl_show.setText(self.tr("显示 Show"))
+        self._lbl_binding.setText(self.tr("绑定 Binding"))
+        self.lbl_hint.setText(self.tr(_HINT_TEXT))
+        for key, en, zh, icon, tip in _CATEGORIES:
+            chip = self._cat_chips[key]
+            chip.setText(self.tr(f"{en} {zh}"))
+            chip.setToolTip(self.tr(tip))
+        for key, en, zh, tip in _BINDINGS:
+            chip = self._bind_chips[key]
+            chip.setText(self.tr(f"{en} {zh}"))
+            chip.setToolTip(self.tr(tip))
+        # 刷新计数文本（如果有数据）
+        self._update_count_label()
+
     # ---- 公开 API ----
     def load(self, path: str) -> None:
-        """读取并显示某 ELF/axf 的符号表。解析失败时清空。"""
         self._current_path = path
         try:
             self._symbols = read_symbols(path, func_and_data_only=False)
@@ -224,7 +251,6 @@ class SymbolTableView(QWidget):
             and s.bind in active_binds
         ]
 
-        # 重填期间关刷新 + 关排序：避免逐行触发重绘/边插边排乱序
         self.table.setUpdatesEnabled(False)
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(rows))
@@ -258,14 +284,25 @@ class SymbolTableView(QWidget):
         self.table.setSortingEnabled(True)
         self.table.setUpdatesEnabled(True)
 
+        self._update_count_label()
+
+    def _update_count_label(self) -> None:
         total = len(self._symbols)
-        shown = len(rows)
+        kw = self.search.text().strip().lower()
+        active_cats = {k for k, c in self._cat_chips.items() if c.isChecked()}
+        active_binds = {k for k, c in self._bind_chips.items() if c.isChecked()}
+        shown = len([
+            s for s in self._symbols
+            if (not kw or kw in s.name.lower())
+            and _category_of(s.type) in active_cats
+            and s.bind in active_binds
+        ])
         if total == 0:
             self.lbl_count.setText("")
         elif shown == total:
-            self.lbl_count.setText(f"{total} 符号 symbols")
+            self.lbl_count.setText(self.tr("符号 symbols").replace("符号", str(total)) + f" {total}")
         else:
-            self.lbl_count.setText(f"显示 {shown} / 共 {total}")
+            self.lbl_count.setText(self.tr("显示") + f" {shown} / " + self.tr("共") + f" {total}")
 
     def _copy_selected(self) -> None:
         from PySide6.QtWidgets import QApplication

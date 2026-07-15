@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, QTimer
+from PySide6.QtCore import QEvent, Qt, QThread, QTimer
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QCompleter,
@@ -73,6 +73,8 @@ class FlashPage(QWidget):
         self.setObjectName("flashPage")
         self._cfg = cfg
         self._is_running = False
+        self._stage_key = "idle"  # 用于 _retranslate_ui 重置 lbl_stage
+        self._parse_state = "empty"  # "empty" | "error" | "ok"
 
         # 独立 worker + 独立 QThread（和 JLinkWorker 完全无关）
         self._thread = QThread(self)
@@ -109,9 +111,11 @@ class FlashPage(QWidget):
     def _build_conn_card(self) -> QWidget:
         card = CardWidget()
         layout = QVBoxLayout(card)
-        layout.addWidget(StrongBodyLabel("连接参数"))
+        self.lbl_conn_title = StrongBodyLabel(self.tr("连接参数"))
+        layout.addWidget(self.lbl_conn_title)
         row = QHBoxLayout()
-        row.addWidget(BodyLabel("目标设备:"))
+        self.lbl_device = BodyLabel(self.tr("目标设备:"))
+        row.addWidget(self.lbl_device)
         self.cmb_device = EditableComboBox()
         chip_list = self._cfg.get_chip_list() or ["STM32H750VB"]
         self.cmb_device.addItems(chip_list)
@@ -143,17 +147,18 @@ class FlashPage(QWidget):
     def _build_file_card(self) -> QWidget:
         card = CardWidget()
         layout = QVBoxLayout(card)
-        layout.addWidget(StrongBodyLabel("固件文件"))
+        self.lbl_file_title = StrongBodyLabel(self.tr("固件文件"))
+        layout.addWidget(self.lbl_file_title)
 
         row = QHBoxLayout()
         row.addWidget(BodyLabel("File:"))
         self.cmb_file = EditableComboBox()  # 最近 10 文件下拉
         self.cmb_file.setMinimumWidth(360)
         row.addWidget(self.cmb_file, 1)
-        self.btn_browse = PushButton("浏览…")
+        self.btn_browse = PushButton(self.tr("浏览…"))
         row.addWidget(self.btn_browse)
-        self.btn_save_as = PushButton("另存为…")
-        self.btn_save_as.setToolTip("把当前固件转换为 .bin / .hex 另存")
+        self.btn_save_as = PushButton(self.tr("另存为…"))
+        self.btn_save_as.setToolTip(self.tr("把当前固件转换为 .bin / .hex 另存"))
         row.addWidget(self.btn_save_as)
         self.lbl_mtime_flag = BodyLabel("")
         self.lbl_mtime_flag.setStyleSheet("color: #d97706;")  # amber
@@ -163,17 +168,18 @@ class FlashPage(QWidget):
         # format + range
         row2 = QHBoxLayout()
         row2.addWidget(BodyLabel("Format:"))
-        self.lbl_format = BodyLabel("(无)")
+        self.lbl_format = BodyLabel(self.tr("(无)"))
         row2.addWidget(self.lbl_format)
         row2.addSpacing(20)
         row2.addWidget(BodyLabel("Range:"))
-        self.lbl_range = BodyLabel("(无)")
+        self.lbl_range = BodyLabel(self.tr("(无)"))
         row2.addWidget(self.lbl_range, 1)
         layout.addLayout(row2)
 
         # bin start addr (仅 bin 模式可编辑)
         row3 = QHBoxLayout()
-        row3.addWidget(BodyLabel("Bin 起始地址:"))
+        self.lbl_bin_addr = BodyLabel(self.tr("Bin 起始地址:"))
+        row3.addWidget(self.lbl_bin_addr)
         self.edit_bin_addr = LineEdit()
         self.edit_bin_addr.setPlaceholderText("0x08000000")
         self.edit_bin_addr.setMaximumWidth(180)
@@ -185,25 +191,28 @@ class FlashPage(QWidget):
     def _build_options_card(self) -> QWidget:
         card = CardWidget()
         layout = QVBoxLayout(card)
-        layout.addWidget(StrongBodyLabel("烧录选项"))
+        self.lbl_options_title = StrongBodyLabel(self.tr("烧录选项"))
+        layout.addWidget(self.lbl_options_title)
 
         row = QHBoxLayout()
-        row.addWidget(BodyLabel("擦除模式:"))
+        self.lbl_erase = BodyLabel(self.tr("擦除模式:"))
+        row.addWidget(self.lbl_erase)
         self.cmb_erase = ComboBox()
         for label, _ in _ERASE_LABELS:
-            self.cmb_erase.addItem(label)
+            self.cmb_erase.addItem(self.tr(label))
         row.addWidget(self.cmb_erase, 1)
         layout.addLayout(row)
 
         row2 = QHBoxLayout()
-        row2.addWidget(BodyLabel("完成动作:"))
+        self.lbl_post = BodyLabel(self.tr("完成动作:"))
+        row2.addWidget(self.lbl_post)
         self.cmb_post = ComboBox()
         for label, _ in _POST_LABELS:
-            self.cmb_post.addItem(label)
+            self.cmb_post.addItem(self.tr(label))
         row2.addWidget(self.cmb_post, 1)
         layout.addLayout(row2)
 
-        self.chk_verify = CheckBox("额外 byte-by-byte verify（慢一倍）")
+        self.chk_verify = CheckBox(self.tr("额外 byte-by-byte verify（慢一倍）"))
         layout.addWidget(self.chk_verify)
         return card
 
@@ -211,12 +220,12 @@ class FlashPage(QWidget):
         card = CardWidget()
         layout = QVBoxLayout(card)
 
-        self.btn_flash = PrimaryPushButton("开始烧录")
+        self.btn_flash = PrimaryPushButton(self.tr("开始烧录"))
         self.btn_flash.setMinimumHeight(36)
         layout.addWidget(self.btn_flash)
 
         row = QHBoxLayout()
-        self.lbl_stage = BodyLabel("待命")
+        self.lbl_stage = BodyLabel(self.tr("待命"))
         row.addWidget(self.lbl_stage)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
@@ -225,10 +234,10 @@ class FlashPage(QWidget):
 
         # 详情面板（折叠）
         row_det = QHBoxLayout()
-        self.btn_toggle_log = PushButton("▶ 详情")
+        self.btn_toggle_log = PushButton(self.tr("▶ 详情"))
         self.btn_toggle_log.setFlat(True)
         row_det.addWidget(self.btn_toggle_log)
-        self.btn_copy_log = PushButton("复制日志")
+        self.btn_copy_log = PushButton(self.tr("复制日志"))
         row_det.addWidget(self.btn_copy_log)
         row_det.addStretch(1)
         layout.addLayout(row_det)
@@ -337,7 +346,7 @@ class FlashPage(QWidget):
         try:
             v = int(txt, 0) if txt else 0
         except ValueError:
-            _infobar.warn(self, "Bin 起始地址格式错误", f"无法解析为整数：{txt}")
+            _infobar.warn(self, self.tr("Bin 起始地址格式错误"), self.tr("无法解析为整数：{txt}").format(txt=txt))
             return
         self._cfg.set("flash_bin_address", int(v))
         # 重解析当前文件以更新 range 显示
@@ -349,8 +358,8 @@ class FlashPage(QWidget):
         cur = self.cmb_file.currentText().strip()
         start_dir = str(Path(cur).parent) if cur else ""
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择固件文件", start_dir,
-            "固件文件 (*.axf *.elf *.hex *.bin);;所有文件 (*.*)")
+            self, self.tr("选择固件文件"), start_dir,
+            self.tr("固件文件 (*.axf *.elf *.hex *.bin);;所有文件 (*.*)"))
         if not path:
             return
         self._select_file(path)
@@ -359,16 +368,16 @@ class FlashPage(QWidget):
         """把当前固件转换为 .bin / .hex 另存（目标格式由所选后缀决定）。"""
         src = self.cmb_file.currentText().strip()
         if not src:
-            _infobar.warn(self, "未选择文件", "请先选择要转换的固件")
+            _infobar.warn(self, self.tr("未选择文件"), self.tr("请先选择要转换的固件"))
             return
         if not os.path.exists(src):
-            _infobar.warn(self, "文件不存在", src)
+            _infobar.warn(self, self.tr("文件不存在"), src)
             return
 
         stem = Path(src).stem
         start_dir = str(Path(src).with_name(stem + ".bin"))
         dst, sel = QFileDialog.getSaveFileName(
-            self, "固件另存为", start_dir,
+            self, self.tr("固件另存为"), start_dir,
             "Binary (*.bin);;Intel HEX (*.hex)")
         if not dst:
             return
@@ -385,9 +394,9 @@ class FlashPage(QWidget):
         try:
             fp.convert_file(src, dst, bin_start_addr=bin_addr)
         except fp.FileParseError as e:
-            _infobar.error(self, "转换失败", str(e))
+            _infobar.error(self, self.tr("转换失败"), str(e))
             return
-        _infobar.success(self, "已另存", dst)
+        _infobar.success(self, self.tr("已另存"), dst)
 
     def _rebuild_file_combo(self, recent: list[str], select_index: int = 0) -> None:
         """用最近文件列表重建下拉项并选中 select_index。
@@ -412,7 +421,7 @@ class FlashPage(QWidget):
         if not path:
             return
         if not os.path.exists(path):
-            _infobar.warn(self, "文件不存在", path)
+            _infobar.warn(self, self.tr("文件不存在"), path)
             return
         recent = list(self._cfg.get("flash_recent_files") or [])
         if path in recent:
@@ -428,8 +437,9 @@ class FlashPage(QWidget):
         text = text.strip()
         if not text or not os.path.exists(text):
             if not text:
-                self.lbl_format.setText("(无)")
-                self.lbl_range.setText("(无)")
+                self._parse_state = "empty"
+                self.lbl_format.setText(self.tr("(无)"))
+                self.lbl_range.setText(self.tr("(无)"))
                 self.lbl_mtime_flag.setText("")
                 self.analysis_view.clear()
                 self.symbol_card.setVisible(False)
@@ -443,7 +453,7 @@ class FlashPage(QWidget):
             return
         if not os.path.exists(path):
             if not silent:
-                _infobar.warn(self, "文件不存在", path)
+                _infobar.warn(self, self.tr("文件不存在"), path)
             return
 
         from core import flash_file_parser as fp
@@ -455,13 +465,16 @@ class FlashPage(QWidget):
         try:
             info = fp.parse_file(path, bin_start_addr=bin_addr)
         except fp.FileParseError as e:
-            self.lbl_format.setText("(解析失败)")
+            self._parse_state = "error"
+            self.lbl_format.setText(self.tr("(解析失败)"))
             self.lbl_range.setText("")
             self.analysis_view.clear()
             self.symbol_card.setVisible(False)
             if not silent:
-                _infobar.error(self, "文件解析失败", str(e))
+                _infobar.error(self, self.tr("文件解析失败"), str(e))
             return
+
+        self._parse_state = "ok"
 
         self.lbl_format.setText(info.fmt.upper())
         self.lbl_range.setText(
@@ -492,7 +505,7 @@ class FlashPage(QWidget):
     def _toggle_log(self) -> None:
         vis = not self.txt_log.isVisible()
         self.txt_log.setVisible(vis)
-        self.btn_toggle_log.setText("▼ 详情" if vis else "▶ 详情")
+        self.btn_toggle_log.setText(self.tr("▼ 详情") if vis else self.tr("▶ 详情"))
 
     def _copy_log(self) -> None:
         import platform
@@ -508,7 +521,7 @@ class FlashPage(QWidget):
         )
         from PySide6.QtWidgets import QApplication
         QApplication.clipboard().setText(header + self.txt_log.toPlainText())
-        _infobar.info(self, "已复制日志到剪贴板", "")
+        _infobar.info(self, self.tr("已复制日志到剪贴板"), "")
 
     def _on_start_flash(self) -> None:
         if self._is_running:
@@ -516,17 +529,17 @@ class FlashPage(QWidget):
 
         path = self.cmb_file.currentText().strip()
         if not path:
-            _infobar.warn(self, "未选择文件", "请先选择 .axf/.elf/.hex/.bin 文件")
+            _infobar.warn(self, self.tr("未选择文件"), self.tr("请先选择 .axf/.elf/.hex/.bin 文件"))
             return
         if not os.path.exists(path):
-            _infobar.warn(self, "文件不存在", path)
+            _infobar.warn(self, self.tr("文件不存在"), path)
             return
 
         from core import flash_file_parser as fp
         try:
             fmt = fp.detect_format(path)
         except fp.FileParseError as e:
-            _infobar.error(self, "格式不支持", str(e))
+            _infobar.error(self, self.tr("格式不支持"), str(e))
             return
 
         try:
@@ -536,7 +549,7 @@ class FlashPage(QWidget):
 
         device = self.cmb_device.currentText().strip()
         if not device:
-            _infobar.warn(self, "未填 Device", "请填写目标设备名（如 STM32H750VB）")
+            _infobar.warn(self, self.tr("未填 Device"), self.tr("请填写目标设备名（如 STM32H750VB）"))
             return
 
         iface = "SWD" if self.rb_swd.isChecked() else "JTAG"
@@ -556,20 +569,22 @@ class FlashPage(QWidget):
 
     def _on_flash_started(self) -> None:
         self._is_running = True
+        self._stage_key = "preparing"
         self._set_inputs_enabled(False)
-        self.btn_flash.setText("烧录中…")
+        self.btn_flash.setText(self.tr("烧录中…"))
         self.txt_log.clear()
         self.progress.setValue(0)
-        self.lbl_stage.setText("准备…")
+        self.lbl_stage.setText(self.tr("准备…"))
 
     def _on_stage_changed(self, stage: str) -> None:
+        self._stage_key = stage
         label_map = {
-            "connect": "连接中…",
-            "erase": "擦除中…",
-            "program": "写入中…",
-            "verify": "校验中…",
-            "reset": "复位中…",
-            "disconnect": "断开中…",
+            "connect": self.tr("连接中…"),
+            "erase": self.tr("擦除中…"),
+            "program": self.tr("写入中…"),
+            "verify": self.tr("校验中…"),
+            "reset": self.tr("复位中…"),
+            "disconnect": self.tr("断开中…"),
         }
         self.lbl_stage.setText(label_map.get(stage, stage))
 
@@ -587,20 +602,21 @@ class FlashPage(QWidget):
 
     def _on_flash_finished(self, ok: bool, summary: str) -> None:
         self._is_running = False
+        self._stage_key = "done" if ok else "failed"
         self._set_inputs_enabled(True)
-        self.btn_flash.setText("开始烧录")
+        self.btn_flash.setText(self.tr("开始烧录"))
         if ok:
-            self.lbl_stage.setText("完成 ✓")
+            self.lbl_stage.setText(self.tr("完成 ✓"))
             self.progress.setValue(100)
-            _infobar.success(self, "烧录成功", summary)
+            _infobar.success(self, self.tr("烧录成功"), summary)
         else:
-            self.lbl_stage.setText("失败 ✖")
+            self.lbl_stage.setText(self.tr("失败 ✖"))
             # 失败时自动展开详情 + 写固定建议文案
             if not self.txt_log.isVisible():
                 self._toggle_log()
             self.txt_log.appendPlainText(
-                "⚠ Flash 已部分擦除/写入，建议下次用「整片擦除」重烧")
-            _infobar.error(self, "烧录失败", summary)
+                self.tr("⚠ Flash 已部分擦除/写入，建议下次用「整片擦除」重烧"))
+            _infobar.error(self, self.tr("烧录失败"), summary)
 
     def _set_inputs_enabled(self, enabled: bool) -> None:
         for w in (self.cmb_device, self.rb_swd, self.rb_jtag, self.cmb_speed,
@@ -609,6 +625,77 @@ class FlashPage(QWidget):
                   self.cmb_erase, self.cmb_post, self.chk_verify):
             w.setEnabled(enabled)
         self.btn_flash.setEnabled(enabled)
+
+    # ---- i18n ----
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() == QEvent.Type.LanguageChange:
+            self._retranslate_ui()
+        super().changeEvent(event)
+
+    def _retranslate_ui(self) -> None:
+        # 静态标题 / 标签
+        self.lbl_conn_title.setText(self.tr("连接参数"))
+        self.lbl_device.setText(self.tr("目标设备:"))
+        self.lbl_file_title.setText(self.tr("固件文件"))
+        self.lbl_bin_addr.setText(self.tr("Bin 起始地址:"))
+        self.lbl_options_title.setText(self.tr("烧录选项"))
+        self.lbl_erase.setText(self.tr("擦除模式:"))
+        self.lbl_post.setText(self.tr("完成动作:"))
+
+        # 按钮
+        self.btn_browse.setText(self.tr("浏览…"))
+        self.btn_save_as.setText(self.tr("另存为…"))
+        self.btn_save_as.setToolTip(self.tr("把当前固件转换为 .bin / .hex 另存"))
+        self.btn_copy_log.setText(self.tr("复制日志"))
+        self.chk_verify.setText(self.tr("额外 byte-by-byte verify（慢一倍）"))
+
+        # 动态按钮文案
+        if self._is_running:
+            self.btn_flash.setText(self.tr("烧录中…"))
+        else:
+            self.btn_flash.setText(self.tr("开始烧录"))
+        vis_log = self.txt_log.isVisible()
+        self.btn_toggle_log.setText(self.tr("▼ 详情") if vis_log else self.tr("▶ 详情"))
+
+        # 阶段标签（按当前 _stage_key 重置）
+        stage_labels = {
+            "idle": self.tr("待命"),
+            "preparing": self.tr("准备…"),
+            "connect": self.tr("连接中…"),
+            "erase": self.tr("擦除中…"),
+            "program": self.tr("写入中…"),
+            "verify": self.tr("校验中…"),
+            "reset": self.tr("复位中…"),
+            "disconnect": self.tr("断开中…"),
+            "done": self.tr("完成 ✓"),
+            "failed": self.tr("失败 ✖"),
+        }
+        self.lbl_stage.setText(stage_labels.get(self._stage_key, self.tr("待命")))
+
+        # format / range（仅在空 / 解析失败时重置；已解析成功的是技术数据不动）
+        if self._parse_state == "empty":
+            self.lbl_format.setText(self.tr("(无)"))
+            self.lbl_range.setText(self.tr("(无)"))
+        elif self._parse_state == "error":
+            self.lbl_format.setText(self.tr("(解析失败)"))
+            self.lbl_range.setText("")
+
+        # ComboBox 项：保存当前 index → 清空 → 用 tr 重新填 → 恢复 index（阻塞信号）
+        idx_erase = self.cmb_erase.currentIndex()
+        self.cmb_erase.blockSignals(True)
+        self.cmb_erase.clear()
+        for label, _ in _ERASE_LABELS:
+            self.cmb_erase.addItem(self.tr(label))
+        self.cmb_erase.setCurrentIndex(idx_erase)
+        self.cmb_erase.blockSignals(False)
+
+        idx_post = self.cmb_post.currentIndex()
+        self.cmb_post.blockSignals(True)
+        self.cmb_post.clear()
+        for label, _ in _POST_LABELS:
+            self.cmb_post.addItem(self.tr(label))
+        self.cmb_post.setCurrentIndex(idx_post)
+        self.cmb_post.blockSignals(False)
 
     # ---- 拖放（下一 Task 完善）----
     def dragEnterEvent(self, e: QDragEnterEvent) -> None:

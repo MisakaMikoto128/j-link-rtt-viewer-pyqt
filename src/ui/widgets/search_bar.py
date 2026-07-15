@@ -137,34 +137,34 @@ class SearchBar(QWidget):
         row1.setSpacing(3)
 
         self.le_search = LineEdit(self)
-        self.le_search.setPlaceholderText("查找…")
+        self.le_search.setPlaceholderText(self.tr("查找…"))
         self.le_search.setClearButtonEnabled(True)
         self.le_search.setFixedHeight(28)
 
-        self.btn_case = _ToggleButton("Aa", "区分大小写", self)
-        self.btn_word = _ToggleButton("ab", "全词匹配", self)
-        self.btn_regex = _ToggleButton(".*", "正则表达式", self)
+        self.btn_case = _ToggleButton("Aa", self.tr("区分大小写"), self)
+        self.btn_word = _ToggleButton("ab", self.tr("全词匹配"), self)
+        self.btn_regex = _ToggleButton(".*", self.tr("正则表达式"), self)
 
         self.lbl_match = QLabel("")
         self.lbl_match.setMinimumWidth(80)
         self.lbl_match.setAlignment(Qt.AlignCenter)
 
         self.btn_prev = TransparentToolButton(FluentIcon.UP, self)
-        _tip(self.btn_prev, "上一个 (Shift+Enter)")
+        _tip(self.btn_prev, self.tr("上一个 (Shift+Enter)"))
         self.btn_prev.setFixedSize(26, 24)
 
         self.btn_next = TransparentToolButton(FluentIcon.DOWN, self)
-        _tip(self.btn_next, "下一个 (Enter)")
+        _tip(self.btn_next, self.tr("下一个 (Enter)"))
         self.btn_next.setFixedSize(26, 24)
 
         self.btn_toggle_replace = TransparentToolButton(FluentIcon.CHEVRON_DOWN_MED, self)
         self.btn_toggle_replace.setFixedSize(26, 24)
-        _tip(self.btn_toggle_replace, "展开/收起替换 (Ctrl+H)")
+        _tip(self.btn_toggle_replace, self.tr("展开/收起替换 (Ctrl+H)"))
         self.btn_toggle_replace.setCheckable(True)
 
         self.btn_close = TransparentToolButton(FluentIcon.CLOSE, self)
         self.btn_close.setFixedSize(26, 24)
-        _tip(self.btn_close, "关闭 (Esc)")
+        _tip(self.btn_close, self.tr("关闭 (Esc)"))
 
         row1.addWidget(self.le_search, 1)
         row1.addWidget(self.btn_case)
@@ -182,17 +182,17 @@ class SearchBar(QWidget):
         self._row2.setSpacing(3)
 
         self.le_replace = LineEdit(self)
-        self.le_replace.setPlaceholderText("替换…")
+        self.le_replace.setPlaceholderText(self.tr("替换…"))
         self.le_replace.setClearButtonEnabled(True)
         self.le_replace.setFixedHeight(28)
 
         self.btn_replace = TransparentToolButton(_svg_icon(_REPLACE_ONE_SVG), self)
         self.btn_replace.setFixedSize(26, 24)
-        _tip(self.btn_replace, "替换 (Enter 在替换框中)")
+        _tip(self.btn_replace, self.tr("替换 (Enter 在替换框中)"))
 
         self.btn_replace_all = TransparentToolButton(_svg_icon(_REPLACE_ALL_SVG), self)
         self.btn_replace_all.setFixedSize(26, 24)
-        _tip(self.btn_replace_all, "全部替换")
+        _tip(self.btn_replace_all, self.tr("全部替换"))
 
         self._row2.addWidget(self.le_replace, 1)
         self._row2.addWidget(self.btn_replace)
@@ -352,6 +352,24 @@ class SearchBar(QWidget):
     # ------------------------------------------------------------------
     # 事件处理
     # ------------------------------------------------------------------
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() == QEvent.Type.LanguageChange:
+            self._retranslate_ui()
+        super().changeEvent(event)
+
+    def _retranslate_ui(self) -> None:
+        self.le_search.setPlaceholderText(self.tr("查找…"))
+        self.le_replace.setPlaceholderText(self.tr("替换…"))
+        self.btn_case.setToolTip(self.tr("区分大小写"))
+        self.btn_word.setToolTip(self.tr("全词匹配"))
+        self.btn_regex.setToolTip(self.tr("正则表达式"))
+        self.btn_prev.setToolTip(self.tr("上一个 (Shift+Enter)"))
+        self.btn_next.setToolTip(self.tr("下一个 (Enter)"))
+        self.btn_toggle_replace.setToolTip(self.tr("展开/收起替换 (Ctrl+H)"))
+        self.btn_close.setToolTip(self.tr("关闭 (Esc)"))
+        self.btn_replace.setToolTip(self.tr("替换 (Enter 在替换框中)"))
+        self.btn_replace_all.setToolTip(self.tr("全部替换"))
+
     def keyPressEvent(self, e: QKeyEvent) -> None:
         if e.key() == Qt.Key_Escape:
             self.close_bar()

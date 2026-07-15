@@ -130,24 +130,27 @@ class MemoryViewerPage(QWidget):
         read_outer.setSpacing(8)
 
         r1 = QHBoxLayout()
-        r1.addWidget(BodyLabel("起始地址"))
+        self.lbl_read_addr = BodyLabel(self.tr("起始地址"))
+        r1.addWidget(self.lbl_read_addr)
         self.le_read_addr = LineEdit(self)
         self.le_read_addr.setText(str(self._cfg.get("mem_read_addr")))
         self.le_read_addr.setMaximumWidth(140)
         r1.addWidget(self.le_read_addr)
-        r1.addWidget(BodyLabel("大小 (字节)"))
+        self.lbl_read_size = BodyLabel(self.tr("大小 (字节)"))
+        r1.addWidget(self.lbl_read_size)
         self.le_read_size = LineEdit(self)
         self.le_read_size.setText(str(self._cfg.get("mem_read_size")))
         self.le_read_size.setMaximumWidth(100)
         r1.addWidget(self.le_read_size)
-        r1.addWidget(BodyLabel("字节/行"))
+        self.lbl_row_width = BodyLabel(self.tr("字节/行"))
+        r1.addWidget(self.lbl_row_width)
         self.cb_row_width = ComboBox(self)
         for n in _BYTES_PER_ROW_OPTIONS:
             self.cb_row_width.addItem(str(n))
         self.cb_row_width.setCurrentText(str(self._bytes_per_row))
         r1.addWidget(self.cb_row_width)
-        self.btn_read = PrimaryPushButton("读取", self)
-        self.btn_clear = PushButton("清空", self)
+        self.btn_read = PrimaryPushButton(self.tr("读取"), self)
+        self.btn_clear = PushButton(self.tr("清空"), self)
         r1.addWidget(self.btn_read)
         r1.addWidget(self.btn_clear)
         r1.addStretch(1)
@@ -155,19 +158,20 @@ class MemoryViewerPage(QWidget):
 
         # 第二行：自动刷新 + 高亮变化 + 跳转 + 搜索
         r2 = QHBoxLayout()
-        self.chk_auto_refresh = CheckBox("自动刷新")
+        self.chk_auto_refresh = CheckBox(self.tr("自动刷新"))
         self.sp_refresh_sec = SpinBox(self)
         self.sp_refresh_sec.setRange(1, 60)
         self.sp_refresh_sec.setValue(int(self._cfg.get("mem_refresh_sec")))
         self.sp_refresh_sec.setSuffix(" s")
-        self.chk_diff = CheckBox("高亮变化")
+        self.chk_diff = CheckBox(self.tr("高亮变化"))
         self.chk_diff.setChecked(bool(self._cfg.get("mem_diff_highlight")))
-        self.chk_diff.setToolTip("重新读取相同地址/大小时，把变化的字节背景标红")
+        self.chk_diff.setToolTip(self.tr("重新读取相同地址/大小时，把变化的字节背景标红"))
         r2.addWidget(self.chk_auto_refresh)
         r2.addWidget(self.sp_refresh_sec)
         r2.addWidget(self.chk_diff)
         r2.addSpacing(16)
-        r2.addWidget(BodyLabel("跳转到"))
+        self.lbl_goto = BodyLabel(self.tr("跳转到"))
+        r2.addWidget(self.lbl_goto)
         self.le_goto = LineEdit(self)
         self.le_goto.setPlaceholderText("0x...")
         self.le_goto.setMaximumWidth(140)
@@ -175,24 +179,25 @@ class MemoryViewerPage(QWidget):
         r2.addWidget(self.le_goto)
         r2.addWidget(self.btn_goto)
         r2.addSpacing(16)
-        r2.addWidget(BodyLabel("Hex 搜索"))
+        self.lbl_search = BodyLabel(self.tr("Hex 搜索"))
+        r2.addWidget(self.lbl_search)
         self.le_search = LineEdit(self)
         self.le_search.setPlaceholderText("AA BB CC")
         self.le_search.setMaximumWidth(180)
-        self.btn_find_next = PushButton("查找下一个", self)
+        self.btn_find_next = PushButton(self.tr("查找下一个"), self)
         r2.addWidget(self.le_search)
         r2.addWidget(self.btn_find_next)
         r2.addStretch(1)
         # 字号 ± 按钮（同 RTT 监控页的方案）
         self.btn_font_minus = PushButton("A−", self)
         self.btn_font_minus.setFixedWidth(45)
-        self.btn_font_minus.setToolTip("Hex 字号 −1")
+        self.btn_font_minus.setToolTip(self.tr("Hex 字号 −1"))
         self.lbl_font_size = BodyLabel(str(self._cfg.get("memory_font_size")))
         self.lbl_font_size.setAlignment(Qt.AlignCenter)
         self.lbl_font_size.setFixedWidth(28)
         self.btn_font_plus = PushButton("A+", self)
         self.btn_font_plus.setFixedWidth(45)
-        self.btn_font_plus.setToolTip("Hex 字号 +1")
+        self.btn_font_plus.setToolTip(self.tr("Hex 字号 +1"))
         r2.addWidget(self.btn_font_minus)
         r2.addWidget(self.lbl_font_size)
         r2.addWidget(self.btn_font_plus)
@@ -214,18 +219,21 @@ class MemoryViewerPage(QWidget):
         # 右：数据类型解析面板
         side = CardWidget(self)
         side_lay = QVBoxLayout(side)
-        side_lay.addWidget(StrongBodyLabel("数据类型解析"))
+        self.lbl_data_types_title = StrongBodyLabel(self.tr("数据类型解析"))
+        side_lay.addWidget(self.lbl_data_types_title)
 
         info_row = QHBoxLayout()
-        info_row.addWidget(BodyLabel("光标地址"))
+        self.lbl_cursor_addr_label = BodyLabel(self.tr("光标地址"))
+        info_row.addWidget(self.lbl_cursor_addr_label)
         self.lbl_cursor_addr = StrongBodyLabel("—")
         info_row.addWidget(self.lbl_cursor_addr, 1)
         side_lay.addLayout(info_row)
 
         endian_row = QHBoxLayout()
-        endian_row.addWidget(BodyLabel("字节序"))
+        self.lbl_endian_label = BodyLabel(self.tr("字节序"))
+        endian_row.addWidget(self.lbl_endian_label)
         self.cb_endian = ComboBox(self)
-        self.cb_endian.addItems(["小端 (LE)", "大端 (BE)"])
+        self.cb_endian.addItems([self.tr("小端 (LE)"), self.tr("大端 (BE)")])
         self.cb_endian.setCurrentIndex(0 if self._cfg.get("mem_endian_little") else 1)
         endian_row.addWidget(self.cb_endian, 1)
         side_lay.addLayout(endian_row)
@@ -245,10 +253,10 @@ class MemoryViewerPage(QWidget):
 
         # 复制按钮
         copy_row = QVBoxLayout()
-        self.btn_copy_hex = PushButton("复制选中为 Hex 字串", self)
-        self.btn_copy_ascii = PushButton("复制选中为 ASCII", self)
-        self.btn_copy_carray = PushButton("复制全部为 C 数组", self)
-        self.btn_save_bin = PushButton("保存全部为 .bin", self)
+        self.btn_copy_hex = PushButton(self.tr("复制选中为 Hex 字串"), self)
+        self.btn_copy_ascii = PushButton(self.tr("复制选中为 ASCII"), self)
+        self.btn_copy_carray = PushButton(self.tr("复制全部为 C 数组"), self)
+        self.btn_save_bin = PushButton(self.tr("保存全部为 .bin"), self)
         copy_row.addWidget(self.btn_copy_hex)
         copy_row.addWidget(self.btn_copy_ascii)
         copy_row.addWidget(self.btn_copy_carray)
@@ -267,17 +275,23 @@ class MemoryViewerPage(QWidget):
         # ---- 导出固件卡片（保留原功能）----
         export_card = CardWidget(self)
         ex_root = QVBoxLayout(export_card)
-        ex_root.addWidget(StrongBodyLabel("导出固件（按块流式写盘）"))
+        self.lbl_export_title = StrongBodyLabel(self.tr("导出固件（按块流式写盘）"))
+        ex_root.addWidget(self.lbl_export_title)
         ex_row = QHBoxLayout()
-        ex_row.addWidget(BodyLabel("起始地址"))
+        self.lbl_ex_addr = BodyLabel(self.tr("起始地址"))
+        ex_row.addWidget(self.lbl_ex_addr)
         self.le_ex_addr = LineEdit(self)
         self.le_ex_addr.setText(str(self._cfg.get("mem_export_addr")))
         self.le_ex_addr.setMaximumWidth(140)
         ex_row.addWidget(self.le_ex_addr)
-        ex_row.addWidget(BodyLabel("大小"))
+        self.lbl_ex_size = BodyLabel(self.tr("大小"))
+        ex_row.addWidget(self.lbl_ex_size)
         self.cb_ex_preset = ComboBox(self)
         for label, _ in _SIZE_PRESETS:
-            self.cb_ex_preset.addItem(label)
+            if label == "自定义":
+                self.cb_ex_preset.addItem(self.tr("自定义"))
+            else:
+                self.cb_ex_preset.addItem(label)
         # 把 cb_ex_preset 索引限制到合法范围（防止 user_prefs.json 被手改成越界值）
         _preset_idx = max(0, min(int(self._cfg.get("mem_export_preset_idx")), len(_SIZE_PRESETS) - 1))
         self.cb_ex_preset.setCurrentIndex(_preset_idx)
@@ -289,16 +303,16 @@ class MemoryViewerPage(QWidget):
         # 自定义大小只在 preset == 自定义 时启用（_SIZE_PRESETS 末项 size=-1）
         self.le_ex_custom.setEnabled(_SIZE_PRESETS[_preset_idx][1] < 0)
         ex_row.addWidget(self.le_ex_custom)
-        self.btn_choose = PushButton("选择保存路径", self)
+        self.btn_choose = PushButton(self.tr("选择保存路径"), self)
         ex_row.addWidget(self.btn_choose)
         ex_row.addStretch(1)
         ex_root.addLayout(ex_row)
 
-        self.lbl_path = QLabel("（未选择保存路径）", self)
+        self.lbl_path = QLabel(self.tr("（未选择保存路径）"), self)
         ex_root.addWidget(self.lbl_path)
 
         bottom = QHBoxLayout()
-        self.btn_export = PrimaryPushButton("开始导出", self)
+        self.btn_export = PrimaryPushButton(self.tr("开始导出"), self)
         self.btn_export.setEnabled(False)
         self.pb_export = QProgressBar(self)
         self.pb_export.setRange(0, 100)
@@ -312,24 +326,27 @@ class MemoryViewerPage(QWidget):
         write_card = CardWidget(self)
         wr_root = QVBoxLayout(write_card)
         wr_header = QHBoxLayout()
-        wr_header.addWidget(StrongBodyLabel("写内存 ⚠"))
-        warn_lbl = BodyLabel("写错地址可能让 MCU 失去响应直到复位。仅在确认安全地址（如 SRAM）时使用。")
-        warn_lbl.setStyleSheet("color: #d04040;")
-        warn_lbl.setWordWrap(True)
-        wr_header.addWidget(warn_lbl, 1)
+        self.lbl_write_title = StrongBodyLabel(self.tr("写内存 ⚠"))
+        wr_header.addWidget(self.lbl_write_title)
+        self.warn_lbl = BodyLabel(self.tr("写错地址可能让 MCU 失去响应直到复位。仅在确认安全地址（如 SRAM）时使用。"))
+        self.warn_lbl.setStyleSheet("color: #d04040;")
+        self.warn_lbl.setWordWrap(True)
+        wr_header.addWidget(self.warn_lbl, 1)
         wr_root.addLayout(wr_header)
 
         wr_row = QHBoxLayout()
-        wr_row.addWidget(BodyLabel("地址"))
+        self.lbl_write_addr = BodyLabel(self.tr("地址"))
+        wr_row.addWidget(self.lbl_write_addr)
         self.le_write_addr = LineEdit(self)
         self.le_write_addr.setText(str(self._cfg.get("mem_write_addr")))
         self.le_write_addr.setMaximumWidth(140)
         wr_row.addWidget(self.le_write_addr)
-        wr_row.addWidget(BodyLabel("Hex 数据"))
+        self.lbl_write_data = BodyLabel(self.tr("Hex 数据"))
+        wr_row.addWidget(self.lbl_write_data)
         self.le_write_data = LineEdit(self)
         self.le_write_data.setPlaceholderText("AA BB CC DD")
         wr_row.addWidget(self.le_write_data, 1)
-        self.btn_write = PushButton("写入…", self)
+        self.btn_write = PushButton(self.tr("写入…"), self)
         self.btn_write.setEnabled(False)
         wr_row.addWidget(self.btn_write)
         wr_root.addLayout(wr_row)
@@ -345,6 +362,78 @@ class MemoryViewerPage(QWidget):
         # PlainTextEdit 的鼠标事件在 viewport 上，需要 mouse tracking + filter
         self.display.viewport().setMouseTracking(True)
         self.display.viewport().installEventFilter(self)
+
+    # ------------------------------------------------------------------
+    # i18n：语言切换
+    # ------------------------------------------------------------------
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() == QEvent.Type.LanguageChange:
+            self._retranslate_ui()
+        super().changeEvent(event)
+
+    def _retranslate_ui(self) -> None:
+        # ---- 读取卡片 ----
+        self.lbl_read_addr.setText(self.tr("起始地址"))
+        self.lbl_read_size.setText(self.tr("大小 (字节)"))
+        self.lbl_row_width.setText(self.tr("字节/行"))
+        self.btn_read.setText(self.tr("读取"))
+        self.btn_clear.setText(self.tr("清空"))
+        self.chk_auto_refresh.setText(self.tr("自动刷新"))
+        self.chk_diff.setText(self.tr("高亮变化"))
+        self.chk_diff.setToolTip(self.tr("重新读取相同地址/大小时，把变化的字节背景标红"))
+        self.lbl_goto.setText(self.tr("跳转到"))
+        self.lbl_search.setText(self.tr("Hex 搜索"))
+        self.btn_find_next.setText(self.tr("查找下一个"))
+        self.btn_font_minus.setToolTip(self.tr("Hex 字号 −1"))
+        self.btn_font_plus.setToolTip(self.tr("Hex 字号 +1"))
+
+        # ---- 数据类型解析面板 ----
+        self.lbl_data_types_title.setText(self.tr("数据类型解析"))
+        self.lbl_cursor_addr_label.setText(self.tr("光标地址"))
+        self.lbl_endian_label.setText(self.tr("字节序"))
+        # ComboBox 字节序：保留当前索引，block signals 避免触发 _refresh_types
+        cur_endian = self.cb_endian.currentIndex()
+        self.cb_endian.blockSignals(True)
+        self.cb_endian.clear()
+        self.cb_endian.addItems([self.tr("小端 (LE)"), self.tr("大端 (BE)")])
+        self.cb_endian.setCurrentIndex(cur_endian)
+        self.cb_endian.blockSignals(False)
+
+        # ---- 复制按钮 ----
+        self.btn_copy_hex.setText(self.tr("复制选中为 Hex 字串"))
+        self.btn_copy_ascii.setText(self.tr("复制选中为 ASCII"))
+        self.btn_copy_carray.setText(self.tr("复制全部为 C 数组"))
+        self.btn_save_bin.setText(self.tr("保存全部为 .bin"))
+
+        # ---- 导出固件卡片 ----
+        self.lbl_export_title.setText(self.tr("导出固件（按块流式写盘）"))
+        self.lbl_ex_addr.setText(self.tr("起始地址"))
+        self.lbl_ex_size.setText(self.tr("大小"))
+        self.btn_choose.setText(self.tr("选择保存路径"))
+        # lbl_path：已选路径时保留路径，否则显示翻译后的占位文本
+        if self._save_path:
+            self.lbl_path.setText(self._save_path)
+        else:
+            self.lbl_path.setText(self.tr("（未选择保存路径）"))
+        self.btn_export.setText(self.tr("开始导出"))
+        # cb_ex_preset：重新填充翻译后的 items（含 "自定义"），保留索引
+        cur_preset = self.cb_ex_preset.currentIndex()
+        self.cb_ex_preset.blockSignals(True)
+        self.cb_ex_preset.clear()
+        for label, _ in _SIZE_PRESETS:
+            if label == "自定义":
+                self.cb_ex_preset.addItem(self.tr("自定义"))
+            else:
+                self.cb_ex_preset.addItem(label)
+        self.cb_ex_preset.setCurrentIndex(cur_preset)
+        self.cb_ex_preset.blockSignals(False)
+
+        # ---- 写内存卡片 ----
+        self.lbl_write_title.setText(self.tr("写内存 ⚠"))
+        self.warn_lbl.setText(self.tr("写错地址可能让 MCU 失去响应直到复位。仅在确认安全地址（如 SRAM）时使用。"))
+        self.lbl_write_addr.setText(self.tr("地址"))
+        self.lbl_write_data.setText(self.tr("Hex 数据"))
+        self.btn_write.setText(self.tr("写入…"))
 
     # ------------------------------------------------------------------
     # 信号接线
@@ -447,16 +536,16 @@ class MemoryViewerPage(QWidget):
 
     def _on_read_clicked(self) -> None:
         if not self._connected:
-            _infobar.warn(self, "未连接 J-Link", "请先到 RTT 监控页连接 J-Link")
+            _infobar.warn(self, self.tr("未连接 J-Link"), self.tr("请先到 RTT 监控页连接 J-Link"))
             return
         try:
             addr = _parse_int(self.le_read_addr.text())
             size = _parse_int(self.le_read_size.text())
         except ValueError as e:
-            _infobar.warn(self, "地址/大小格式错误", str(e))
+            _infobar.warn(self, self.tr("地址/大小格式错误"), str(e))
             return
         if size <= 0 or size > 16 * 1024 * 1024:
-            _infobar.warn(self, "大小越界", "1B - 16MB")
+            _infobar.warn(self, self.tr("大小越界"), self.tr("1B - 16MB"))
             return
         self._worker.read_memory_requested.emit(addr, size)
 
@@ -540,7 +629,7 @@ class MemoryViewerPage(QWidget):
         le_u32 = parse_value(self._buffer, offset, "u32", True)
         be_u32 = parse_value(self._buffer, offset, "u32", False)
         le_u16 = parse_value(self._buffer, offset, "u16", True)
-        text = (f"地址 0x{addr:08X}  (+{offset})\n"
+        text = (f"{self.tr('地址')} 0x{addr:08X}  (+{offset})\n"
                 f"u32 LE: {le_u32}\n"
                 f"u32 BE: {be_u32}\n"
                 f"u16 LE: {le_u16}")
@@ -634,11 +723,11 @@ class MemoryViewerPage(QWidget):
         try:
             addr = _parse_int(self.le_goto.text())
         except ValueError as e:
-            _infobar.warn(self, "地址格式错误", str(e))
+            _infobar.warn(self, self.tr("地址格式错误"), str(e))
             return
         offset = addr - self._buffer_base
         if offset < 0 or offset >= len(self._buffer):
-            _infobar.warn(self, "地址越界", "该地址不在已读取的缓冲区内")
+            _infobar.warn(self, self.tr("地址越界"), self.tr("该地址不在已读取的缓冲区内"))
             return
         self._select_buffer_range(offset, 1)
 
@@ -648,7 +737,7 @@ class MemoryViewerPage(QWidget):
         try:
             needle = _parse_hex_pattern(self.le_search.text())
         except ValueError as e:
-            _infobar.warn(self, "Hex 格式错误", str(e))
+            _infobar.warn(self, self.tr("Hex 格式错误"), str(e))
             return
         # 从当前光标位置之后开始找
         start = self._cursor_byte_offset() + 1
@@ -658,7 +747,7 @@ class MemoryViewerPage(QWidget):
         if idx < 0 and start > 0:
             idx = self._buffer.find(needle, 0)  # 回卷
         if idx < 0:
-            _infobar.warn(self, "未找到", f"pattern={needle.hex(' ').upper()}")
+            _infobar.warn(self, self.tr("未找到"), f"pattern={needle.hex(' ').upper()}")
             return
         self._select_buffer_range(idx, len(needle))
 
@@ -685,7 +774,7 @@ class MemoryViewerPage(QWidget):
             return
         sel = self._selected_bytes()
         QGuiApplication.clipboard().setText(sel.hex(" ").upper())
-        _infobar.ok(self, "已复制 Hex", f"{len(sel)} 字节", duration=1500)
+        _infobar.ok(self, self.tr("已复制 Hex"), f"{len(sel)} {self.tr('字节')}", duration=1500)
 
     def _on_copy_ascii(self) -> None:
         if not self._buffer:
@@ -693,21 +782,21 @@ class MemoryViewerPage(QWidget):
         sel = self._selected_bytes()
         text = "".join(chr(b) if 32 <= b <= 126 else "." for b in sel)
         QGuiApplication.clipboard().setText(text)
-        _infobar.ok(self, "已复制 ASCII", f"{len(sel)} 字节", duration=1500)
+        _infobar.ok(self, self.tr("已复制 ASCII"), f"{len(sel)} {self.tr('字节')}", duration=1500)
 
     def _on_copy_carray(self) -> None:
         if not self._buffer:
             return
         text = format_as_c_array(self._buffer, name="data", bytes_per_row=self._bytes_per_row)
         QGuiApplication.clipboard().setText(text)
-        _infobar.ok(self, "已复制 C 数组", f"{len(self._buffer)} 字节", duration=1500)
+        _infobar.ok(self, self.tr("已复制 C 数组"), f"{len(self._buffer)} {self.tr('字节')}", duration=1500)
 
     def _on_save_bin(self) -> None:
         if not self._buffer:
-            _infobar.warn(self, "无数据", "请先读取内存")
+            _infobar.warn(self, self.tr("无数据"), self.tr("请先读取内存"))
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "保存为 .bin",
+            self, self.tr("保存为 .bin"),
             f"mem_0x{self._buffer_base:08X}_{len(self._buffer)}B.bin",
             "Binary (*.bin);;All (*)",
         )
@@ -716,9 +805,9 @@ class MemoryViewerPage(QWidget):
         try:
             from pathlib import Path
             Path(path).write_bytes(self._buffer)
-            _infobar.ok(self, "已保存", path)
+            _infobar.ok(self, self.tr("已保存"), path)
         except OSError as e:
-            _infobar.err(self, "保存失败", str(e))
+            _infobar.err(self, self.tr("保存失败"), str(e))
 
     def _selected_bytes(self) -> bytes:
         """从当前 hex 选区反推 bytes；如无选区则返回全部 buffer。"""
@@ -744,7 +833,7 @@ class MemoryViewerPage(QWidget):
     def _on_choose_path(self) -> None:
         from datetime import datetime
         default = f"firmware_{datetime.now():%Y%m%d_%H%M%S}.bin"
-        path, _ = QFileDialog.getSaveFileName(self, "选择导出路径", default, "Binary (*.bin);;All (*)")
+        path, _ = QFileDialog.getSaveFileName(self, self.tr("选择导出路径"), default, "Binary (*.bin);;All (*)")
         if path:
             self._save_path = path
             self.lbl_path.setText(path)
@@ -754,7 +843,7 @@ class MemoryViewerPage(QWidget):
         try:
             start = _parse_int(self.le_ex_addr.text())
         except ValueError as e:
-            _infobar.warn(self, "地址格式错误", str(e))
+            _infobar.warn(self, self.tr("地址格式错误"), str(e))
             return
         idx = self.cb_ex_preset.currentIndex()
         _, preset_size = _SIZE_PRESETS[idx]
@@ -762,13 +851,13 @@ class MemoryViewerPage(QWidget):
             try:
                 size = _parse_int(self.le_ex_custom.text())
             except ValueError as e:
-                _infobar.warn(self, "大小格式错误", str(e))
+                _infobar.warn(self, self.tr("大小格式错误"), str(e))
                 return
         else:
             size = preset_size
 
-        _infobar.warn(self, "RTT 接收将暂停",
-                      f"导出 {size // 1024} KB 期间无法接收 RTT 数据")
+        _infobar.warn(self, self.tr("RTT 接收将暂停"),
+                      self.tr("导出 {n} KB 期间无法接收 RTT 数据").format(n=size // 1024))
         self.pb_export.setValue(0)
         self.btn_export.setEnabled(False)
         self._worker.export_firmware_requested.emit(self._save_path, start, size)
@@ -780,53 +869,56 @@ class MemoryViewerPage(QWidget):
     def _on_export_finished(self, ok: bool, path: str, err: str) -> None:
         self.btn_export.setEnabled(self._connected)
         if ok:
-            _infobar.ok(self, "导出完成", path, duration=3000)
+            _infobar.ok(self, self.tr("导出完成"), path, duration=3000)
         else:
-            _infobar.err(self, "导出失败", err, duration=4000)
+            _infobar.err(self, self.tr("导出失败"), err, duration=4000)
 
     def _on_command_result(self, cmd: str, ok: bool, msg: str) -> None:
         if cmd == "read_memory" and not ok:
-            _infobar.err(self, "读取失败", msg or "")
+            _infobar.err(self, self.tr("读取失败"), msg or "")
         elif cmd == "write_memory":
             if ok:
-                _infobar.ok(self, "写入成功", msg or "")
+                _infobar.ok(self, self.tr("写入成功"), msg or "")
             else:
-                _infobar.err(self, "写入失败", msg or "")
+                _infobar.err(self, self.tr("写入失败"), msg or "")
 
     def _on_write_clicked(self) -> None:
         """点 "写入…" → 二次确认 → emit write_memory_requested。"""
         if not self._connected:
-            _infobar.warn(self, "未连接", "请先连接 J-Link")
+            _infobar.warn(self, self.tr("未连接"), self.tr("请先连接 J-Link"))
             return
         try:
             addr = _parse_int(self.le_write_addr.text())
         except ValueError as e:
-            _infobar.warn(self, "地址格式错误", str(e))
+            _infobar.warn(self, self.tr("地址格式错误"), str(e))
             return
         try:
             data = _parse_hex_pattern(self.le_write_data.text())
         except ValueError as e:
-            _infobar.warn(self, "Hex 数据格式错误", str(e))
+            _infobar.warn(self, self.tr("Hex 数据格式错误"), str(e))
             return
         if not data:
-            _infobar.warn(self, "无数据", "请输入要写入的 Hex 字节")
+            _infobar.warn(self, self.tr("无数据"), self.tr("请输入要写入的 Hex 字节"))
             return
         # 二次确认（高风险）
         from PySide6.QtWidgets import QMessageBox
         msg_box = QMessageBox(self)
         msg_box.setIcon(QMessageBox.Warning)
-        msg_box.setWindowTitle("⚠ 确认写入内存")
+        msg_box.setWindowTitle(self.tr("⚠ 确认写入内存"))
         preview = data[:16].hex(" ").upper() + (" ..." if len(data) > 16 else "")
         msg_box.setText(
-            f"即将向地址 <b>0x{addr:08X}</b> 写入 <b>{len(data)}</b> 字节：<br/>"
-            f"<code>{preview}</code><br/><br/>"
-            f"<span style='color:#d04040;'>⚠ 写错地址可能让 MCU 失去响应！</span><br/>"
-            f"请确认地址是可写区域（SRAM/外设寄存器，<b>不要写 Flash 控制器</b>）"
+            self.tr("即将向地址 <b>0x%1</b> 写入 <b>%2</b> 字节：<br/>"
+                    "<code>%3</code><br/><br/>"
+                    "<span style='color:#d04040;'>⚠ 写错地址可能让 MCU 失去响应！</span><br/>"
+                    "请确认地址是可写区域（SRAM/外设寄存器，<b>不要写 Flash 控制器</b>）")
+            .arg(f"{addr:08X}")
+            .arg(str(len(data)))
+            .arg(preview)
         )
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
         msg_box.setDefaultButton(QMessageBox.Cancel)
-        msg_box.button(QMessageBox.Yes).setText("确认写入")
-        msg_box.button(QMessageBox.Cancel).setText("取消")
+        msg_box.button(QMessageBox.Yes).setText(self.tr("确认写入"))
+        msg_box.button(QMessageBox.Cancel).setText(self.tr("取消"))
         if msg_box.exec() != QMessageBox.Yes:
             return
         self._worker.write_memory_requested.emit(addr, data)

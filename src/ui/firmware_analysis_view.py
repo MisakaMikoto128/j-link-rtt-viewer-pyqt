@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFormLayout,
@@ -36,6 +36,18 @@ from .symbol_table_view import _NumericItem, SymbolTableView
 
 _SEC_COLUMNS = ["Name", "Address", "Size", "Flags", "Align"]
 
+# i18n source strings
+_SEC_TITLE_BASE = "段表 Sections"
+_SUMMARY_HINT = (
+    "内存占用采用 arm-none-eabi-size 的 Berkeley 统计方式："
+    "text = 已加载的可执行/只读段（.text/.rodata/.isr_vector），"
+    "data = 已初始化可写段（.data），bss = 未初始化段（.bss）；"
+    "Flash = text + data，RAM = data + bss。"
+    "初始 SP / Reset_Handler 按 Cortex-M 约定，从最低 LOAD 段头 8 字节"
+    "读取（向量表第 0、1 个字），非 Cortex-M 架构无意义。"
+)
+_SEC_HINT = "仅列出占用内存的段（SHF_ALLOC）。"
+
 
 def _human(n: int) -> str:
     """字节数 → '1234 B (1.2 KiB)' 风格。"""
@@ -52,7 +64,8 @@ class _SectionsView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        self.lbl_title = StrongBodyLabel("段表 Sections")
+        self._sec_count: int = -1  # -1 = 未加载
+        self.lbl_title = StrongBodyLabel(self.tr(_SEC_TITLE_BASE))
         layout.addWidget(self.lbl_title)
 
         self.table = TableWidget()
@@ -71,15 +84,28 @@ class _SectionsView(QWidget):
             self.table.setColumnWidth(col, w)
         layout.addWidget(self.table, 1)
 
-        self.lbl_hint = CaptionLabel("仅列出占用内存的段（SHF_ALLOC）。")
+        self.lbl_hint = CaptionLabel(self.tr(_SEC_HINT))
         self.lbl_hint.setStyleSheet("color: #6b7280;")
         layout.addWidget(self.lbl_hint)
+
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() == QEvent.Type.LanguageChange:
+            self._retranslate_ui()
+        super().changeEvent(event)
+
+    def _retranslate_ui(self) -> None:
+        if self._sec_count >= 0:
+            self.lbl_title.setText(self.tr(_SEC_TITLE_BASE) + f"（{self._sec_count}）")
+        else:
+            self.lbl_title.setText(self.tr(_SEC_TITLE_BASE))
+        self.lbl_hint.setText(self.tr(_SEC_HINT))
 
     def load(self, path: str) -> None:
         try:
             secs = read_sections(path)
         except FileParseError:
             secs = []
+        self._sec_count = len(secs)
         self.table.setUpdatesEnabled(False)
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(secs))
@@ -97,11 +123,12 @@ class _SectionsView(QWidget):
                 self.table.setItem(r, c, item)
         self.table.setSortingEnabled(True)
         self.table.setUpdatesEnabled(True)
-        self.lbl_title.setText(f"段表 Sections（{len(secs)}）")
+        self.lbl_title.setText(self.tr(_SEC_TITLE_BASE) + f"（{self._sec_count}）")
 
     def clear(self) -> None:
+        self._sec_count = -1
         self.table.setRowCount(0)
-        self.lbl_title.setText("段表 Sections")
+        self.lbl_title.setText(self.tr(_SEC_TITLE_BASE))
 
 
 class _SummaryView(QWidget):
@@ -113,7 +140,8 @@ class _SummaryView(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(10)
 
-        layout.addWidget(StrongBodyLabel("内存占用 Memory usage"))
+        self._lbl_mem_title = StrongBodyLabel(self.tr("内存占用 Memory usage"))
+        layout.addWidget(self._lbl_mem_title)
         form = QFormLayout()
         form.setSpacing(8)
         self.lbl_flash = BodyLabel("-")
@@ -121,35 +149,55 @@ class _SummaryView(QWidget):
         self.lbl_text = BodyLabel("-")
         self.lbl_data = BodyLabel("-")
         self.lbl_bss = BodyLabel("-")
-        form.addRow(StrongBodyLabel("Flash（text+data）"), self.lbl_flash)
-        form.addRow(StrongBodyLabel("RAM（data+bss）"), self.lbl_ram)
-        form.addRow(BodyLabel("text（代码 + 只读）"), self.lbl_text)
-        form.addRow(BodyLabel("data（已初始化）"), self.lbl_data)
-        form.addRow(BodyLabel("bss（未初始化）"), self.lbl_bss)
+        self._row_flash = StrongBodyLabel(self.tr("Flash（text+data）"))
+        self._row_ram = StrongBodyLabel(self.tr("RAM（data+bss）"))
+        self._row_text = BodyLabel(self.tr("text（代码 + 只读）"))
+        self._row_data = BodyLabel(self.tr("data（已初始化）"))
+        self._row_bss = BodyLabel(self.tr("bss（未初始化）"))
+        form.addRow(self._row_flash, self.lbl_flash)
+        form.addRow(self._row_ram, self.lbl_ram)
+        form.addRow(self._row_text, self.lbl_text)
+        form.addRow(self._row_data, self.lbl_data)
+        form.addRow(self._row_bss, self.lbl_bss)
         layout.addLayout(form)
 
-        layout.addWidget(StrongBodyLabel("入口与向量 Entry & vectors"))
+        self._lbl_entry_title = StrongBodyLabel(self.tr("入口与向量 Entry & vectors"))
+        layout.addWidget(self._lbl_entry_title)
         form2 = QFormLayout()
         form2.setSpacing(8)
         self.lbl_entry = BodyLabel("-")
         self.lbl_sp = BodyLabel("-")
         self.lbl_reset = BodyLabel("-")
-        form2.addRow(BodyLabel("Entry point"), self.lbl_entry)
-        form2.addRow(BodyLabel("初始 SP（向量表[0]）"), self.lbl_sp)
-        form2.addRow(BodyLabel("Reset_Handler（向量表[1]）"), self.lbl_reset)
+        self._row_entry = BodyLabel("Entry point")
+        self._row_sp = BodyLabel(self.tr("初始 SP（向量表[0]）"))
+        self._row_reset = BodyLabel(self.tr("Reset_Handler（向量表[1]）"))
+        form2.addRow(self._row_entry, self.lbl_entry)
+        form2.addRow(self._row_sp, self.lbl_sp)
+        form2.addRow(self._row_reset, self.lbl_reset)
         layout.addLayout(form2)
 
-        self.lbl_hint = CaptionLabel(
-            "内存占用采用 arm-none-eabi-size 的 Berkeley 统计方式："
-            "text = 已加载的可执行/只读段（.text/.rodata/.isr_vector），"
-            "data = 已初始化可写段（.data），bss = 未初始化段（.bss）；"
-            "Flash = text + data，RAM = data + bss。"
-            "初始 SP / Reset_Handler 按 Cortex-M 约定，从最低 LOAD 段头 8 字节"
-            "读取（向量表第 0、1 个字），非 Cortex-M 架构无意义。")
+        self.lbl_hint = CaptionLabel(self.tr(_SUMMARY_HINT))
         self.lbl_hint.setStyleSheet("color: #6b7280;")
         self.lbl_hint.setWordWrap(True)
         layout.addWidget(self.lbl_hint)
         layout.addStretch(1)
+
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() == QEvent.Type.LanguageChange:
+            self._retranslate_ui()
+        super().changeEvent(event)
+
+    def _retranslate_ui(self) -> None:
+        self._lbl_mem_title.setText(self.tr("内存占用 Memory usage"))
+        self._row_flash.setText(self.tr("Flash（text+data）"))
+        self._row_ram.setText(self.tr("RAM（data+bss）"))
+        self._row_text.setText(self.tr("text（代码 + 只读）"))
+        self._row_data.setText(self.tr("data（已初始化）"))
+        self._row_bss.setText(self.tr("bss（未初始化）"))
+        self._lbl_entry_title.setText(self.tr("入口与向量 Entry & vectors"))
+        self._row_sp.setText(self.tr("初始 SP（向量表[0]）"))
+        self._row_reset.setText(self.tr("Reset_Handler（向量表[1]）"))
+        self.lbl_hint.setText(self.tr(_SUMMARY_HINT))
 
     def load(self, path: str) -> None:
         try:
@@ -178,6 +226,13 @@ class _SummaryView(QWidget):
 class FirmwareAnalysisView(QWidget):
     """SegmentedWidget 切换的「符号 / 段 / 占用汇总」复合视图。"""
 
+    # pivot 文本 key → source string
+    _PIVOT_ITEMS = [
+        ("symbols", "符号 Symbols"),
+        ("sections", "段 Sections"),
+        ("summary", "占用汇总 Summary"),
+    ]
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
@@ -192,9 +247,12 @@ class FirmwareAnalysisView(QWidget):
         self.symbols = SymbolTableView()
         self.sections = _SectionsView()
         self.summary = _SummaryView()
-        self._add(self.symbols, "symbols", "符号 Symbols")
-        self._add(self.sections, "sections", "段 Sections")
-        self._add(self.summary, "summary", "占用汇总 Summary")
+        for w, key, text in [
+            (self.symbols, "symbols", self.tr("符号 Symbols")),
+            (self.sections, "sections", self.tr("段 Sections")),
+            (self.summary, "summary", self.tr("占用汇总 Summary")),
+        ]:
+            self._add(w, key, text)
 
         self.stack.currentChanged.connect(self._sync_pivot)
         self.pivot.setCurrentItem("symbols")
@@ -206,6 +264,20 @@ class FirmwareAnalysisView(QWidget):
         self.pivot.addItem(
             routeKey=key, text=text,
             onClick=lambda: self.stack.setCurrentWidget(w))
+
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() == QEvent.Type.LanguageChange:
+            self._retranslate_ui()
+        super().changeEvent(event)
+
+    def _retranslate_ui(self) -> None:
+        for key, src in self._PIVOT_ITEMS:
+            item = self.pivot.widget(key)
+            if item is not None:
+                try:
+                    item.setText(self.tr(src))
+                except Exception:
+                    pass
 
     def _sync_pivot(self, idx: int) -> None:
         self.pivot.setCurrentItem(self.stack.widget(idx).objectName())

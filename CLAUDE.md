@@ -667,3 +667,62 @@ fmt.setForeground(_ANSI_QCOLORS.get(attrs.fg, _DEFAULT_FG_QCOLOR))
 微基准 1.51× 加速（200k 次 600ms → 400ms）。同模式适用于符号表 Type pill 配色（已用），任何「枚举键 → QColor」映射都该模块级预构造。
 
 参考：`src/ui/rtt_monitor_page.py` `_ANSI_QCOLORS` / `_fmt`、`src/ui/symbol_table_view.py` `_TYPE_QCOLORS`。
+
+---
+
+## 自定义 QTranslator.translate 未命中必须返回 source，不能返回空串
+
+**现象**：切换到非中文语言后，翻译表里没有的键对应控件显示**空白**（文字消失），而不是回退到中文原文。受影响：qfluentwidgets `ColorDialog` 的 OK/Cancel/Red/Green 等按钮、设置页「重置按钮行为」下拉项、关于页三张功能卡片标题/描述、设备信息行标签（除「目标设备:」外全空）。
+
+**原因**：`JsonTranslator.translate` 未命中时 `return self._dict.get(source, "")`。Qt 的 `QCoreApplication::translate` 判定 translator 返回值时检查的是 **`isNull()` 而非 `isEmpty()`**：空串 `""` 不是 null，被当作有效译文直接采用，于是控件显示空字符串，**不会**回退到 source 原文。（"查表未命中返回空串，Qt 会回退到原文"是错误直觉。）
+
+**处理**：未命中时返回 `source` 自身：
+```python
+def translate(self, context, source, disambiguation=None, n=-1):
+    return self._dict.get(source, source)
+```
+这样翻译表缺任意键（含未来新增）都退化显示源文本，绝不空白。`zh_CN` 为默认语言不安装 translator，`tr()` 直接返回 source，行为一致。补齐翻译表里缺失的键是另一回事（数据完整性），本条只保证「永不空白」。
+
+附带：设备信息行标签用 `self.tr(f"{text}:")`，键带冒号；翻译表键也必须带冒号（`"固件版本:"` 而非 `"固件版本"`），否则照样命中不了。已有 `"目标设备:"` 与 `"目标设备"` 两条并存即此约定。
+
+参考：`src/core/i18n_service.py` `JsonTranslator.translate`、`src/ui/rtt_monitor_page.py` `_info_rows`。
+
+---
+
+## _tip 在 _retranslate_ui 里重复调用会叠加多个 ToolTipFilter 产生重影
+
+**现象**：切换语言后，连接按钮、字号 A+/A−、收窄工具栏各按钮的悬浮提示出现「很重的阴影」--多个 tooltip 叠在一起。切换前正常，每次切换多叠一层。
+
+**原因**：`_tip(widget, text)` 同时做 `setToolTip(text)` + `installEventFilter(ToolTipFilter(...))`。它在 `_build_ui`（构造）和 `_retranslate_ui`（语言切换）里都被调用。`installEventFilter` 不去重，每次调用都新增一个 `ToolTipFilter` 实例。qfluentwidgets 的 `ToolTipFilter` 在 `QEvent.Enter` 时各起一个 300ms 定时器，定时器到期各自 `showToolTip()` 弹一个 `ToolTip` -- N 个 filter = N 个气泡叠影。
+
+**处理**：`ToolTipFilter` 只装一次，用动态属性标记：
+```python
+def _tip(widget, text, duration=300):
+    widget.setToolTip(text)
+    if not widget.property("_fluent_tip_installed"):
+        widget.installEventFilter(ToolTipFilter(widget, duration))
+        widget.setProperty("_fluent_tip_installed", True)
+```
+`ToolTipFilter.showToolTip` 每次悬停动态读取 `widget.toolTip()`，故后续 `setToolTip` 即可刷新文本，无需重装 filter。
+
+`search_bar.py` 的 `_tip` 同形态但 `_retranslate_ui` 用的是 `setToolTip`（没重装），所以没踩；同样适用本规则以防后续误用。
+
+参考：`src/ui/rtt_monitor_page.py` `_tip` / `_retranslate_ui`、`src/ui/widgets/search_bar.py` `_tip`。
+
+---
+
+## 静态按钮文字必须在 _retranslate_ui 里显式 setText，不能只靠构造时 tr()
+
+**现象**：切换语言后「重置并暂停」按钮仍显示中文（构造时的值），不跟随语言变化。
+
+**原因**：按钮文字在 `_build_ui` 里 `PushButton(icon, self.tr("重置并暂停"))` 设过一次，但 `_retranslate_ui` 只更新了它的 tooltip，漏了 `setText`。语言切换靠 `LanguageChange` 事件 -> `_retranslate_ui` 重设文本，构造时的 `tr()` 不会重跑。
+
+**处理**：每个静态文字控件在 `_retranslate_ui` 里都要显式重设。状态驱动的按钮（如 btn_connect 连接/断开）按当前状态重设，且跳过连接中（disabled）态以免覆盖"连接中…"：
+```python
+if self.btn_connect.isEnabled():
+    self.btn_connect.setText(self.tr("断开") if self._is_connected else self.tr("连接"))
+self.btn_reset_halt.setText(self.tr("重置并暂停"))
+```
+判别标准：凡是文字不随运行状态变化的控件，`_retranslate_ui` 必须有对应 `setText`；状态驱动的控件按当前状态分支重设。
+
+参考：`src/ui/rtt_monitor_page.py` `_retranslate_ui`（btn_reset_halt / btn_connect）。

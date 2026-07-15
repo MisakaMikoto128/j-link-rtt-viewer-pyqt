@@ -59,3 +59,6 @@ nuitka-crash-report.xml
 .reasonix/*
 tools/*
 installer/*
+
+# i18n demo (独立于主项目)
+demo/

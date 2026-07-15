@@ -78,9 +78,18 @@ _FONT_SIZE_MAX = 32
 
 
 def _tip(widget: QWidget, text: str, duration: int = 300) -> None:
-    """给控件安装 QFluentWidgets 风格的 tooltip（圆角 + 阴影）。"""
+    """设置 QFluentWidgets 风格 tooltip：setToolTip 提供文本，ToolTipFilter
+    拦截原生 tooltip 事件改用 Fluent 圆角气泡。
+
+    ToolTipFilter 仅安装一次（动态属性 _fluent_tip_installed 标记）。本函数在
+    构造与语言重翻译时都会被调用，重复安装会叠加多个 filter，悬停时每个
+    filter 各弹一个气泡产生重影。ToolTipFilter 在 showToolTip 时动态读取
+    widget.toolTip()，故后续调用只需 setToolTip 即可刷新文本。
+    """
     widget.setToolTip(text)
-    widget.installEventFilter(ToolTipFilter(widget, duration))
+    if not widget.property("_fluent_tip_installed"):
+        widget.installEventFilter(ToolTipFilter(widget, duration))
+        widget.setProperty("_fluent_tip_installed", True)
 
 
 def _human_bytes(n: int) -> str:
@@ -338,7 +347,7 @@ class _ColorGridPopup(QWidget):
         top.setSpacing(6)
         top.addWidget(self._make_swatch("#000000"))
         # 用 BodyLabel 而非 QLabel，保证字体与 qfluentwidgets 全局 UI 字体一致
-        lbl = BodyLabel("默认")
+        lbl = BodyLabel(self.tr("默认"))
         top.addWidget(lbl)
         top.addStretch(1)
         v.addLayout(top)
@@ -663,11 +672,12 @@ class RTTMonitorPage(QWidget):
         # ════════════════════════════════════════════════════════════
         # 区域 1：连接设置
         # ════════════════════════════════════════════════════════════
-        v.addWidget(StrongBodyLabel("连接设置"))
+        self._lbl_conn_settings = StrongBodyLabel(self.tr("连接设置"))
+        v.addWidget(self._lbl_conn_settings)
         _INPUT_W = 120
         _CTRL_H = 33
         self.cb_target = EditableComboBox(inner)
-        self.cb_target.setPlaceholderText("目标设备")
+        self.cb_target.setPlaceholderText(self.tr("目标设备"))
         chip_list = self._cfg.get_chip_list()
         self.cb_target.addItems(chip_list)
         last_mcu = self._cfg.get("target_mcu")
@@ -681,14 +691,16 @@ class RTTMonitorPage(QWidget):
 
         row_iface = QHBoxLayout()
         row_iface.setSpacing(6)
-        row_iface.addWidget(BodyLabel("接口"))
+        self._lbl_iface = BodyLabel(self.tr("接口"))
+        row_iface.addWidget(self._lbl_iface)
         self.cb_iface = ComboBox(inner)
         self.cb_iface.addItems(["SWD", "JTAG"])
         self.cb_iface.setCurrentText(self._cfg.get("interface"))
         self.cb_iface.setFixedHeight(_CTRL_H)
         row_iface.addWidget(self.cb_iface)
         row_iface.addSpacing(12)
-        row_iface.addWidget(BodyLabel("速度"))
+        self._lbl_speed = BodyLabel(self.tr("速度"))
+        row_iface.addWidget(self._lbl_speed)
         self.cb_speed = ComboBox(inner)
         self.cb_speed.setFixedHeight(_CTRL_H)
         for s in self._cfg.get_default_speeds():
@@ -702,7 +714,8 @@ class RTTMonitorPage(QWidget):
 
         row_ch = QHBoxLayout()
         row_ch.setSpacing(6)
-        row_ch.addWidget(BodyLabel("RTT 通道"))
+        self._lbl_rtt_channel = BodyLabel(self.tr("RTT 通道"))
+        row_ch.addWidget(self._lbl_rtt_channel)
         self.sp_channel = SpinBox(inner)
         self.sp_channel.setRange(0, 15)
         self.sp_channel.setValue(self._cfg.get("rtt_channel"))
@@ -711,18 +724,18 @@ class RTTMonitorPage(QWidget):
         row_ch.addStretch(1)
         v.addLayout(row_ch)
 
-        self.btn_connect = PrimaryPushButton(FluentIcon.PLAY, "连接", inner)
-        _tip(self.btn_connect, "F2 连接 / F3 断开")
+        self.btn_connect = PrimaryPushButton(FluentIcon.PLAY, self.tr("连接"), inner)
+        _tip(self.btn_connect, self.tr("F2 连接 / F3 断开"))
         v.addWidget(self.btn_connect)
 
         row_reset = QHBoxLayout()
         row_reset.setSpacing(6)
-        self.btn_reset = PushButton(FluentIcon.SYNC, "重置目标", inner)
-        _tip(self.btn_reset, "F4 重置目标")
+        self.btn_reset = PushButton(FluentIcon.SYNC, self.tr("重置目标"), inner)
+        _tip(self.btn_reset, self.tr("F4 重置目标"))
         self.btn_reset.setEnabled(False)
         self.btn_reset_halt = PushButton(
-            FluentIcon.PAUSE_BOLD, "重置并暂停", inner)
-        _tip(self.btn_reset_halt, "复位 MCU 并停在复位状态（halt）")
+            FluentIcon.PAUSE_BOLD, self.tr("重置并暂停"), inner)
+        _tip(self.btn_reset_halt, self.tr("复位 MCU 并停在复位状态（halt）"))
         self.btn_reset_halt.setEnabled(False)
         row_reset.addWidget(self.btn_reset)
         row_reset.addWidget(self.btn_reset_halt)
@@ -735,7 +748,7 @@ class RTTMonitorPage(QWidget):
         # 区域 2：设备信息（可折叠）
         # ════════════════════════════════════════════════════════════
         self.gb_info = HeaderCardWidget(inner)
-        self.gb_info.setTitle("设备信息")
+        self.gb_info.setTitle(self.tr("设备信息"))
         self.btn_info_toggle = TransparentToolButton(
             FluentIcon.CHEVRON_DOWN_MED, self.gb_info)
         self.gb_info.headerLayout.addStretch(1)
@@ -746,7 +759,8 @@ class RTTMonitorPage(QWidget):
         info_grid.setHorizontalSpacing(8)
         info_grid.setVerticalSpacing(4)
         self._info_labels: dict[str, StrongBodyLabel] = {}
-        info_rows = [
+        self._info_row_labels: dict[str, BodyLabel] = {}
+        self._info_rows = [
             ("固件版本", "jlink_firmware"),
             ("硬件版本", "jlink_hardware"),
             ("序列号", "jlink_serial"),
@@ -757,8 +771,10 @@ class RTTMonitorPage(QWidget):
             ("接口", "interface"),
             ("速度(kHz)", "speed_khz"),
         ]
-        for i, (text, key) in enumerate(info_rows):
-            info_grid.addWidget(BodyLabel(f"{text}:"), i, 0)
+        for i, (text, key) in enumerate(self._info_rows):
+            lbl_row = BodyLabel(self.tr(f"{text}:"))
+            self._info_row_labels[key] = lbl_row
+            info_grid.addWidget(lbl_row, i, 0)
             lbl = StrongBodyLabel("-")
             self._info_labels[key] = lbl
             info_grid.addWidget(lbl, i, 1)
@@ -775,33 +791,34 @@ class RTTMonitorPage(QWidget):
         # ════════════════════════════════════════════════════════════
         # 区域 3：接收设置
         # ════════════════════════════════════════════════════════════
-        v.addWidget(StrongBodyLabel("接收设置"))
+        self._lbl_recv_settings = StrongBodyLabel(self.tr("接收设置"))
+        v.addWidget(self._lbl_recv_settings)
 
-        self.chk_auto_scroll = CheckBox("自动滚动")
+        self.chk_auto_scroll = CheckBox(self.tr("自动滚动"))
         self.chk_auto_scroll.setChecked(self._cfg.get("auto_scroll"))
         self.chk_auto_scroll.setFixedHeight(_CTRL_H)
         v.addWidget(self.chk_auto_scroll)
-        self.chk_pause = CheckBox("暂停接收")
+        self.chk_pause = CheckBox(self.tr("暂停接收"))
         self.chk_pause.setFixedHeight(_CTRL_H)
         v.addWidget(self.chk_pause)
-        self.chk_power = CheckBox("电源输出")
+        self.chk_power = CheckBox(self.tr("电源输出"))
         self.chk_power.setFixedHeight(_CTRL_H)
         self.chk_power.setEnabled(False)
         v.addWidget(self.chk_power)
-        self.chk_log_rec = CheckBox("实时日志记录")
+        self.chk_log_rec = CheckBox(self.tr("实时日志记录"))
         self.chk_log_rec.setFixedHeight(_CTRL_H)
         v.addWidget(self.chk_log_rec)
 
         # HEX 显示
-        self.chk_hex_display = CheckBox("十六进制显示")
+        self.chk_hex_display = CheckBox(self.tr("十六进制显示"))
         self.chk_hex_display.setFixedHeight(_CTRL_H)
-        _tip(self.chk_hex_display, "将接收到的每个字节以大写的 HEX 格式显示")
+        _tip(self.chk_hex_display, self.tr("将接收到的每个字节以大写的 HEX 格式显示"))
         v.addWidget(self.chk_hex_display)
 
         # 自动断帧
         row_frame = QHBoxLayout()
         row_frame.setSpacing(6)
-        self.chk_auto_frame = CheckBox("自动断帧")
+        self.chk_auto_frame = CheckBox(self.tr("自动断帧"))
         self.chk_auto_frame.setFixedHeight(_CTRL_H)
 
         self.le_frame_timeout = LineEdit(inner)
@@ -818,12 +835,16 @@ class RTTMonitorPage(QWidget):
         self.btn_frame_help = ToolButton(FluentIcon.QUESTION, inner)
         self.btn_frame_help.setFixedSize(_CTRL_H, _CTRL_H)
         self.btn_frame_help.clicked.connect(self._on_frame_help_clicked)
+        self._frame_help_title = self.tr("自动断帧")
         self._frame_help_content = (
-            "接收超时设置（1~200 毫秒），默认 20ms。\n\n"
-            "在接收连续数据流时，如果相邻两批数据的接收时间间隔\n"
-            "超过设定值，则判定为一帧数据结束，自动插入换行。\n\n"
-            "自动断帧：启用后，每个数据帧显示后自动添加换行符，\n"
-            "便于区分不同帧。")
+            self.tr("接收超时设置（1~200 毫秒），默认 20ms。") + "\n\n"
+            + self.tr("在接收连续数据流时，如果相邻两批数据的接收时间间隔")
+            + "\n"
+            + self.tr("超过设定值，则判定为一帧数据结束，自动插入换行。")
+            + "\n\n"
+            + self.tr("自动断帧：启用后，每个数据帧显示后自动添加换行符，")
+            + "\n"
+            + self.tr("便于区分不同帧。"))
         _frame_group = QWidget(inner)
         _frame_group.setStyleSheet("background: transparent;")
         _fg_lay = QHBoxLayout(_frame_group)
@@ -839,16 +860,16 @@ class RTTMonitorPage(QWidget):
 
         # ---- 标记 / 保存 / 清空（归入接收设置区域）----
         self.le_mark = EditableComboBox(inner)
-        self.le_mark.setPlaceholderText("会话标记文本…")
+        self.le_mark.setPlaceholderText(self.tr("会话标记文本…"))
         self._mark_history: list[str] = []
         v.addWidget(self.le_mark)
 
         row_mark = QHBoxLayout()
         row_mark.setSpacing(8)
-        self.btn_mark = PushButton("插入标记", inner)
-        _tip(self.btn_mark, "在显示区插入分隔标记")
-        self.btn_clear = PushButton("清除", inner)
-        self.btn_save = PushButton("💾 保存", inner)
+        self.btn_mark = PushButton(self.tr("插入标记"), inner)
+        _tip(self.btn_mark, self.tr("在显示区插入分隔标记"))
+        self.btn_clear = PushButton(self.tr("清除"), inner)
+        self.btn_save = PushButton(self.tr("💾 保存"), inner)
         row_mark.addWidget(self.btn_mark)
         row_mark.addWidget(self.btn_clear)
         row_mark.addWidget(self.btn_save)
@@ -857,13 +878,14 @@ class RTTMonitorPage(QWidget):
         # 字号控制（原发送设置区块，挪到这里）
         row_font = QHBoxLayout()
         row_font.setSpacing(6)
-        row_font.addWidget(BodyLabel("字号"))
+        self._lbl_font_size_label = BodyLabel(self.tr("字号"))
+        row_font.addWidget(self._lbl_font_size_label)
         row_font.addStretch(1)
         self.btn_font_minus = TransparentToolButton(inner)
         self.btn_font_minus.setText("A-")
         self.btn_font_minus.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_font_minus.setFixedSize(44, 44)
-        _tip(self.btn_font_minus, "字号 −1")
+        _tip(self.btn_font_minus, self.tr("字号 −1"))
         self.lbl_font_size = BodyLabel(f"{self._cfg.get('font_size')}")
         self.lbl_font_size.setAlignment(Qt.AlignCenter)
         self.lbl_font_size.setFixedWidth(28)
@@ -871,7 +893,7 @@ class RTTMonitorPage(QWidget):
         self.btn_font_plus.setText("A+")
         self.btn_font_plus.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_font_plus.setFixedSize(44, 44)
-        _tip(self.btn_font_plus, "字号 +1")
+        _tip(self.btn_font_plus, self.tr("字号 +1"))
         row_font.addWidget(self.btn_font_minus)
         row_font.addWidget(self.lbl_font_size)
         row_font.addWidget(self.btn_font_plus)
@@ -883,19 +905,20 @@ class RTTMonitorPage(QWidget):
         # ════════════════════════════════════════════════════════════
         # 区域 4：发送设置 + 标记
         # ════════════════════════════════════════════════════════════
-        v.addWidget(StrongBodyLabel("发送设置"))
+        self._lbl_send_settings = StrongBodyLabel(self.tr("发送设置"))
+        v.addWidget(self._lbl_send_settings)
 
         # 定时发送
         row_timed = QHBoxLayout()
         row_timed.setSpacing(6)
-        self.chk_timed_send = CheckBox("定时发送")
+        self.chk_timed_send = CheckBox(self.tr("定时发送"))
         self.le_timed_interval = LineEdit(inner)
         self.le_timed_interval.setText("1.0")
         self.le_timed_interval.setFixedSize(_INPUT_W, _CTRL_H)
         self.le_timed_interval.setClearButtonEnabled(False)
         self.le_timed_interval.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.btn_timed_unit = ToolButton(inner)
-        self.btn_timed_unit.setText("秒")
+        self.btn_timed_unit.setText(self.tr("秒"))
         self.btn_timed_unit.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_timed_unit.setFixedSize(_CTRL_H, _CTRL_H)
         _timed_group = QWidget(inner)
@@ -911,19 +934,19 @@ class RTTMonitorPage(QWidget):
         v.addLayout(row_timed)
         
         # 十六进制发送（左侧面板入口，与右侧工具栏 chk_hex 双向同步）
-        self.chk_hex_left = CheckBox("十六进制发送")
+        self.chk_hex_left = CheckBox(self.tr("十六进制发送"))
         self.chk_hex_left.setFixedHeight(_CTRL_H)
         v.addWidget(self.chk_hex_left)
 
         # 发送回显：勾选后每次发送在显示区追加一行染色回显文本
         row_echo = QHBoxLayout()
         row_echo.setSpacing(6)
-        self.chk_show_send_text = CheckBox("显示发送字符串")
+        self.chk_show_send_text = CheckBox(self.tr("显示发送字符串"))
         self.chk_show_send_text.setFixedHeight(_CTRL_H)
         # 色块按钮：从 cfg 读取上次选中的颜色（默认橙色 #FFA500）
         _echo_color = self._cfg.get("send_text_color") or _DEFAULT_SEND_ECHO_COLOR
         self.btn_send_color = _ColorComboButton(_echo_color)
-        _tip(self.btn_send_color, "选择发送回显颜色")
+        _tip(self.btn_send_color, self.tr("选择发送回显颜色"))
         row_echo.addWidget(self.chk_show_send_text)
         row_echo.addStretch(1)
         row_echo.addWidget(self.btn_send_color)
@@ -932,13 +955,13 @@ class RTTMonitorPage(QWidget):
         # CRC 脚本
         row_crc = QHBoxLayout()
         row_crc.setSpacing(6)
-        self.chk_crc_script = CheckBox("脚本")
+        self.chk_crc_script = CheckBox(self.tr("脚本"))
         self.cb_crc_algo = ComboBox(inner)
         self.cb_crc_algo.setFixedHeight(_CTRL_H)
         for display_name, _ in CRC_ALGORITHMS:
             self.cb_crc_algo.addItem(display_name)
         self.cb_crc_algo.setCurrentIndex(1)  # 默认 CRC-16/MODBUS
-        _tip(self.cb_crc_algo, "发送时追加 CRC 后缀（算法选）")
+        _tip(self.cb_crc_algo, self.tr("发送时追加 CRC 后缀（算法选）"))
         row_crc.addWidget(self.chk_crc_script)
         row_crc.addStretch(1)
         row_crc.addWidget(self.cb_crc_algo)
@@ -996,14 +1019,14 @@ class RTTMonitorPage(QWidget):
         self.btn_panel_toggle = ToggleToolButton(FluentIcon.CHEVRON_RIGHT, self._toolbar)
         self.btn_panel_toggle.setFixedSize(36, 30)
         self.btn_panel_toggle.setCheckable(True)
-        _tip(self.btn_panel_toggle, "显示/隐藏配置面板")
+        _tip(self.btn_panel_toggle, self.tr("显示/隐藏配置面板"))
 
         # HEX 模式切换（接收方向）—— 收窄工具栏的样式模板
         self.btn_hex_rx_up = ToggleToolButton(self._toolbar)
         self.btn_hex_rx_up.setText("HEX ↑")
         self.btn_hex_rx_up.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_hex_rx_up.setFixedSize(56, 30)
-        _tip(self.btn_hex_rx_up, "接收 HEX 显示切换")
+        _tip(self.btn_hex_rx_up, self.tr("接收 HEX 显示切换"))
         self.btn_hex_rx_up.setCheckable(True)
         # 同步 chk_hex_display ↔ btn_hex_rx_up（纯 UI 状态，不持久化）
         self.btn_hex_rx_up.toggled.connect(self.chk_hex_display.setChecked)
@@ -1015,14 +1038,14 @@ class RTTMonitorPage(QWidget):
         self.btn_hex_tx_down.setText("HEX ↓")
         self.btn_hex_tx_down.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_hex_tx_down.setFixedSize(56, 30)
-        _tip(self.btn_hex_tx_down, "发送 HEX 模式切换")
+        _tip(self.btn_hex_tx_down, self.tr("发送 HEX 模式切换"))
         self.btn_hex_tx_down.setCheckable(True)
         self.btn_hex_tx_down.setChecked(self._cfg.get("hex_send_mode"))
 
         # 暂停/恢复
         self.btn_toolbar_pause = ToggleToolButton(FluentIcon.PAUSE, self._toolbar)
         self.btn_toolbar_pause.setFixedSize(36, 30)
-        _tip(self.btn_toolbar_pause, "暂停/恢复接收")
+        _tip(self.btn_toolbar_pause, self.tr("暂停/恢复接收"))
         self.btn_toolbar_pause.setCheckable(True)
         self.btn_toolbar_pause.toggled.connect(
             self._worker.set_pause_receive_requested.emit)
@@ -1032,13 +1055,13 @@ class RTTMonitorPage(QWidget):
         # 清空显示
         self.btn_toolbar_clear = ToolButton(FluentIcon.DELETE, self._toolbar)
         self.btn_toolbar_clear.setFixedSize(36, 30)
-        _tip(self.btn_toolbar_clear, "清除显示")
+        _tip(self.btn_toolbar_clear, self.tr("清除显示"))
         self.btn_toolbar_clear.clicked.connect(self.display.clear)
 
         # 保存
         self.btn_toolbar_save = ToolButton(FluentIcon.SAVE, self._toolbar)
         self.btn_toolbar_save.setFixedSize(36, 30)
-        _tip(self.btn_toolbar_save, "保存当前")
+        _tip(self.btn_toolbar_save, self.tr("保存当前"))
         self.btn_toolbar_save.clicked.connect(self._on_save_clicked)
 
         # 连接/断开切换（收窄模式入口，同步主页 btn_connect 状态）
@@ -1046,7 +1069,7 @@ class RTTMonitorPage(QWidget):
         # _set_disconnected_ui 驱动，按钮点击只负责触发连接/断开动作
         self.btn_toolbar_connect = ToggleToolButton(FluentIcon.PLAY, self._toolbar)
         self.btn_toolbar_connect.setFixedSize(36, 30)
-        _tip(self.btn_toolbar_connect, "连接/断开")
+        _tip(self.btn_toolbar_connect, self.tr("连接/断开"))
         self.btn_toolbar_connect.clicked.connect(self._on_connect_clicked)
 
         # 所有按钮靠右——悬浮卡片从左侧 280px 弹出时不遮挡任何按钮
@@ -1079,7 +1102,7 @@ class RTTMonitorPage(QWidget):
         self.btn_send = ToolButton(FluentIcon.SEND, panel)
         self.btn_send.setFixedSize(_SEND_H, _SEND_H)
         self.btn_send.setIconSize(QSize(36, 36))
-        _tip(self.btn_send, "发送 (Enter) · 未连接时点击提示")
+        _tip(self.btn_send, self.tr("发送 (Enter) · 未连接时点击提示"))
         send_btn_col = QVBoxLayout()
         send_btn_col.setContentsMargins(0, 0, 0, 0)
         send_btn_col.setSpacing(1)
@@ -1092,20 +1115,20 @@ class RTTMonitorPage(QWidget):
         send_area.addLayout(send_btn_col)
 
         # ---- 底部状态栏 ----
-        self.lbl_status_state = BodyLabel("● 未连接")
+        self.lbl_status_state = BodyLabel(self.tr("● 未连接"))
         self.lbl_status_state.setStyleSheet("color: #888888;")
         self.lbl_status_state.setMinimumWidth(100)
-        self.lbl_status_rate = BodyLabel("0 B/s · 0 行/s")
+        self.lbl_status_rate = BodyLabel(self.tr("0 B/s · 0 行/s"))
         self.lbl_status_rate.setMinimumWidth(120)
-        self.lbl_status_total = BodyLabel("总 0 B · 0 行 · 00:00:00")
+        self.lbl_status_total = BodyLabel(self.tr("总 0 B · 0 行 · 00:00:00"))
         self.lbl_status_total.setMinimumWidth(160)
         # 发送/接收计数（贴近"发送: N  接收: N - M"的简洁风格）
-        self.lbl_status_tx = BodyLabel("发送: 0")
+        self.lbl_status_tx = BodyLabel(self.tr("发送: 0"))
         self.lbl_status_tx.setMinimumWidth(80)
-        self.lbl_status_rx = BodyLabel("接收: 0 - 0")
+        self.lbl_status_rx = BodyLabel(self.tr("接收: 0 - 0"))
         self.lbl_status_rx.setMinimumWidth(100)
         self.lbl_status_encoding = BodyLabel("")
-        self.lbl_reset_count = BodyLabel("复位: 0")
+        self.lbl_reset_count = BodyLabel(self.tr("复位: 0"))
 
         status_row = QHBoxLayout()
         status_row.setContentsMargins(4, 0, 4, 0)
@@ -1290,7 +1313,7 @@ class RTTMonitorPage(QWidget):
         if not self._is_connected:
             target = self.cb_target.currentText().strip()
             if not target:
-                _infobar.warn(self, "提示", "请先选择目标芯片")
+                _infobar.warn(self, self.tr("提示"), self.tr("请先选择目标芯片"))
                 return
             iface = self.cb_iface.currentText()
             speed = int(self.cb_speed.currentText())
@@ -1302,7 +1325,7 @@ class RTTMonitorPage(QWidget):
             self._cfg.set("rtt_channel", channel)
             # 立即给 UI 反馈：禁用按钮 + 改文字
             self.btn_connect.setEnabled(False)
-            self.btn_connect.setText("连接中…")
+            self.btn_connect.setText(self.tr("连接中…"))
             self._worker.connect_requested.emit(target, iface, speed, channel)
         else:
             # 先恢复 UI 再 emit：万一 emit 异常或被堵也不影响按钮已经切回"连接"。
@@ -1315,22 +1338,22 @@ class RTTMonitorPage(QWidget):
     def _apply_reset_mode_to_button(self, mode: str) -> None:
         """按 cfg.reset_mode 刷新 btn_reset 文字 + tooltip。"""
         if mode == "auto_reconnect":
-            self.btn_reset.setText("重置(重连)")
-            _tip(self.btn_reset, "F4 重置目标 — 当前模式：断开+重连（更可靠）")
+            self.btn_reset.setText(self.tr("重置(重连)"))
+            _tip(self.btn_reset, self.tr("F4 重置目标 — 当前模式：断开+重连（更可靠）"))
         else:
-            self.btn_reset.setText("重置目标")
-            _tip(self.btn_reset, "F4 重置目标 — 当前模式：仅重置 MCU")
+            self.btn_reset.setText(self.tr("重置目标"))
+            _tip(self.btn_reset, self.tr("F4 重置目标 — 当前模式：仅重置 MCU"))
 
     def _on_reset_clicked(self) -> None:
         # auto_reconnect=reset+disconnect+sleep+reconnect）
         self._reset_count += 1
-        self.lbl_reset_count.setText(f"复位: {self._reset_count}")
+        self.lbl_reset_count.setText(self.tr("复位: {n}").format(n=self._reset_count))
         self._worker.reset_requested.emit(self._cfg.get("reset_mode"))
 
     def _on_reset_halt_clicked(self) -> None:
         """重置并暂停：固定 halt 意图，与配置的 reset_mode 无关。"""
         self._reset_count += 1
-        self.lbl_reset_count.setText(f"复位: {self._reset_count}")
+        self.lbl_reset_count.setText(self.tr("复位: {n}").format(n=self._reset_count))
         self._worker.reset_requested.emit(RESET_MODE_HALT)
 
     def _on_channel_changed(self, ch: int) -> None:
@@ -1339,7 +1362,7 @@ class RTTMonitorPage(QWidget):
 
     def _on_send_clicked(self) -> None:
         if not self._is_connected:
-            _infobar.warn(self, "未连接目标", "请先连接 J-Link 和目标设备后再发送")
+            _infobar.warn(self, self.tr("未连接目标"), self.tr("请先连接 J-Link 和目标设备后再发送"))
             return
         text = self.te_send.toPlainText().strip()
         if not text:
@@ -1365,7 +1388,7 @@ class RTTMonitorPage(QWidget):
                 text = " ".join(f"{b:02X}" for b in full_payload)
                 is_hex = True
             except Exception as exc:
-                _infobar.warn(self, "CRC 错误", str(exc))
+                _infobar.warn(self, self.tr("CRC 错误"), str(exc))
                 return
 
         # 非 HEX 模式时追加换行符（用户可在设置中选择 CRLF/LF/CR/无）
@@ -1382,7 +1405,7 @@ class RTTMonitorPage(QWidget):
         hist.append(orig_text)
         self._cfg.set("send_history", hist)
         self._send_count += 1
-        self.lbl_status_tx.setText(f"发送: {self._send_count}")
+        self.lbl_status_tx.setText(self.tr("发送: {n}").format(n=self._send_count))
 
         # 发送回显：勾选"显示发送字符串"后每次发送在显示区追加一行染色文本
         if self.chk_show_send_text.isChecked():
@@ -1479,7 +1502,7 @@ class RTTMonitorPage(QWidget):
             TeachingTipView,
         )
         view = TeachingTipView(
-            title="自动断帧",
+            title=self.tr("自动断帧"),
             content=self._frame_help_content,
             isClosable=True,
             tailPosition=TeachingTipTailPosition.TOP,
@@ -1513,7 +1536,7 @@ class RTTMonitorPage(QWidget):
         self.btn_timed_unit.setEnabled(not checked)
         if checked:
             if not self._is_connected:
-                _infobar.warn(self, "提示", "未连接目标，定时发送将在连接后自动启动")
+                _infobar.warn(self, self.tr("提示"), self.tr("未连接目标，定时发送将在连接后自动启动"))
                 self._timed_send_pending = True
                 return
             self._start_timed_send_timer()
@@ -1558,17 +1581,17 @@ class RTTMonitorPage(QWidget):
             if self._cfg.get("auto_mark_on_connect"):
                 target = info.get("target_device", "—")
                 ts = datetime.now().strftime("%H:%M:%S")
-                self._insert_mark_text(f"已连接 {target} @ {ts}")
+                self._insert_mark_text(self.tr("已连接 {target} @ {ts}").format(target=target, ts=ts))
         else:
             self._set_disconnected_ui()
             if self._cfg.get("auto_mark_on_disconnect"):
                 ts = datetime.now().strftime("%H:%M:%S")
-                self._insert_mark_text(f"已断开 @ {ts}")
+                self._insert_mark_text(self.tr("已断开 @ {ts}").format(ts=ts))
 
     def _set_connected_ui(self, info: dict) -> None:
         self._is_connected = True
         self.btn_connect.setEnabled(True)
-        self.btn_connect.setText("断开")
+        self.btn_connect.setText(self.tr("断开"))
         self.btn_connect.setIcon(FluentIcon.PAUSE)
         self.btn_reset.setEnabled(True)
         self.btn_reset_halt.setEnabled(True)
@@ -1582,14 +1605,14 @@ class RTTMonitorPage(QWidget):
         target = info.get("target_device", "—")
         iface = info.get("interface", "—")
         speed = info.get("speed_khz", "—")
-        self.lbl_status_state.setText(f"● 已连接 {target}")
+        self.lbl_status_state.setText(self.tr("● 已连接 {target}").format(target=target))
         self.lbl_status_state.setStyleSheet("color: #2ecc71;")
         # 定时发送：连接后自动恢复（如果 checkbox 仍勾选且 pending）
         if self._timed_send_pending and self.chk_timed_send.isChecked():
             self._start_timed_send_timer()
 
         # 卡片标题加摘要
-        self.gb_info.setTitle(f"设备信息 — {target} / {iface} / {speed} kHz")
+        self.gb_info.setTitle(self.tr("设备信息 — {target} / {iface} / {speed} kHz").format(target=target, iface=iface, speed=speed))
 
         self.btn_toolbar_connect.setChecked(True)
         self.btn_toolbar_connect.setIcon(FluentIcon.PAUSE)
@@ -1597,7 +1620,7 @@ class RTTMonitorPage(QWidget):
     def     _set_disconnected_ui(self) -> None:
         self._is_connected = False
         self.btn_connect.setEnabled(True)
-        self.btn_connect.setText("连接")
+        self.btn_connect.setText(self.tr("连接"))
         self.btn_connect.setIcon(FluentIcon.PLAY)
         self.btn_reset.setEnabled(False)
         self.btn_reset_halt.setEnabled(False)
@@ -1605,18 +1628,18 @@ class RTTMonitorPage(QWidget):
         for lbl in self._info_labels.values():
             lbl.setText("-")
         # 状态栏复位
-        self.lbl_status_state.setText("● 未连接")
+        self.lbl_status_state.setText(self.tr("● 未连接"))
         self.lbl_status_state.setStyleSheet("color: #888888;")
-        self.lbl_status_rate.setText("0 B/s · 0 行/s")
-        self.lbl_status_total.setText("总 0 B · 0 行 · 00:00:00")
-        self.lbl_reset_count.setText("复位: 0")
-        self.gb_info.setTitle("设备信息")
+        self.lbl_status_rate.setText(self.tr("0 B/s · 0 行/s"))
+        self.lbl_status_total.setText(self.tr("总 0 B · 0 行 · 00:00:00"))
+        self.lbl_reset_count.setText(self.tr("复位: 0"))
+        self.gb_info.setTitle(self.tr("设备信息"))
         # 清除上次统计 delta 基线
         self._stats_prev_bytes = 0
         self._stats_prev_lines = 0
         self._send_count = 0
-        self.lbl_status_tx.setText("发送: 0")
-        self.lbl_status_rx.setText("接收: 0 - 0")
+        self.lbl_status_tx.setText(self.tr("发送: 0"))
+        self.lbl_status_rx.setText(self.tr("接收: 0 - 0"))
 
         self.btn_toolbar_connect.setChecked(False)
         self.btn_toolbar_connect.setIcon(FluentIcon.PLAY)
@@ -1630,8 +1653,8 @@ class RTTMonitorPage(QWidget):
             return
         total_b, total_l, start_ts = self._worker.get_stats()
         if start_ts == 0:
-            self.lbl_status_rate.setText("0 B/s · 0 行/s")
-            self.lbl_status_total.setText("总 0 B · 0 行 · 00:00:00")
+            self.lbl_status_rate.setText(self.tr("0 B/s · 0 行/s"))
+            self.lbl_status_total.setText(self.tr("总 0 B · 0 行 · 00:00:00"))
             self._stats_prev_bytes = 0
             self._stats_prev_lines = 0
             return
@@ -1639,19 +1662,19 @@ class RTTMonitorPage(QWidget):
         delta_l = max(0, total_l - self._stats_prev_lines)
         self._stats_prev_bytes = total_b
         self._stats_prev_lines = total_l
-        self.lbl_status_rate.setText(f"{_human_bytes(delta_b)}/s · {delta_l} 行/s")
+        self.lbl_status_rate.setText(self.tr("{bytes}/s · {lines} 行/s").format(bytes=_human_bytes(delta_b), lines=delta_l))
         # 总字节 + 会话时长
         import time as _t
         secs = int(_t.time() - start_ts) if start_ts > 0 else 0
         hh, mm, ss = secs // 3600, (secs % 3600) // 60, secs % 60
         duration = f"{hh:02d}:{mm:02d}:{ss:02d}"
-        self.lbl_status_total.setText(f"总 {_human_bytes(total_b)} · {total_l} 行 · {duration}")
-        self.lbl_status_rx.setText(f"接收: {total_b} - {total_l}")
+        self.lbl_status_total.setText(self.tr("总 {bytes} · {lines} 行 · {duration}").format(bytes=_human_bytes(total_b), lines=total_l, duration=duration))
+        self.lbl_status_rx.setText(self.tr("接收: {bytes} - {lines}").format(bytes=total_b, lines=total_l))
 
     def _update_encoding_label(self, encoding: str) -> None:
         if hasattr(self, "lbl_status_encoding"):
             display: str = _ENCODING_LABEL_MAP.get(encoding, encoding.upper())
-            self.lbl_status_encoding.setText(f"编码: {display}")
+            self.lbl_status_encoding.setText(self.tr("编码: {name}").format(name=display))
 
     def _on_rtt_data(self, text: str) -> None:
         """worker 已经 50ms 合并好，直接 insertText。
@@ -1820,14 +1843,14 @@ class RTTMonitorPage(QWidget):
         from pathlib import Path
         from PySide6.QtWidgets import QFileDialog
         default_name = f"rtt_snapshot_{datetime.now():%Y%m%d_%H%M%S}.log"
-        path, _ = QFileDialog.getSaveFileName(self, "保存当前显示", default_name, "Log files (*.log);;All files (*)")
+        path, _ = QFileDialog.getSaveFileName(self, self.tr("保存当前显示"), default_name, self.tr("Log files (*.log);;All files (*)"))
         if not path:
             return
         try:
             Path(path).write_text(self.display.toPlainText(), encoding="utf-8")
-            _infobar.ok(self, "已保存", path)
+            _infobar.ok(self, self.tr("已保存"), path)
         except Exception as e:
-            _infobar.err(self, "保存失败", str(e))
+            _infobar.err(self, self.tr("保存失败"), str(e))
 
     # ---- 搜索栏快捷键入口（由 MainWindow QShortcut 调用）----
     def on_shortcut_find(self) -> None:
@@ -1885,7 +1908,7 @@ class RTTMonitorPage(QWidget):
                    case_sensitive: bool, whole_word: bool, regex: bool) -> None:
         pat = self._build_regex(text, whole_word, regex, case_sensitive)
         if pat is None:
-            self.search_bar.set_match_label("无效正则")
+            self.search_bar.set_match_label(self.tr("无效正则"))
             return
         full = self.display.toPlainText()
         matches = list(pat.finditer(full))
@@ -1924,7 +1947,7 @@ class RTTMonitorPage(QWidget):
                     case_sensitive: bool, whole_word: bool, regex: bool) -> None:
         pat = self._build_regex(text, whole_word, regex, case_sensitive)
         if pat is None:
-            self.search_bar.set_match_label("无效正则")
+            self.search_bar.set_match_label(self.tr("无效正则"))
             return
         if replace_all:
             # 从后往前逐段替换，保留周围文本的 QTextCharFormat（不用 setPlainText，
@@ -1974,7 +1997,7 @@ class RTTMonitorPage(QWidget):
             self.search_bar.regex_enabled(),
             self.search_bar.case_sensitive())
         if pat is None:
-            self.search_bar.set_match_label("无效正则")
+            self.search_bar.set_match_label(self.tr("无效正则"))
             self.display.setExtraSelections([])
             return
         full = self.display.toPlainText()
@@ -2031,8 +2054,8 @@ class RTTMonitorPage(QWidget):
     def _on_command_result(self, cmd: str, ok: bool, msg: str) -> None:
         if ok:
             return
-        title = self._CMD_TITLES.get(cmd, "操作失败")
-        _infobar.warn(self, title, msg or "未知错误", duration=3000)
+        title = self.tr(self._CMD_TITLES.get(cmd, "操作失败"))
+        _infobar.warn(self, title, msg or self.tr("未知错误"), duration=3000)
 
     def _on_log_message(self, level: str, msg: str) -> None:
         """worker → UI 日志投递。level: error/warning/info。
@@ -2040,7 +2063,119 @@ class RTTMonitorPage(QWidget):
         走 _do_disconnect 并 emit connection_state_changed(False)，UI 自动回正。
         """
         if level == "error":
-            _infobar.err(self, "错误", msg)
+            _infobar.err(self, self.tr("错误"), msg)
         elif level == "warning":
-            _infobar.warn(self, "警告", msg)
+            _infobar.warn(self, self.tr("警告"), msg)
         # info 级别只进 logger 文件，不弹 toast——避免噪音
+
+    # ------------------------------------------------------------------
+    # i18n 重翻译
+    # ------------------------------------------------------------------
+    def changeEvent(self, event: QEvent) -> None:
+        """语言切换时刷新所有可见文本。"""
+        if event.type() == QEvent.Type.LanguageChange:
+            self._retranslate_ui()
+            super().changeEvent(event)
+        else:
+            super().changeEvent(event)
+
+    def _retranslate_ui(self) -> None:
+        """语言切换后重新设置所有可见文本。
+
+        动态状态文本（连接中、已连接设备摘要、统计速率等）不在本方法重置——
+        下一次状态变化或 1 秒 _update_stats tick 会用新的 tr() 上下文刷新。
+        这里只重置静态标签 + 控件文字 + tooltip。
+        """
+        # 左侧面板分区标题
+        self._lbl_conn_settings.setText(self.tr("连接设置"))
+        self._lbl_recv_settings.setText(self.tr("接收设置"))
+        self._lbl_send_settings.setText(self.tr("发送设置"))
+
+        # 连接设置区
+        self.cb_target.setPlaceholderText(self.tr("目标设备"))
+        self._lbl_iface.setText(self.tr("接口"))
+        self._lbl_speed.setText(self.tr("速度"))
+        self._lbl_rtt_channel.setText(self.tr("RTT 通道"))
+        # btn_connect 文字随连接状态变化：按当前状态刷新文字。
+        # 连接中（disabled）态保留"连接中…"，由后续状态回调覆盖。
+        if self.btn_connect.isEnabled():
+            self.btn_connect.setText(
+                self.tr("断开") if self._is_connected else self.tr("连接"))
+        _tip(self.btn_connect, self.tr("F2 连接 / F3 断开"))
+        # btn_reset 文字 + tooltip 由 _apply_reset_mode_to_button 维护，
+        # 直接调用一次刷新即可
+        self._apply_reset_mode_to_button(self._cfg.get("reset_mode"))
+        self.btn_reset_halt.setText(self.tr("重置并暂停"))
+        _tip(self.btn_reset_halt, self.tr("复位 MCU 并停在复位状态（halt）"))
+
+        # 设备信息卡片标题（断开时的默认值；连接时的摘要由 _set_connected_ui 维护）
+        if not self._is_connected:
+            self.gb_info.setTitle(self.tr("设备信息"))
+        # 设备信息行标签
+        for text, key in self._info_rows:
+            lbl_row = self._info_row_labels.get(key)
+            if lbl_row is not None:
+                lbl_row.setText(self.tr(f"{text}:"))
+
+        # 接收设置区
+        self.chk_auto_scroll.setText(self.tr("自动滚动"))
+        self.chk_pause.setText(self.tr("暂停接收"))
+        self.chk_power.setText(self.tr("电源输出"))
+        self.chk_log_rec.setText(self.tr("实时日志记录"))
+        self.chk_hex_display.setText(self.tr("十六进制显示"))
+        _tip(self.chk_hex_display, self.tr("将接收到的每个字节以大写的 HEX 格式显示"))
+        self.chk_auto_frame.setText(self.tr("自动断帧"))
+        # 自动断帧帮助内容
+        self._frame_help_title = self.tr("自动断帧")
+        self._frame_help_content = (
+            self.tr("接收超时设置（1~200 毫秒），默认 20ms。") + "\n\n"
+            + self.tr("在接收连续数据流时，如果相邻两批数据的接收时间间隔")
+            + "\n"
+            + self.tr("超过设定值，则判定为一帧数据结束，自动插入换行。")
+            + "\n\n"
+            + self.tr("自动断帧：启用后，每个数据帧显示后自动添加换行符，")
+            + "\n"
+            + self.tr("便于区分不同帧。"))
+
+        # 标记 / 清除 / 保存
+        self.le_mark.setPlaceholderText(self.tr("会话标记文本…"))
+        self.btn_mark.setText(self.tr("插入标记"))
+        _tip(self.btn_mark, self.tr("在显示区插入分隔标记"))
+        self.btn_clear.setText(self.tr("清除"))
+        self.btn_save.setText(self.tr("💾 保存"))
+
+        # 字号控制
+        self._lbl_font_size_label.setText(self.tr("字号"))
+        _tip(self.btn_font_minus, self.tr("字号 −1"))
+        _tip(self.btn_font_plus, self.tr("字号 +1"))
+
+        # 发送设置区
+        self.chk_timed_send.setText(self.tr("定时发送"))
+        self.btn_timed_unit.setText(self.tr("秒"))
+        self.chk_hex_left.setText(self.tr("十六进制发送"))
+        self.chk_show_send_text.setText(self.tr("显示发送字符串"))
+        _tip(self.btn_send_color, self.tr("选择发送回显颜色"))
+        self.chk_crc_script.setText(self.tr("脚本"))
+        _tip(self.cb_crc_algo, self.tr("发送时追加 CRC 后缀（算法选）"))
+
+        # 右侧收窄工具栏 tooltips
+        _tip(self.btn_panel_toggle, self.tr("显示/隐藏配置面板"))
+        _tip(self.btn_hex_rx_up, self.tr("接收 HEX 显示切换"))
+        _tip(self.btn_hex_tx_down, self.tr("发送 HEX 模式切换"))
+        _tip(self.btn_toolbar_pause, self.tr("暂停/恢复接收"))
+        _tip(self.btn_toolbar_clear, self.tr("清除显示"))
+        _tip(self.btn_toolbar_save, self.tr("保存当前"))
+        _tip(self.btn_toolbar_connect, self.tr("连接/断开"))
+        _tip(self.btn_send, self.tr("发送 (Enter) · 未连接时点击提示"))
+
+        # 状态栏（断开时的默认状态；连接时由 _update_stats / _set_connected_ui 维护）
+        if not self._is_connected:
+            self.lbl_status_state.setText(self.tr("● 未连接"))
+            self.lbl_status_rate.setText(self.tr("0 B/s · 0 行/s"))
+            self.lbl_status_total.setText(self.tr("总 0 B · 0 行 · 00:00:00"))
+            self.lbl_status_tx.setText(self.tr("发送: 0"))
+            self.lbl_status_rx.setText(self.tr("接收: 0 - 0"))
+            self.lbl_reset_count.setText(self.tr("复位: 0"))
+        # 编码标签：重算一次
+        self._update_encoding_label(self._cfg.get("rtt_encoding") or "utf-8")
+

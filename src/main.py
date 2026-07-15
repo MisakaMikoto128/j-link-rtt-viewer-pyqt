@@ -55,6 +55,9 @@ def main() -> int:
     from core.config_service import ConfigService
     cfg = ConfigService()
 
+    from core.i18n_service import init_translator
+    init_translator(cfg.get("language"))
+
     from qfluentwidgets import Theme, setTheme, setThemeColor
     theme_str = cfg.get("theme")
     if theme_str == "dark":

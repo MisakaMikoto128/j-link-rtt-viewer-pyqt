@@ -28,6 +28,7 @@ class ConfigService(QObject):
     rtt_poll_interval_changed = Signal(int) # poll timer interval in ms
     rtt_encoding_changed = Signal(str)      # RTT 解码编码（utf-8 / gbk / utf-16-le / latin-1 / ascii）
     reset_mode_changed = Signal(str)        # "normal" / "auto_reconnect" — RTT 页用来更新按钮文字
+    language_changed = Signal(str)          # "zh_CN" / "zh_TW" / "ja" / "ko" / "en" / "fr"
 
     DEFAULTS: dict[str, Any] = {
         "target_mcu": "",
@@ -37,6 +38,7 @@ class ConfigService(QObject):
         "send_history": [],
         "theme": "auto",            # light / dark / auto
         "theme_color": "#28afe9",
+        "language": "zh_CN",        # zh_CN / zh_TW / ja / ko / en / fr
         "font_family": "Consolas",
         "font_size": 13,
         # 内存页 hex dump 字号（family 沿用 font_family）
@@ -221,6 +223,8 @@ class ConfigService(QObject):
             self.rtt_poll_interval_changed.emit(value)
         elif key == "reset_mode":
             self.reset_mode_changed.emit(value)
+        elif key == "language":
+            self.language_changed.emit(value)
 
     def flush(self) -> None:
         self._flush_timer.stop()

@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QEvent
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -43,6 +43,26 @@ AUTHOR_GITHUB = "https://github.com/MisakaMikoto128"
 PROJECT_URL = "https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt"
 ISSUES_URL = f"{PROJECT_URL}/issues"
 
+# i18n：功能卡片数据（源文本用于 tr 查找）
+_FEATURE_DATA = [
+    (FluentIcon.COMMAND_PROMPT, "RTT 实时监控",
+     "16 通道任意切换；UTF-8 中文 + ANSI 颜色解析；"
+     "可向 MCU 发送文本 / 十六进制；搜索高亮、会话标记、节流落盘。"),
+    (FluentIcon.LIBRARY, "内存查看 / 写入",
+     "任意地址 Hex Dump，类型解析；hover 显示十进制；"
+     "diff 红色高亮；区间分块导出 .bin；高风险写内存（二次确认）。"),
+    (FluentIcon.PALETTE, "个性化设置",
+     "亮 / 暗 / 跟随系统主题；主题色自定义；"
+     "UI 与显示区字体独立调节；偏好节流落盘到 %APPDATA%。"),
+]
+
+_ACK_ITEMS = [
+    ("pylink-square 1.6.0", "SEGGER J-Link Python 封装"),
+    ("PySide6 / Qt", "跨平台 GUI 框架"),
+    ("PyQt-Fluent-Widgets", "Fluent Design 组件库"),
+    ("Nuitka", "Python → 原生可执行打包"),
+]
+
 
 class AboutPage(QWidget):
     def __init__(self, parent=None):
@@ -72,7 +92,8 @@ class AboutPage(QWidget):
     # ----------- Hero -----------
     def _build_hero(self) -> QWidget:
         card = HeaderCardWidget(self)
-        card.setTitle("关于本软件")
+        self._hero_card = card
+        card.setTitle(self.tr("关于本软件"))
 
         body = QWidget(card)
         h = QHBoxLayout(body)
@@ -86,7 +107,6 @@ class AboutPage(QWidget):
             logo.setBorderRadius(16, 16, 16, 16)
             logo.scaledToWidth(96)
         else:
-            # PNG 没拷过来时 fallback 用 FluentIcon DEVELOPER_TOOLS
             logo = IconWidget(FluentIcon.DEVELOPER_TOOLS, body)
             logo.setFixedSize(96, 96)
         logo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -96,32 +116,33 @@ class AboutPage(QWidget):
         text_col = QVBoxLayout()
         text_col.setSpacing(4)
 
-        # DisplayLabel 字号过大 (min ≈ 1100px) 会撑爆窄窗口；用 TitleLabel
-        title = TitleLabel("J-Link RTT Viewer", body)
-        text_col.addWidget(title)
+        self._hero_title = TitleLabel("J-Link RTT Viewer", body)
+        text_col.addWidget(self._hero_title)
 
         meta_row = QHBoxLayout()
         meta_row.setSpacing(8)
-        meta_row.addWidget(SubtitleLabel(f"v{APP_VERSION}", body))
+        self._hero_version = SubtitleLabel(f"v{APP_VERSION}", body)
+        meta_row.addWidget(self._hero_version)
         sep = CaptionLabel("·", body)
         sep.setEnabled(False)
         meta_row.addWidget(sep)
-        meta_row.addWidget(CaptionLabel("Python · PySide6 · Fluent Design", body))
+        self._hero_meta = CaptionLabel("Python · PySide6 · Fluent Design", body)
+        meta_row.addWidget(self._hero_meta)
         meta_row.addStretch(1)
         text_col.addLayout(meta_row)
 
-        tagline = BodyLabel(APP_TAGLINE, body)
-        tagline.setWordWrap(True)
-        text_col.addWidget(tagline)
+        self._hero_tagline = BodyLabel(self.tr(APP_TAGLINE), body)
+        self._hero_tagline.setWordWrap(True)
+        text_col.addWidget(self._hero_tagline)
 
         # 动作按钮行
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-        btn_repo = PrimaryPushButton(FluentIcon.GITHUB, "项目仓库", body)
-        btn_repo.clicked.connect(lambda: self._open_url(PROJECT_URL))
-        btn_row.addWidget(btn_repo)
-        btn_issue = HyperlinkButton(ISSUES_URL, "反馈 Issue", body, FluentIcon.FEEDBACK)
-        btn_row.addWidget(btn_issue)
+        self._btn_repo = PrimaryPushButton(FluentIcon.GITHUB, self.tr("项目仓库"), body)
+        self._btn_repo.clicked.connect(lambda: self._open_url(PROJECT_URL))
+        btn_row.addWidget(self._btn_repo)
+        self._btn_issue = HyperlinkButton(ISSUES_URL, self.tr("反馈 Issue"), body, FluentIcon.FEEDBACK)
+        btn_row.addWidget(self._btn_issue)
         btn_row.addStretch(1)
         text_col.addSpacing(6)
         text_col.addLayout(btn_row)
@@ -136,45 +157,34 @@ class AboutPage(QWidget):
         row = QHBoxLayout(wrap)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(12)
-        row.addWidget(self._feature_card(
-            FluentIcon.COMMAND_PROMPT,
-            "RTT 实时监控",
-            "16 通道任意切换；UTF-8 中文 + ANSI 颜色解析；"
-            "可向 MCU 发送文本 / 十六进制；搜索高亮、会话标记、节流落盘。",
-        ), 1)
-        row.addWidget(self._feature_card(
-            FluentIcon.LIBRARY,
-            "内存查看 / 写入",
-            "任意地址 Hex Dump，类型解析；hover 显示十进制；"
-            "diff 红色高亮；区间分块导出 .bin；高风险写内存（二次确认）。",
-        ), 1)
-        row.addWidget(self._feature_card(
-            FluentIcon.PALETTE,
-            "个性化设置",
-            "亮 / 暗 / 跟随系统主题；主题色自定义；"
-            "UI 与显示区字体独立调节；偏好节流落盘到 %APPDATA%。",
-        ), 1)
+        self._feature_cards: list[HeaderCardWidget] = []
+        self._feature_desc_labels: list[BodyLabel] = []
+        for icon, title, desc in _FEATURE_DATA:
+            card, desc_lbl = self._feature_card(icon, title, desc)
+            self._feature_cards.append(card)
+            self._feature_desc_labels.append(desc_lbl)
+            row.addWidget(card, 1)
         return wrap
 
-    def _feature_card(self, icon: FluentIcon, title: str, desc: str) -> HeaderCardWidget:
+    def _feature_card(self, icon: FluentIcon, title: str, desc: str):
         card = HeaderCardWidget(self)
-        card.setTitle(title)
+        card.setTitle(self.tr(title))
 
-        # 把 icon 塞进标题左侧
         ic = IconWidget(icon, card)
         ic.setFixedSize(QSize(20, 20))
         card.headerLayout.insertWidget(0, ic)
         card.headerLayout.insertSpacing(1, 8)
 
-        body = BodyLabel(desc, card)
+        body = BodyLabel(self.tr(desc), card)
         body.setWordWrap(True)
         card.viewLayout.addWidget(body)
-        return card
+        return card, body
 
     # ----------- Author -----------
     def _build_author_card(self) -> QWidget:
         card = HeaderCardWidget(self)
-        card.setTitle("作者")
+        self._author_card = card
+        card.setTitle(self.tr("作者"))
 
         body = QWidget(card)
         h = QHBoxLayout(body)
@@ -187,11 +197,14 @@ class AboutPage(QWidget):
 
         col = QVBoxLayout()
         col.setSpacing(2)
-        col.addWidget(StrongBodyLabel(AUTHOR_NAME, body))
-        col.addWidget(CaptionLabel(AUTHOR_BIO, body))
+        self._author_name_lbl = StrongBodyLabel(AUTHOR_NAME, body)
+        col.addWidget(self._author_name_lbl)
+        self._author_bio_lbl = CaptionLabel(self.tr(AUTHOR_BIO), body)
+        col.addWidget(self._author_bio_lbl)
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-        btn_row.addWidget(HyperlinkButton(AUTHOR_GITHUB, "GitHub 主页", body, FluentIcon.GITHUB))
+        self._btn_github = HyperlinkButton(AUTHOR_GITHUB, self.tr("GitHub 主页"), body, FluentIcon.GITHUB)
+        btn_row.addWidget(self._btn_github)
         btn_row.addStretch(1)
         col.addSpacing(4)
         col.addLayout(btn_row)
@@ -203,24 +216,20 @@ class AboutPage(QWidget):
     # ----------- Acknowledgments -----------
     def _build_acknowledgments(self) -> QWidget:
         card = HeaderCardWidget(self)
-        card.setTitle("第三方依赖")
+        self._ack_card = card
+        card.setTitle(self.tr("第三方依赖"))
 
-        # 2 列网格：name | role；role 加 wordWrap，避免单行强行撑宽整页
         grid = QGridLayout()
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(6)
-        items = [
-            ("pylink-square 1.6.0", "SEGGER J-Link Python 封装"),
-            ("PySide6 / Qt", "跨平台 GUI 框架"),
-            ("PyQt-Fluent-Widgets", "Fluent Design 组件库"),
-            ("Nuitka", "Python → 原生可执行打包"),
-        ]
-        for r, (name, role) in enumerate(items):
+        self._ack_role_labels: list[BodyLabel] = []
+        for r, (name, role) in enumerate(_ACK_ITEMS):
             n_lbl = StrongBodyLabel(f"• {name}")
             n_lbl.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
             grid.addWidget(n_lbl, r, 0)
-            r_lbl = BodyLabel(role)
+            r_lbl = BodyLabel(self.tr(role))
             r_lbl.setWordWrap(True)
+            self._ack_role_labels.append(r_lbl)
             grid.addWidget(r_lbl, r, 1)
         grid.setColumnStretch(1, 1)
 
@@ -235,20 +244,51 @@ class AboutPage(QWidget):
         v = QVBoxLayout(wrap)
         v.setContentsMargins(0, 8, 0, 0)
         v.setSpacing(2)
-        c1 = CaptionLabel(
-            "SEGGER® 与 J-Link® 是 SEGGER Microcontroller GmbH 的注册商标。"
-            "本项目与 SEGGER 无任何官方关联。"
+        self._footer_trademark = CaptionLabel(
+            self.tr("SEGGER® 与 J-Link® 是 SEGGER Microcontroller GmbH 的注册商标。"
+                    "本项目与 SEGGER 无任何官方关联。")
         )
-        c1.setWordWrap(True)
-        c1.setAlignment(Qt.AlignCenter)
-        c1.setEnabled(False)
-        v.addWidget(c1)
+        self._footer_trademark.setWordWrap(True)
+        self._footer_trademark.setAlignment(Qt.AlignCenter)
+        self._footer_trademark.setEnabled(False)
+        v.addWidget(self._footer_trademark)
 
-        c2 = CaptionLabel(f"© 2026 {AUTHOR_NAME}  ·  MIT License")
-        c2.setAlignment(Qt.AlignCenter)
-        c2.setEnabled(False)
-        v.addWidget(c2)
+        self._footer_copyright = CaptionLabel(f"© 2026 {AUTHOR_NAME}  ·  MIT License")
+        self._footer_copyright.setAlignment(Qt.AlignCenter)
+        self._footer_copyright.setEnabled(False)
+        v.addWidget(self._footer_copyright)
         return wrap
+
+    # ------------------------------------------------------------------
+    # i18n 重翻译
+    # ------------------------------------------------------------------
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() == QEvent.Type.LanguageChange:
+            self._retranslate_ui()
+        super().changeEvent(event)
+
+    def _retranslate_ui(self) -> None:
+        self._hero_card.setTitle(self.tr("关于本软件"))
+        self._hero_tagline.setText(self.tr(APP_TAGLINE))
+        self._btn_repo.setText(self.tr("项目仓库"))
+        self._btn_issue.setText(self.tr("反馈 Issue"))
+
+        for card, (_, title, desc), desc_lbl in zip(self._feature_cards, _FEATURE_DATA, self._feature_desc_labels):
+            card.setTitle(self.tr(title))
+            desc_lbl.setText(self.tr(desc))
+
+        self._author_card.setTitle(self.tr("作者"))
+        self._author_bio_lbl.setText(self.tr(AUTHOR_BIO))
+        self._btn_github.setText(self.tr("GitHub 主页"))
+
+        self._ack_card.setTitle(self.tr("第三方依赖"))
+        for r_lbl, (_, role) in zip(self._ack_role_labels, _ACK_ITEMS):
+            r_lbl.setText(self.tr(role))
+
+        self._footer_trademark.setText(
+            self.tr("SEGGER® 与 J-Link® 是 SEGGER Microcontroller GmbH 的注册商标。"
+                    "本项目与 SEGGER 无任何官方关联。")
+        )
 
     # ----------- helpers -----------
     @staticmethod
