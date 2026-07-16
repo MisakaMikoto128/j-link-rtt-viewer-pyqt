@@ -45,6 +45,19 @@ RESET_MODE_AUTO_RECONNECT = "auto_reconnect"
 RESET_MODE_HALT = "halt"
 
 
+def encode_send_payload(data: str, is_hex: bool) -> bytes:
+    """把发送文本编码为写入 RTT 的字节：HEX 模式按十六进制解码，否则 UTF-8 编码。
+
+    worker _on_send_data 实际写入 与 UI 即时统计发送字节数 共用，避免编码逻辑重复。
+    """
+    if is_hex:
+        cleaned = data.replace(" ", "").replace("\n", "").replace("\r", "")
+        if len(cleaned) % 2 != 0:
+            cleaned += "0"
+        return bytes.fromhex(cleaned)
+    return data.encode("utf-8")
+
+
 class JLinkWorker(QObject):
     """J-Link 后台业务对象。**必须 moveToThread 到一个 QThread 后再用**。"""
 
@@ -118,8 +131,6 @@ class JLinkWorker(QObject):
         self._stats_lock = threading.Lock()
         self._total_bytes: int = 0
         self._total_lines: int = 0
-        self._sent_bytes: int = 0        # 累计已发送字节（跨连接累计，reset_counts 清零）
-        self._sent_last_bytes: int = 0   # 最近一次发送的字节数
         self._session_start_ts: float = 0.0   # 0 = 未开始会话
 
     # ============================================================
@@ -189,14 +200,6 @@ class JLinkWorker(QObject):
         with self._stats_lock:
             return self._total_bytes, self._total_lines, self._session_start_ts
 
-    def get_sent_stats(self) -> tuple[int, int]:
-        """同步取发送字节统计 (sent_bytes_total, sent_last_bytes)。
-
-        sent_bytes_total：跨连接累计的已发送字节；sent_last_bytes：最近一次发送的字节数。
-        """
-        with self._stats_lock:
-            return self._sent_bytes, self._sent_last_bytes
-
     def reset_counts(self) -> None:
         """清零收发字节/行计数，保留会话时长（_session_start_ts 不变）。
 
@@ -206,8 +209,6 @@ class JLinkWorker(QObject):
         with self._stats_lock:
             self._total_bytes = 0
             self._total_lines = 0
-            self._sent_bytes = 0
-            self._sent_last_bytes = 0
 
     # ============================================================
     # 连接 / 断开
@@ -389,18 +390,8 @@ class JLinkWorker(QObject):
             self.command_result.emit("send_data", False, "未连接")
             return
         try:
-            if is_hex:
-                cleaned = data.replace(" ", "").replace("\n", "").replace("\r", "")
-                if len(cleaned) % 2 != 0:
-                    cleaned += "0"
-                payload = bytes.fromhex(cleaned)
-            else:
-                payload = data.encode("utf-8")
+            payload = encode_send_payload(data, is_hex)
             written = self.jlink.rtt_write(self._channel, payload)
-            # 发送字节统计：按实际写入量累计（跨连接累计，reset_counts 清零）
-            with self._stats_lock:
-                self._sent_bytes += written
-                self._sent_last_bytes = written
             ok = written == len(payload)
             self.command_result.emit("send_data", ok, "" if ok else "rtt_write 写入不完整")
         except Exception as e:

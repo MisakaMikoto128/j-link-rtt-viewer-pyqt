@@ -55,6 +55,10 @@ def main() -> int:
     from core.config_service import ConfigService
     cfg = ConfigService()
 
+    from core.screen_keeper import apply_keep_screen_on
+    if cfg.get("keep_screen_on"):
+        apply_keep_screen_on(True)
+
     from core.i18n_service import init_translator
     init_translator(cfg.get("language"))
 
@@ -73,6 +77,7 @@ def main() -> int:
     win.show()
 
     rc = app.exec()
+    apply_keep_screen_on(False)
     cfg.flush()
     logger.info(f"应用退出，rc={rc}")
     return rc

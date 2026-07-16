@@ -61,15 +61,14 @@ _ENCODING_DISPLAY_NAMES: list[str] = [
     "UTF-8", "GBK", "UTF-16-LE", "Latin-1", "ASCII",
 ]
 
-# --- 发送换行符选项 ---
+# --- 换行符选项 ---
 _SEND_LINE_ENDING_DISPLAY: dict[str, str] = {
     "\r\n": "CRLF (\\r\\n)",
     "\n": "LF (\\n)",
     "\r": "CR (\\r)",
-    "": "无",
 }
 _SEND_LINE_ENDING_FROM_DISPLAY: dict[str, str] = {v: k for k, v in _SEND_LINE_ENDING_DISPLAY.items()}
-_SEND_LINE_ENDING_NAMES: list[str] = ["CRLF (\\r\\n)", "LF (\\n)", "CR (\\r)", "无"]
+_SEND_LINE_ENDING_NAMES: list[str] = ["CRLF (\\r\\n)", "LF (\\n)", "CR (\\r)"]
 
 
 class _SettingRow(QWidget):
@@ -80,7 +79,7 @@ class _SettingRow(QWidget):
         self._title_key = title
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 4, 0, 4)
-        self._label = BodyLabel(title)
+        self._label = BodyLabel(self.tr(title))
         lay.addWidget(self._label, 1, Qt.AlignVCenter)
         lay.addWidget(widget, 0, Qt.AlignVCenter)
 
@@ -121,7 +120,7 @@ class SettingsPage(QWidget):
         theme_str = self._cfg.get("theme")
         self.cb_theme.setCurrentIndex({"auto": 0, "light": 1, "dark": 2}.get(theme_str, 0))
         self.cb_theme.currentIndexChanged.connect(self._on_theme_changed)
-        row_theme = _SettingRow(self.tr("主题模式"), self.cb_theme)
+        row_theme = _SettingRow("主题模式", self.cb_theme)
         self._setting_rows.append(row_theme)
         app_lay.addWidget(row_theme)
 
@@ -134,7 +133,7 @@ class SettingsPage(QWidget):
         cur_lang_idx = self._lang_codes.index(cur_lang) if cur_lang in self._lang_codes else 0
         self.cb_language.setCurrentIndex(cur_lang_idx)
         self.cb_language.currentIndexChanged.connect(self._on_language_changed)
-        row_lang = _SettingRow(self.tr("语言"), self.cb_language)
+        row_lang = _SettingRow("语言", self.cb_language)
         self._setting_rows.append(row_lang)
         app_lay.addWidget(row_lang)
 
@@ -196,7 +195,7 @@ class SettingsPage(QWidget):
         self.sp_max_lines.setSingleStep(1000)
         self.sp_max_lines.setValue(self._cfg.get("max_display_lines"))
         self.sp_max_lines.valueChanged.connect(lambda v: self._cfg.set("max_display_lines", v))
-        row_max = _SettingRow(self.tr("显示区最大行数"), self.sp_max_lines)
+        row_max = _SettingRow("显示区最大行数", self.sp_max_lines)
         self._setting_rows.append(row_max)
         rtt_lay.addWidget(row_max)
 
@@ -205,7 +204,7 @@ class SettingsPage(QWidget):
         self.sp_poll.setSuffix(" ms")
         self.sp_poll.setValue(max(20, self._cfg.get("rtt_poll_interval_ms") or 100))
         self.sp_poll.valueChanged.connect(lambda v: self._cfg.set("rtt_poll_interval_ms", v))
-        row_poll = _SettingRow(self.tr("RTT 轮询间隔"), self.sp_poll)
+        row_poll = _SettingRow("RTT 轮询间隔", self.sp_poll)
         self._setting_rows.append(row_poll)
         rtt_lay.addWidget(row_poll)
 
@@ -216,20 +215,27 @@ class SettingsPage(QWidget):
         cur_display: str = _ENCODING_DISPLAY.get(cur_key, _ENCODING_DISPLAY["utf-8"])
         self.cb_encoding.setCurrentText(cur_display)
         self.cb_encoding.currentTextChanged.connect(self._on_encoding_changed)
-        row_enc = _SettingRow(self.tr("RTT 解码编码"), self.cb_encoding)
+        row_enc = _SettingRow("RTT 解码编码", self.cb_encoding)
         self._setting_rows.append(row_enc)
         rtt_lay.addWidget(row_enc)
 
-        # 发送换行符：CRLF / LF / CR / 无
+        # 换行符：CRLF / LF / CR
         self.cb_line_ending = ComboBox(self)
         self.cb_line_ending.addItems(_SEND_LINE_ENDING_NAMES)
         cur_le: str = self._cfg.get("send_line_ending") or "\r\n"
         cur_le_display: str = _SEND_LINE_ENDING_DISPLAY.get(cur_le, _SEND_LINE_ENDING_DISPLAY["\r\n"])
         self.cb_line_ending.setCurrentText(cur_le_display)
         self.cb_line_ending.currentTextChanged.connect(self._on_line_ending_changed)
-        row_le = _SettingRow(self.tr("发送换行符"), self.cb_line_ending)
+        row_le = _SettingRow("换行符", self.cb_line_ending)
         self._setting_rows.append(row_le)
         rtt_lay.addWidget(row_le)
+        # 保持屏幕常亮：勾选后调用系统 API 防止屏幕息屏
+        self.chk_keep_screen_on = CheckBox()
+        self.chk_keep_screen_on.setChecked(bool(self._cfg.get("keep_screen_on")))
+        self.chk_keep_screen_on.toggled.connect(self._on_keep_screen_on_toggled)
+        row_screen = _SettingRow("保持屏幕常亮", self.chk_keep_screen_on)
+        self._setting_rows.append(row_screen)
+        rtt_lay.addWidget(row_screen)
 
         log_row = QHBoxLayout()
         log_row.setContentsMargins(0, 4, 0, 4)
@@ -298,7 +304,7 @@ class SettingsPage(QWidget):
         self.cb_reset_mode.currentIndexChanged.connect(
             lambda i: self._cfg.set("reset_mode", _RESET_MODE_LABELS[i][0])
         )
-        row_reset = _SettingRow(self.tr("重置按钮行为"), self.cb_reset_mode)
+        row_reset = _SettingRow("重置按钮行为", self.cb_reset_mode)
         self._setting_rows.append(row_reset)
         mark_lay.addWidget(row_reset)
 
@@ -438,6 +444,11 @@ class SettingsPage(QWidget):
         """换行符下拉切换：从显示名映射到内部值。"""
         value: str = _SEND_LINE_ENDING_FROM_DISPLAY.get(display_name, "\r\n")
         self._cfg.set("send_line_ending", value)
+
+    def _on_keep_screen_on_toggled(self, checked: bool) -> None:
+        self._cfg.set("keep_screen_on", checked)
+        from core.screen_keeper import apply_keep_screen_on
+        apply_keep_screen_on(checked)
 
     def _on_pick_log_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, self.tr("选择日志目录"), self.lbl_log_dir.text())

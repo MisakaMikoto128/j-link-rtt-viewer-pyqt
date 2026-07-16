@@ -68,7 +68,7 @@ from qfluentwidgets import (
 from core.ansi_parser import AnsiAttrs, parse_ansi
 from core.config_service import ConfigService
 from core.crc_utils import CRC_ALGORITHMS, compute_crc
-from core.jlink_worker import RESET_MODE_HALT, JLinkWorker
+from core.jlink_worker import RESET_MODE_HALT, JLinkWorker, encode_send_payload
 
 from . import _infobar
 from .widgets.search_bar import SearchBar
@@ -943,7 +943,7 @@ class RTTMonitorPage(QWidget):
         row_echo.addWidget(self.btn_send_color)
         v.addLayout(row_echo)
 
-        # CRC 脚本
+        # 脚本
         row_crc = QHBoxLayout()
         row_crc.setSpacing(6)
         self.chk_crc_script = CheckBox(self.tr("脚本"))
@@ -951,8 +951,9 @@ class RTTMonitorPage(QWidget):
         self.cb_crc_algo.setFixedHeight(_CTRL_H)
         for display_name, _ in CRC_ALGORITHMS:
             self.cb_crc_algo.addItem(display_name)
-        self.cb_crc_algo.setCurrentIndex(1)  # 默认 CRC-16/MODBUS
-        _tip(self.cb_crc_algo, self.tr("发送时追加 CRC 后缀（算法选）"))
+        self.cb_crc_algo.addItem(self.tr("自动换行"))
+        self.cb_crc_algo.setCurrentIndex(self._cfg.get("send_script_index"))  # 默认 CRC-16/MODBUS
+        _tip(self.cb_crc_algo, self.tr("发送时追加脚本后缀（CRC / 自动换行）"))
         row_crc.addWidget(self.chk_crc_script)
         row_crc.addStretch(1)
         row_crc.addWidget(self.cb_crc_algo)
@@ -1237,6 +1238,8 @@ class RTTMonitorPage(QWidget):
 
         # CRC 脚本：勾选时显示红色提示条
         self.chk_crc_script.toggled.connect(self._on_crc_script_toggled)
+        self.cb_crc_algo.currentIndexChanged.connect(
+            lambda idx: self._cfg.set("send_script_index", idx))
 
         # 发送回显色块按钮：选色后持久化到 cfg（hex str）
         self.btn_send_color.colorChanged.connect(
@@ -1366,34 +1369,32 @@ class RTTMonitorPage(QWidget):
             return
         is_hex = self.btn_hex_tx_down.isChecked()
 
-        # CRC 脚本：在原始 payload 后追加 CRC 字节
+        # 脚本：勾选后按 cb_crc_algo 所选追加后缀 -- CRC 算法 或 自动换行
         if self.chk_crc_script.isChecked():
-            try:
-                algo_idx = self.cb_crc_algo.currentIndex()
-                _, algo_key = CRC_ALGORITHMS[algo_idx]
-                # 先把用户输入转成原始 bytes
-                if is_hex:
-                    cleaned = text.replace(" ", "").replace("\n", "").replace("\r", "")
-                    if len(cleaned) % 2 != 0:
-                        cleaned += "0"
-                    payload = bytes.fromhex(cleaned)
-                else:
-                    payload = text.encode("utf-8")
-                crc_bytes = compute_crc(algo_key, payload)
-                full_payload = payload + crc_bytes
-                # 追加 CRC 后以 HEX 方式发送
-                text = " ".join(f"{b:02X}" for b in full_payload)
-                is_hex = True
-            except Exception as exc:
-                _infobar.warn(self, self.tr("CRC 错误"), str(exc))
-                return
-
-        # 非 HEX 模式时追加换行符（用户可在设置中选择 CRLF/LF/CR/无）
-        if not is_hex:
-            ending = self._cfg.get('send_line_ending') or '\r\n'
-            text += ending
+            script_idx = self.cb_crc_algo.currentIndex()
+            if script_idx >= len(CRC_ALGORITHMS):
+                # 「自动换行」：非 HEX 模式追加换行符（字符取自设置页「换行符」）
+                if not is_hex:
+                    text += self._cfg.get('send_line_ending')
+            else:
+                try:
+                    _, algo_key = CRC_ALGORITHMS[script_idx]
+                    payload = encode_send_payload(text, is_hex)
+                    crc_bytes = compute_crc(algo_key, payload)
+                    full_payload = payload + crc_bytes
+                    # 追加 CRC 后以 HEX 方式发送
+                    text = " ".join(f"{b:02X}" for b in full_payload)
+                    is_hex = True
+                except Exception as exc:
+                    _infobar.warn(self, self.tr("CRC 错误"), str(exc))
+                    return
 
         self._worker.send_data_requested.emit(text, is_hex)
+        # 发送字节统计：发送时即时刷新（不走 1s 轮询，避免延迟）
+        sent_bytes = len(encode_send_payload(text, is_hex))
+        self._send_total_bytes += sent_bytes
+        self._send_last_bytes = sent_bytes
+        self.lbl_status_tx.setText(self.tr("发送: {total} - {last}").format(total=self._send_total_bytes, last=self._send_last_bytes))
         # 加入历史（去重 + 末尾追加）—— 存用户原始输入，不存换行符和 CRC 追加后的
         orig_text = self.te_send.toPlainText().strip()
         hist = list(self._cfg.get("send_history") or [])
@@ -1643,11 +1644,6 @@ class RTTMonitorPage(QWidget):
         delta_b = max(0, total_b - self._stats_prev_bytes)
         self._stats_prev_bytes = total_b
         self.lbl_status_rx.setText(self.tr("接收: {total} - {last}").format(total=total_b, last=delta_b))
-        # 发送：总数 - 上一次发送（最近一次发送的字节数）
-        sent_total, sent_last = self._worker.get_sent_stats()
-        self._send_total_bytes = sent_total
-        self._send_last_bytes = sent_last
-        self.lbl_status_tx.setText(self.tr("发送: {total} - {last}").format(total=sent_total, last=sent_last))
         # 会话时长：断开（start_ts=0）显示占位，连接态自连接起累计
         if start_ts == 0:
             self.lbl_status_duration.setText(self.tr("时长: {duration}").format(duration="00:00:00"))
@@ -2141,7 +2137,8 @@ class RTTMonitorPage(QWidget):
         self.chk_show_send_text.setText(self.tr("显示发送字符串"))
         _tip(self.btn_send_color, self.tr("选择发送回显颜色"))
         self.chk_crc_script.setText(self.tr("脚本"))
-        _tip(self.cb_crc_algo, self.tr("发送时追加 CRC 后缀（算法选）"))
+        _tip(self.cb_crc_algo, self.tr("发送时追加脚本后缀（CRC / 自动换行）"))
+        self.cb_crc_algo.setItemText(len(CRC_ALGORITHMS), self.tr("自动换行"))
 
         # 右侧收窄工具栏 tooltips
         _tip(self.btn_panel_toggle, self.tr("显示/隐藏配置面板"))

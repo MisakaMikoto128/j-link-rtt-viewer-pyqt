@@ -46,8 +46,10 @@ class ConfigService(QObject):
         "max_display_lines": 10000,
         "rtt_poll_interval_ms": 100,   # RTT 轮询间隔（ms）—— 旧版叫 rx_timeout_ms，已迁移
         "rtt_encoding": "utf-8",       # RTT 解码编码：utf-8 / gbk / utf-16-le / latin-1 / ascii
-        # 发送换行符：\\r\\n (CRLF) / \\n (LF) / \\r (CR) / "" (无)
+        # 换行符（系统级：发送「自动换行」追加字符 + 接收断行识别）：\r\n (CRLF) / \n (LF) / \r (CR)
         "send_line_ending": "\r\n",
+        "send_script_index": 1,  # 脚本下拉框选中项（cb_crc_algo：CRC 算法索引 或 末项自动换行）
+        "keep_screen_on": False,  # 保持屏幕常亮（防息屏）
         "log_dir": "",              # 空 → 用默认 %APPDATA%/JLinkRTTViewer/logs
         "window_geometry": "",      # base64 of QByteArray
         "hex_send_mode": False,
