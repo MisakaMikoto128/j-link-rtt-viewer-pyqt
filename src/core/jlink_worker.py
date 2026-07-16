@@ -118,6 +118,8 @@ class JLinkWorker(QObject):
         self._stats_lock = threading.Lock()
         self._total_bytes: int = 0
         self._total_lines: int = 0
+        self._sent_bytes: int = 0        # 累计已发送字节（跨连接累计，reset_counts 清零）
+        self._sent_last_bytes: int = 0   # 最近一次发送的字节数
         self._session_start_ts: float = 0.0   # 0 = 未开始会话
 
     # ============================================================
@@ -187,6 +189,26 @@ class JLinkWorker(QObject):
         with self._stats_lock:
             return self._total_bytes, self._total_lines, self._session_start_ts
 
+    def get_sent_stats(self) -> tuple[int, int]:
+        """同步取发送字节统计 (sent_bytes_total, sent_last_bytes)。
+
+        sent_bytes_total：跨连接累计的已发送字节；sent_last_bytes：最近一次发送的字节数。
+        """
+        with self._stats_lock:
+            return self._sent_bytes, self._sent_last_bytes
+
+    def reset_counts(self) -> None:
+        """清零收发字节/行计数，保留会话时长（_session_start_ts 不变）。
+
+        供 UI「重置计数」按钮调用：用户主动清零收发统计，会话时长继续累计。
+        与 _read_loop 增量写之间的竞争由 _stats_lock 串行化。
+        """
+        with self._stats_lock:
+            self._total_bytes = 0
+            self._total_lines = 0
+            self._sent_bytes = 0
+            self._sent_last_bytes = 0
+
     # ============================================================
     # 连接 / 断开
     # ============================================================
@@ -226,10 +248,8 @@ class JLinkWorker(QObject):
                 info = self._collect_device_info(target, iface, speed)
                 with self._info_lock:
                     self._device_info = info
-                # 重置统计：每次新连接是一个新会话
+                # 新会话：仅重置时长起点；收发计数跨连接累计，由 reset_counts() 显式清零
                 with self._stats_lock:
-                    self._total_bytes = 0
-                    self._total_lines = 0
                     self._session_start_ts = time.time()
                 self._logger.info(f"已连接 {target} ({iface} {speed}kHz, RTT ch{channel})")
                 self.connection_state_changed.emit(True)
@@ -280,6 +300,10 @@ class JLinkWorker(QObject):
         self._stop_read = False
         with self._info_lock:
             self._device_info = {}
+        # 仅重置会话时长为 0（断开态标记）：收发计数跨断开保留，由 reset_counts()
+        # 显式清零。start_ts=0 让 UI 的 _update_stats 显示时长占位、不再按连接态累计。
+        with self._stats_lock:
+            self._session_start_ts = 0.0
         if was_active:
             self._logger.info("已断开 J-Link")
             self.connection_state_changed.emit(False)
@@ -373,6 +397,10 @@ class JLinkWorker(QObject):
             else:
                 payload = data.encode("utf-8")
             written = self.jlink.rtt_write(self._channel, payload)
+            # 发送字节统计：按实际写入量累计（跨连接累计，reset_counts 清零）
+            with self._stats_lock:
+                self._sent_bytes += written
+                self._sent_last_bytes = written
             ok = written == len(payload)
             self.command_result.emit("send_data", ok, "" if ok else "rtt_write 写入不完整")
         except Exception as e:

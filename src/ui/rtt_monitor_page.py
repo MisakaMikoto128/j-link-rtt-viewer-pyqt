@@ -50,6 +50,7 @@ from qfluentwidgets import (
     EditableComboBox,
     FluentIcon,
     HeaderCardWidget,
+    HyperlinkButton,
     LineEdit,
     PlainTextEdit,
     PrimaryPushButton,
@@ -90,17 +91,6 @@ def _tip(widget: QWidget, text: str, duration: int = 300) -> None:
     if not widget.property("_fluent_tip_installed"):
         widget.installEventFilter(ToolTipFilter(widget, duration))
         widget.setProperty("_fluent_tip_installed", True)
-
-
-def _human_bytes(n: int) -> str:
-    """1234 → '1.2 KB'；< 1024 不缩。"""
-    if n < 1024:
-        return f"{n} B"
-    if n < 1024 * 1024:
-        return f"{n / 1024:.1f} KB"
-    if n < 1024 * 1024 * 1024:
-        return f"{n / (1024 * 1024):.1f} MB"
-    return f"{n / (1024 * 1024 * 1024):.2f} GB"
 
 
 _ANSI_COLOR_MAP = {
@@ -407,9 +397,11 @@ class RTTMonitorPage(QWidget):
         self._match_count_timer.setInterval(200)
         self._match_count_timer.timeout.connect(self._do_update_match_count)
 
-        # 状态栏统计：1s 一次从 worker 同步取吞吐，UI 端算 delta 显示字节/秒
+        # 状态栏统计：1s 一次从 worker 同步收发计数与连接时长
+        # _stats_prev_bytes：上次轮询的总字节数，用于算「上一次接收」增量
+        # _connected_target：连接态状态栏文案的目标名，供重翻译复用
         self._stats_prev_bytes = 0
-        self._stats_prev_lines = 0
+        self._connected_target = "-"
         self._stats_timer = QTimer(self)
         self._stats_timer.setInterval(1000)
         self._stats_timer.timeout.connect(self._update_stats)
@@ -427,10 +419,9 @@ class RTTMonitorPage(QWidget):
         # 由 _on_state_changed 维护。
         self._is_connected = False
 
-        # 复位计数：连接成功时重置为 0，每次 reset 操作 +1
-        self._reset_count = 0
-        # 发送次数计数（对应状态栏"发送: N"）   
-        self._send_count = 0
+        # 发送字节统计缓存（跨连接累计；_update_stats 从 worker 同步）
+        self._send_total_bytes = 0
+        self._send_last_bytes = 0
         
         # 自动断帧：上次接收数据的时间戳
         import time as _time_mod
@@ -1115,33 +1106,33 @@ class RTTMonitorPage(QWidget):
         send_area.addLayout(send_btn_col)
 
         # ---- 底部状态栏 ----
+        # 仅保留：连接状态 / 发送 / 接收 / 会话时长 / 复位(清零收发计数) / 编码
         self.lbl_status_state = BodyLabel(self.tr("● 未连接"))
         self.lbl_status_state.setStyleSheet("color: #888888;")
         self.lbl_status_state.setMinimumWidth(100)
-        self.lbl_status_rate = BodyLabel(self.tr("0 B/s · 0 行/s"))
-        self.lbl_status_rate.setMinimumWidth(120)
-        self.lbl_status_total = BodyLabel(self.tr("总 0 B · 0 行 · 00:00:00"))
-        self.lbl_status_total.setMinimumWidth(160)
-        # 发送/接收计数（贴近"发送: N  接收: N - M"的简洁风格）
-        self.lbl_status_tx = BodyLabel(self.tr("发送: 0"))
+        self.lbl_status_tx = BodyLabel(self.tr("发送: 0 - 0"))
         self.lbl_status_tx.setMinimumWidth(80)
+        _tip(self.lbl_status_tx, self.tr("发送总数 - 上一次发送（字节）"))
         self.lbl_status_rx = BodyLabel(self.tr("接收: 0 - 0"))
         self.lbl_status_rx.setMinimumWidth(100)
+        _tip(self.lbl_status_rx, self.tr("接收总数 - 上一次接收增量（字节）"))
+        self.lbl_status_duration = BodyLabel(self.tr("时长: {duration}").format(duration="00:00:00"))
+        self.lbl_status_duration.setMinimumWidth(110)
+        self.btn_reset_stats = HyperlinkButton()
+        self.btn_reset_stats.setText(self.tr("重置计数"))
+        _tip(self.btn_reset_stats, self.tr("清零发送 / 接收计数（保留会话时长）"))
         self.lbl_status_encoding = BodyLabel("")
-        self.lbl_reset_count = BodyLabel(self.tr("复位: 0"))
 
         status_row = QHBoxLayout()
         status_row.setContentsMargins(4, 0, 4, 0)
         status_row.setSpacing(16)
         status_row.addWidget(self.lbl_status_state)
         status_row.addStretch(1)
-        status_row.addWidget(self.lbl_status_rate)
-        status_row.addWidget(self.lbl_status_total)
-        status_row.addStretch(1)
         status_row.addWidget(self.lbl_status_tx)
         status_row.addWidget(self.lbl_status_rx)
         status_row.addStretch(1)
-        status_row.addWidget(self.lbl_reset_count)
+        status_row.addWidget(self.lbl_status_duration)
+        status_row.addWidget(self.btn_reset_stats)
         status_row.addWidget(self.lbl_status_encoding)
 
         v.addWidget(self.display, 1)
@@ -1235,6 +1226,7 @@ class RTTMonitorPage(QWidget):
         self.chk_hex_left.toggled.connect(self.btn_hex_tx_down.setChecked)
         self.btn_hex_tx_down.toggled.connect(self.chk_hex_left.setChecked)
         self.btn_send.clicked.connect(self._on_send_clicked)
+        self.btn_reset_stats.clicked.connect(self._on_reset_stats_clicked)
         self.chk_timed_send.toggled.connect(self._on_timed_send_toggled)
 
         # 发送文本框：Enter = 发送；Shift+Enter = 换行
@@ -1346,15 +1338,20 @@ class RTTMonitorPage(QWidget):
 
     def _on_reset_clicked(self) -> None:
         # auto_reconnect=reset+disconnect+sleep+reconnect）
-        self._reset_count += 1
-        self.lbl_reset_count.setText(self.tr("复位: {n}").format(n=self._reset_count))
         self._worker.reset_requested.emit(self._cfg.get("reset_mode"))
 
     def _on_reset_halt_clicked(self) -> None:
         """重置并暂停：固定 halt 意图，与配置的 reset_mode 无关。"""
-        self._reset_count += 1
-        self.lbl_reset_count.setText(self.tr("复位: {n}").format(n=self._reset_count))
         self._worker.reset_requested.emit(RESET_MODE_HALT)
+
+    def _on_reset_stats_clicked(self) -> None:
+        """清零发送 / 接收计数（会话时长保留）。"""
+        self._worker.reset_counts()
+        self._stats_prev_bytes = 0
+        self._send_total_bytes = 0
+        self._send_last_bytes = 0
+        self.lbl_status_tx.setText(self.tr("发送: 0 - 0"))
+        self.lbl_status_rx.setText(self.tr("接收: 0 - 0"))
 
     def _on_channel_changed(self, ch: int) -> None:
         self._cfg.set("rtt_channel", ch)
@@ -1404,8 +1401,6 @@ class RTTMonitorPage(QWidget):
             hist.remove(orig_text)
         hist.append(orig_text)
         self._cfg.set("send_history", hist)
-        self._send_count += 1
-        self.lbl_status_tx.setText(self.tr("发送: {n}").format(n=self._send_count))
 
         # 发送回显：勾选"显示发送字符串"后每次发送在显示区追加一行染色文本
         if self.chk_show_send_text.isChecked():
@@ -1598,11 +1593,11 @@ class RTTMonitorPage(QWidget):
         self.chk_power.setEnabled(True)
         for key, lbl in self._info_labels.items():
             lbl.setText(str(info.get(key, "-")))
-        # 复位计数：新连接重置为 0
-        self._reset_count = 0
-        self.lbl_reset_count.setText("")
+        # 状态栏会话时长归零（新连接 = 新会话；worker 端已置 start_ts）
+        self.lbl_status_duration.setText(self.tr("时长: {duration}").format(duration="00:00:00"))
         # 状态栏：绿色圆点 + 设备摘要
         target = info.get("target_device", "—")
+        self._connected_target = target
         iface = info.get("interface", "—")
         speed = info.get("speed_khz", "—")
         self.lbl_status_state.setText(self.tr("● 已连接 {target}").format(target=target))
@@ -1627,19 +1622,11 @@ class RTTMonitorPage(QWidget):
         self.chk_power.setEnabled(False)
         for lbl in self._info_labels.values():
             lbl.setText("-")
-        # 状态栏复位
+        # 状态栏：仅重置连接状态与时长；收发计数保留（由「重置计数」按钮清零）
         self.lbl_status_state.setText(self.tr("● 未连接"))
         self.lbl_status_state.setStyleSheet("color: #888888;")
-        self.lbl_status_rate.setText(self.tr("0 B/s · 0 行/s"))
-        self.lbl_status_total.setText(self.tr("总 0 B · 0 行 · 00:00:00"))
-        self.lbl_reset_count.setText(self.tr("复位: 0"))
+        self.lbl_status_duration.setText(self.tr("时长: {duration}").format(duration="00:00:00"))
         self.gb_info.setTitle(self.tr("设备信息"))
-        # 清除上次统计 delta 基线
-        self._stats_prev_bytes = 0
-        self._stats_prev_lines = 0
-        self._send_count = 0
-        self.lbl_status_tx.setText(self.tr("发送: 0"))
-        self.lbl_status_rx.setText(self.tr("接收: 0 - 0"))
 
         self.btn_toolbar_connect.setChecked(False)
         self.btn_toolbar_connect.setIcon(FluentIcon.PLAY)
@@ -1648,28 +1635,26 @@ class RTTMonitorPage(QWidget):
         
 
     def _update_stats(self) -> None:
-        """1s 一次：从 worker 同步取吞吐，UI 端算 delta 显示。"""
-        if not hasattr(self, "lbl_status_rate"):
+        """1s 一次：从 worker 同步收发计数与连接时长并刷新状态栏。"""
+        if not hasattr(self, "lbl_status_duration"):
             return
-        total_b, total_l, start_ts = self._worker.get_stats()
-        if start_ts == 0:
-            self.lbl_status_rate.setText(self.tr("0 B/s · 0 行/s"))
-            self.lbl_status_total.setText(self.tr("总 0 B · 0 行 · 00:00:00"))
-            self._stats_prev_bytes = 0
-            self._stats_prev_lines = 0
-            return
+        total_b, _total_l, start_ts = self._worker.get_stats()
+        # 接收：总数 - 上一次接收增量（自上次轮询起的新增字节）
         delta_b = max(0, total_b - self._stats_prev_bytes)
-        delta_l = max(0, total_l - self._stats_prev_lines)
         self._stats_prev_bytes = total_b
-        self._stats_prev_lines = total_l
-        self.lbl_status_rate.setText(self.tr("{bytes}/s · {lines} 行/s").format(bytes=_human_bytes(delta_b), lines=delta_l))
-        # 总字节 + 会话时长
-        import time as _t
-        secs = int(_t.time() - start_ts) if start_ts > 0 else 0
+        self.lbl_status_rx.setText(self.tr("接收: {total} - {last}").format(total=total_b, last=delta_b))
+        # 发送：总数 - 上一次发送（最近一次发送的字节数）
+        sent_total, sent_last = self._worker.get_sent_stats()
+        self._send_total_bytes = sent_total
+        self._send_last_bytes = sent_last
+        self.lbl_status_tx.setText(self.tr("发送: {total} - {last}").format(total=sent_total, last=sent_last))
+        # 会话时长：断开（start_ts=0）显示占位，连接态自连接起累计
+        if start_ts == 0:
+            self.lbl_status_duration.setText(self.tr("时长: {duration}").format(duration="00:00:00"))
+            return
+        secs = int(self._time_mod.time() - start_ts)
         hh, mm, ss = secs // 3600, (secs % 3600) // 60, secs % 60
-        duration = f"{hh:02d}:{mm:02d}:{ss:02d}"
-        self.lbl_status_total.setText(self.tr("总 {bytes} · {lines} 行 · {duration}").format(bytes=_human_bytes(total_b), lines=total_l, duration=duration))
-        self.lbl_status_rx.setText(self.tr("接收: {bytes} - {lines}").format(bytes=total_b, lines=total_l))
+        self.lbl_status_duration.setText(self.tr("时长: {duration}").format(duration=f"{hh:02d}:{mm:02d}:{ss:02d}"))
 
     def _update_encoding_label(self, encoding: str) -> None:
         if hasattr(self, "lbl_status_encoding"):
@@ -2168,14 +2153,22 @@ class RTTMonitorPage(QWidget):
         _tip(self.btn_toolbar_connect, self.tr("连接/断开"))
         _tip(self.btn_send, self.tr("发送 (Enter) · 未连接时点击提示"))
 
-        # 状态栏（断开时的默认状态；连接时由 _update_stats / _set_connected_ui 维护）
-        if not self._is_connected:
+        # 状态栏：按钮文字 + tooltip（重翻译时保留计数 / 时长数值）
+        self.btn_reset_stats.setText(self.tr("重置计数"))
+        _tip(self.btn_reset_stats, self.tr("清零发送 / 接收计数（保留会话时长）"))
+        _tip(self.lbl_status_rx, self.tr("接收总数 - 上一次接收增量（字节）"))
+        # 发送：保留计数数值，仅刷新语言前缀
+        _tip(self.lbl_status_tx, self.tr("发送总数 - 上一次发送（字节）"))
+        self.lbl_status_tx.setText(self.tr("发送: {total} - {last}").format(total=self._send_total_bytes, last=self._send_last_bytes))
+        # 连接状态：按当前态重设（连接态含 target）
+        if self._is_connected:
+            self.lbl_status_state.setText(self.tr("● 已连接 {target}").format(target=self._connected_target))
+            self.lbl_status_state.setStyleSheet("color: #2ecc71;")
+        else:
             self.lbl_status_state.setText(self.tr("● 未连接"))
-            self.lbl_status_rate.setText(self.tr("0 B/s · 0 行/s"))
-            self.lbl_status_total.setText(self.tr("总 0 B · 0 行 · 00:00:00"))
-            self.lbl_status_tx.setText(self.tr("发送: 0"))
-            self.lbl_status_rx.setText(self.tr("接收: 0 - 0"))
-            self.lbl_reset_count.setText(self.tr("复位: 0"))
+            self.lbl_status_state.setStyleSheet("color: #888888;")
+        # 接收 + 时长：立即按当前值刷新一次（_update_stats 用新 tr() 重设）
+        self._update_stats()
         # 编码标签：重算一次
         self._update_encoding_label(self._cfg.get("rtt_encoding") or "utf-8")
 

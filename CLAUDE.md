@@ -726,3 +726,20 @@ self.btn_reset_halt.setText(self.tr("重置并暂停"))
 判别标准：凡是文字不随运行状态变化的控件，`_retranslate_ui` 必须有对应 `setText`；状态驱动的控件按当前状态分支重设。
 
 参考：`src/ui/rtt_monitor_page.py` `_retranslate_ui`（btn_reset_halt / btn_connect）。
+
+---
+
+## 断开连接后状态栏闪回旧值：worker 必须在 emit(False) 前清零会话时长
+
+**现象**：点断开后，状态栏接收 / 时长一瞬间被 `_set_disconnected_ui` 抹掉，随即又被旧值"恢复"并停留。
+
+**原因**：UI 的 `_stats_timer`（1s）始终在跑。`_do_disconnect` 若不重置 `_session_start_ts`（仍 = 连接开始时间，非 0），断开后 `get_stats()` 仍报连接态；`_set_disconnected_ui` 抹掉显示后，下一个 1s tick 的 `_update_stats` 读到 `start_ts != 0`，按连接态重算并把旧值写回。
+
+**处理**（收发计数跨断开保留的设计）：
+- `_do_disconnect` 在 `connection_state_changed.emit(False)` **之前**，持 `_stats_lock` 只置 `_session_start_ts = 0.0`（断开态标记）；**不**清 `_total_bytes / _total_lines`——收发计数跨断开保留，由 UI「重置计数」按钮（`worker.reset_counts()`）显式清零。
+- `_do_connect` 同样只置 `_session_start_ts = time.time()`（新会话时长起点），不清收发累计。
+- `_set_disconnected_ui` 不再抹掉发送 / 接收显示（计数保留），只重置连接状态文案 + 时长占位。
+
+关键不变量：清零 `start_ts` 必须在 `emit(False)` 之前，保证 UI 收到断开信号时 `get_stats()` 已报断开态（`start_ts == 0` 是 UI 轮询判定连接态的唯一真源）；收发计数是跨连接累计的运行态量，仅 `reset_counts()` 清零。
+
+参考：`src/core/jlink_worker.py` `_do_connect` / `_do_disconnect` / `reset_counts` / `get_stats`、`src/ui/rtt_monitor_page.py` `_update_stats` / `_set_disconnected_ui`。

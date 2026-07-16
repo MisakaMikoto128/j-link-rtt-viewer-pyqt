@@ -53,6 +53,9 @@ class FakeWorker(QObject):
     def get_stats(self) -> tuple[int, int, float]:
         return (0, 0, 0.0)
 
+    def get_sent_stats(self) -> tuple[int, int]:
+        return (0, 0)
+
 
 @pytest.fixture
 def rtt_page(qtbot, isolated_appdata):
