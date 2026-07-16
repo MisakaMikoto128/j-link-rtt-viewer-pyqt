@@ -887,15 +887,16 @@ class RTTMonitorPage(QWidget):
         self._mark_history: list[str] = []
         v.addWidget(self.le_mark)
 
-        row_mark = FlowLayout()
-        row_mark.setHorizontalSpacing(8)
-        row_mark.setVerticalSpacing(6)
+        row_mark = QHBoxLayout()
+        row_mark.setSpacing(8)
+        row_mark.setContentsMargins(0, 0, 0, 0)
         self.btn_mark = PushButton(self.tr("插入标记"), inner)
         _tip(self.btn_mark, self.tr("在显示区插入分隔标记"))
         self.btn_clear = PushButton(self.tr("清除"), inner)
         self.btn_save = PushButton(self.tr("💾 保存"), inner)
         row_mark.addWidget(self.btn_mark)
         row_mark.addWidget(self.btn_clear)
+        row_mark.addStretch(1)
         row_mark.addWidget(self.btn_save)
         v.addLayout(row_mark)
 
