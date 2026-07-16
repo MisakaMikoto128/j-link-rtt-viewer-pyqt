@@ -48,6 +48,7 @@ from qfluentwidgets import (
     CheckBox,
     ComboBox,
     EditableComboBox,
+    FlowLayout,
     FluentIcon,
     HeaderCardWidget,
     HyperlinkButton,
@@ -665,6 +666,7 @@ class RTTMonitorPage(QWidget):
         # 区域 1：连接设置
         # ════════════════════════════════════════════════════════════
         self._lbl_conn_settings = StrongBodyLabel(self.tr("连接设置"))
+        self._lbl_conn_settings.setWordWrap(True)
         v.addWidget(self._lbl_conn_settings)
         _INPUT_W = 120
         _CTRL_H = 33
@@ -681,8 +683,11 @@ class RTTMonitorPage(QWidget):
         self.cb_target.setCompleter(completer)
         v.addWidget(self.cb_target)
 
-        row_iface = QHBoxLayout()
-        row_iface.setSpacing(6)
+        # FlowLayout：ZH 一行放得下保持单行；EN（Interface/Speed 标签更长）
+        # 排不下时自动换到第二行，避免横向溢出撑大 280px 面板把同行控件挤出。
+        row_iface = FlowLayout()
+        row_iface.setHorizontalSpacing(6)
+        row_iface.setVerticalSpacing(6)
         self._lbl_iface = BodyLabel(self.tr("接口"))
         row_iface.addWidget(self._lbl_iface)
         self.cb_iface = ComboBox(inner)
@@ -690,7 +695,6 @@ class RTTMonitorPage(QWidget):
         self.cb_iface.setCurrentText(self._cfg.get("interface"))
         self.cb_iface.setFixedHeight(_CTRL_H)
         row_iface.addWidget(self.cb_iface)
-        row_iface.addSpacing(12)
         self._lbl_speed = BodyLabel(self.tr("速度"))
         row_iface.addWidget(self._lbl_speed)
         self.cb_speed = ComboBox(inner)
@@ -704,8 +708,9 @@ class RTTMonitorPage(QWidget):
         row_iface.addWidget(self.cb_speed)
         v.addLayout(row_iface)
 
-        row_ch = QHBoxLayout()
-        row_ch.setSpacing(6)
+        row_ch = FlowLayout()
+        row_ch.setHorizontalSpacing(6)
+        row_ch.setVerticalSpacing(6)
         self._lbl_rtt_channel = BodyLabel(self.tr("RTT 通道"))
         row_ch.addWidget(self._lbl_rtt_channel)
         self.sp_channel = SpinBox(inner)
@@ -713,15 +718,15 @@ class RTTMonitorPage(QWidget):
         self.sp_channel.setValue(self._cfg.get("rtt_channel"))
         self.sp_channel.setFixedHeight(_CTRL_H)
         row_ch.addWidget(self.sp_channel)
-        row_ch.addStretch(1)
         v.addLayout(row_ch)
 
         self.btn_connect = PrimaryPushButton(FluentIcon.PLAY, self.tr("连接"), inner)
         _tip(self.btn_connect, self.tr("F2 连接 / F3 断开"))
         v.addWidget(self.btn_connect)
 
-        row_reset = QHBoxLayout()
-        row_reset.setSpacing(6)
+        row_reset = FlowLayout()
+        row_reset.setHorizontalSpacing(6)
+        row_reset.setVerticalSpacing(6)
         self.btn_reset = PushButton(FluentIcon.SYNC, self.tr("重置目标"), inner)
         _tip(self.btn_reset, self.tr("F4 重置目标"))
         self.btn_reset.setEnabled(False)
@@ -784,6 +789,7 @@ class RTTMonitorPage(QWidget):
         # 区域 3：接收设置
         # ════════════════════════════════════════════════════════════
         self._lbl_recv_settings = StrongBodyLabel(self.tr("接收设置"))
+        self._lbl_recv_settings.setWordWrap(True)
         v.addWidget(self._lbl_recv_settings)
 
         self.chk_auto_scroll = CheckBox(self.tr("自动滚动"))
@@ -856,8 +862,9 @@ class RTTMonitorPage(QWidget):
         self._mark_history: list[str] = []
         v.addWidget(self.le_mark)
 
-        row_mark = QHBoxLayout()
-        row_mark.setSpacing(8)
+        row_mark = FlowLayout()
+        row_mark.setHorizontalSpacing(8)
+        row_mark.setVerticalSpacing(6)
         self.btn_mark = PushButton(self.tr("插入标记"), inner)
         _tip(self.btn_mark, self.tr("在显示区插入分隔标记"))
         self.btn_clear = PushButton(self.tr("清除"), inner)
@@ -898,6 +905,7 @@ class RTTMonitorPage(QWidget):
         # 区域 4：发送设置 + 标记
         # ════════════════════════════════════════════════════════════
         self._lbl_send_settings = StrongBodyLabel(self.tr("发送设置"))
+        self._lbl_send_settings.setWordWrap(True)
         v.addWidget(self._lbl_send_settings)
 
         # 定时发送
@@ -945,8 +953,9 @@ class RTTMonitorPage(QWidget):
         v.addLayout(row_echo)
 
         # 脚本
-        row_crc = QHBoxLayout()
-        row_crc.setSpacing(6)
+        row_crc = FlowLayout()
+        row_crc.setHorizontalSpacing(6)
+        row_crc.setVerticalSpacing(6)
         self.chk_crc_script = CheckBox(self.tr("脚本"))
         self.cb_crc_algo = ComboBox(inner)
         self.cb_crc_algo.setFixedHeight(_CTRL_H)
@@ -956,7 +965,6 @@ class RTTMonitorPage(QWidget):
         self.cb_crc_algo.setCurrentIndex(self._cfg.get("send_script_index"))  # 默认 CRC-16/MODBUS
         _tip(self.cb_crc_algo, self.tr("发送时追加脚本后缀（CRC / 自动换行）"))
         row_crc.addWidget(self.chk_crc_script)
-        row_crc.addStretch(1)
         row_crc.addWidget(self.cb_crc_algo)
         v.addLayout(row_crc)
 
@@ -1628,16 +1636,11 @@ class RTTMonitorPage(QWidget):
         # 状态栏：绿色圆点 + 设备摘要
         target = info.get("target_device", "—")
         self._connected_target = target
-        iface = info.get("interface", "—")
-        speed = info.get("speed_khz", "—")
         self.lbl_status_state.setText(self.tr("● 已连接 {target}").format(target=target))
         self.lbl_status_state.setStyleSheet("color: #2ecc71;")
         # 定时发送：连接后自动恢复（如果 checkbox 仍勾选且 pending）
         if self._timed_send_pending and self.chk_timed_send.isChecked():
             self._start_timed_send_timer()
-
-        # 卡片标题加摘要
-        self.gb_info.setTitle(self.tr("设备信息 — {target} / {iface} / {speed} kHz").format(target=target, iface=iface, speed=speed))
 
         self.btn_toolbar_connect.setChecked(True)
         self.btn_toolbar_connect.setIcon(FluentIcon.PAUSE)
@@ -2109,9 +2112,9 @@ class RTTMonitorPage(QWidget):
         self.btn_reset_halt.setText(self.tr("重置并暂停"))
         _tip(self.btn_reset_halt, self.tr("复位 MCU 并停在复位状态（halt）"))
 
-        # 设备信息卡片标题（断开时的默认值；连接时的摘要由 _set_connected_ui 维护）
-        if not self._is_connected:
-            self.gb_info.setTitle(self.tr("设备信息"))
+        # 设备信息卡片标题：固定显示「设备信息」，不随连接状态变化
+        # （详情在展开网格内；连接状态由状态栏圆点 + 文字体现）
+        self.gb_info.setTitle(self.tr("设备信息"))
         # 设备信息行标签
         for text, key in self._info_rows:
             lbl_row = self._info_row_labels.get(key)
@@ -2188,4 +2191,3 @@ class RTTMonitorPage(QWidget):
         self._update_stats()
         # 编码标签：重算一次
         self._update_encoding_label(self._cfg.get("rtt_encoding") or "utf-8")
-

@@ -249,7 +249,6 @@
   "自定义": "Personnalisé",
   "警告": "Avertissement",
   "设备信息": "Informations sur l'appareil",
-  "设备信息 — {target} / {iface} / {speed} kHz": "Informations sur l'appareil — {target} / {iface} / {speed} kHz",
   "该地址不在已读取的缓冲区内": "L'adresse n'est pas dans le tampon lu",
   "语言": "Langue",
   "请先到 RTT 监控页连接 J-Link": "Veuillez d'abord connecter J-Link sur la page de surveillance RTT",
@@ -303,3 +302,4 @@
   "（立即生效）": "(Effectif immédiatement)",
   "💾 保存": "💾 Enregistrer"
 }
+

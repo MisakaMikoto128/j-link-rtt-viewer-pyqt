@@ -333,3 +333,43 @@ def test_toolbar_clear_empties_display(rtt_page, qtbot):
     page.btn_toolbar_clear.click()
     qtbot.wait(20)
     assert page.display.toPlainText() == ""
+
+
+def test_left_panel_no_inflate_and_title_stays_short(rtt_page, qtbot):
+    """Bug 1 + Bug 2 回归：左侧面板固定 280px。
+
+    - 连接后「设备信息」标题保持简短，不再拼成「设备信息 - 型号 / 接口 / 速率 kHz」
+      长串撑大面板（曾导致同行速率框/A+ 等控件被挤出可视区）。
+    - 中英文下面板内部最小宽度均不超过 280（FlowLayout 换行 + 标题 wordWrap），
+      即任何控件内容变化都不会反向撑开/挤压面板。
+    """
+    from PySide6.QtWidgets import QApplication, QScrollArea
+    from core.i18n_service import JsonTranslator
+    page, worker, _ = rtt_page
+
+    def inner_min_width() -> int:
+        sa = page._config_panel.findChild(QScrollArea)
+        inner = sa.widget()
+        inner.layout().activate()
+        return inner.layout().minimumSize().width()
+
+    # 断开态：标题简短，面板不膨胀
+    assert page.gb_info.getTitle() == "设备信息"
+    assert inner_min_width() <= 280
+
+    # 连接后（Bug 1 回归点）：标题不拼接长串
+    page._set_connected_ui(worker.get_device_info())
+    assert page.gb_info.getTitle() == "设备信息"
+    assert "kHz" not in page.gb_info.getTitle()
+    assert inner_min_width() <= 280
+
+    # 切英文（Bug 2）：仍不膨胀
+    qapp = QApplication.instance()
+    t = JsonTranslator("en")
+    qapp.installTranslator(t)
+    try:
+        page._retranslate_ui()
+        assert "kHz" not in page.gb_info.getTitle()
+        assert inner_min_width() <= 280
+    finally:
+        qapp.removeTranslator(t)

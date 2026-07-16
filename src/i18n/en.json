@@ -249,7 +249,6 @@
   "自定义": "Custom",
   "警告": "Warning",
   "设备信息": "Device Info",
-  "设备信息 — {target} / {iface} / {speed} kHz": "Device info — {target} / {iface} / {speed} kHz",
   "该地址不在已读取的缓冲区内": "Address not in the read buffer",
   "语言": "Language",
   "请先到 RTT 监控页连接 J-Link": "Please connect J-Link on the RTT Monitor page first",
@@ -303,3 +302,4 @@
   "（立即生效）": "(takes effect immediately)",
   "💾 保存": "💾 Save"
 }
+
