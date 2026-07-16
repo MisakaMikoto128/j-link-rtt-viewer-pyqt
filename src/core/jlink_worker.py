@@ -76,6 +76,7 @@ class JLinkWorker(QObject):
     export_firmware_requested = Signal(str, int, int)
     start_log_recording_requested = Signal(str)
     stop_log_recording_requested = Signal()
+    set_auto_reconnect_requested = Signal(bool)
     stop_requested = Signal()
 
     # ---- 输出信号 ----
@@ -85,6 +86,10 @@ class JLinkWorker(QObject):
     # 在 worker 线程 emit 设备标识给 UI（红字提示）。不让 read_thread 直接 emit：
     # native threading.Thread emit Qt 跨线程信号在 PySide6 上不可靠（同 _rtt_drain_buffer）。
     unexpected_disconnect = Signal(str)
+    # 自动重连状态：worker -> UI，在显示区追加带时间戳的染色行。
+    # arg1=kind（disconnect_reconnecting/attempt/success/failed/cancelled），
+    # arg2=detail（设备标识 / 重试次数 str）。不传 dict，符合跨线程信号规则。
+    reconnect_status = Signal(str, str)
     # 注意：connection_state_changed 不传 dict——PySide6 跨线程 emit dict
     # 会触发 setParent cross-thread 警告并卡 worker 线程。设备信息改用
     # get_device_info() 同步方法（lock 保护）让 UI 主动取。
@@ -138,6 +143,14 @@ class JLinkWorker(QObject):
         # UI 不再需要重新 emit connect_requested）。
         self._last_connect_params: tuple[str, str, int, int] | None = None
 
+        # 自动重连（物理掉线后）：UI 勾选「自动重连」使能。掉线时若已使能，
+        # 启动 _reconnect_timer 轮询 connected_emulators()，只认上次那个 serial，
+        # 找到后 _do_connect 重连；失败 3s 后重试，直到成功或用户取消。
+        self._auto_reconnect_enabled: bool = False
+        self._reconnect_timer: QTimer | None = None
+        self._reconnect_target_serial: str | None = None
+        self._reconnect_attempt: int = 0
+
         # 数据吞吐统计：read_thread 写入，UI 1s 一次同步读取（GIL + lock 保护）
         self._stats_lock = threading.Lock()
         self._total_bytes: int = 0
@@ -179,6 +192,7 @@ class JLinkWorker(QObject):
         self.export_firmware_requested.connect(self._on_export_firmware)
         self.start_log_recording_requested.connect(self._on_start_log)
         self.stop_log_recording_requested.connect(self._on_stop_log)
+        self.set_auto_reconnect_requested.connect(self._on_set_auto_reconnect)
         self.stop_requested.connect(self._on_stop)
 
         # RTT 数据中转 timer：worker 线程内 QObject，affinity 跟 self（worker_thread）。
@@ -188,6 +202,13 @@ class JLinkWorker(QObject):
         self._rtt_drain_timer.setInterval(50)
         self._rtt_drain_timer.timeout.connect(self._drain_rtt_buffer)
         self._rtt_drain_timer.start()
+
+        # 自动重连轮询 timer：3s 一次，worker 线程 affinity。掉线后按需 start；
+        # 成功 / 取消时 stop。timeout 在 worker 线程触发，_reconnect_tick 内 emit
+        # reconnect_status 安全（同 _drain_rtt_buffer 的 worker-thread emit 模式）。
+        self._reconnect_timer = QTimer()
+        self._reconnect_timer.setInterval(3000)
+        self._reconnect_timer.timeout.connect(self._reconnect_tick)
 
         self._ready = True
         self._logger.info("JLinkWorker initialized in worker thread")
@@ -228,6 +249,8 @@ class JLinkWorker(QObject):
     def _on_connect(self, target: str, iface: str, speed: int, channel: int) -> None:
         """connect_requested 信号槽。实现在 _do_connect，方便其他 worker 内部
         路径（如 _reset_with_reconnect）以普通函数方式直接调，不走信号队列。"""
+        # 手动连接取消正在进行的自动重连，避免与定时器的 _do_connect 赛跑
+        self._stop_reconnect()
         self._do_connect(target, iface, speed, channel)
 
     def _do_connect(self, target: str, iface: str, speed: int, channel: int) -> None:
@@ -237,6 +260,13 @@ class JLinkWorker(QObject):
         self._state = _STATE_CONNECTING
         self._channel = channel
         try:
+            # 预查 J-Link 是否接入：connected_emulators() 用 JLINKARM_EMU_GetList 纯枚举，
+            # 不弹 DLL 原生选择窗。空则气泡提示 + 回退（_do_disconnect emit 状态 False
+            # 让 UI 按钮回正），避免无设备时 jlink.open() 弹出只能鼠标关闭的 DLL 弹窗。
+            if not self.jlink.connected_emulators():
+                self.log_message.emit("warning", "未检测到 J-Link 设备，请检查 USB 连接")
+                self._do_disconnect()
+                return
             if not self.jlink.opened():
                 # 参考项目的双开模式（pylink 1.6.0 稳定工作的关键模式）：
                 # 先 open() 一次取 serial，close，再 open(serial)，然后 rtt_start
@@ -277,6 +307,8 @@ class JLinkWorker(QObject):
 
     @Slot()
     def _on_disconnect(self) -> None:
+        # 手动断开取消自动重连（用户主动行为，不应再自动重连）
+        self._stop_reconnect()
         self._do_disconnect()
 
     def _do_disconnect(self) -> None:
@@ -421,12 +453,82 @@ class JLinkWorker(QObject):
             serial = self._device_info.get("jlink_serial")
         identifier = f"J-Link {serial}" if serial else "-"
         self._logger.error(f"检测到意外断开：{identifier}")
-        self.unexpected_disconnect.emit(identifier)
-        self._do_disconnect()
+        if self._auto_reconnect_enabled and self._last_connect_params and serial:
+            # 自动重连：发"正在尝试自动重连"提示 -> 干净断开 -> 启动轮询定时器。
+            # 用 reconnect_status 而非 unexpected_disconnect：UI 显示橙色"正在重连"行。
+            self.reconnect_status.emit("disconnect_reconnecting", identifier)
+            self._do_disconnect()
+            self._start_reconnect(str(serial))
+        else:
+            self.unexpected_disconnect.emit(identifier)
+            self._do_disconnect()
 
     # ============================================================
-    # 命令槽
+    # 自动重连（物理掉线后）
     # ============================================================
+    @Slot(bool)
+    def _on_set_auto_reconnect(self, enabled: bool) -> None:
+        """UI 勾选/取消「自动重连」。取消时若正在重连，停止并提示。"""
+        self._auto_reconnect_enabled = enabled
+        if not enabled:
+            self._stop_reconnect(emit_cancelled=True)
+
+    def _start_reconnect(self, serial: str) -> None:
+        """non-slot helper：记录目标 serial + 复位计数 + 启动 3s 轮询 timer。"""
+        self._reconnect_target_serial = serial
+        self._reconnect_attempt = 0
+        if self._reconnect_timer is not None and not self._reconnect_timer.isActive():
+            self._reconnect_timer.start()
+
+    def _stop_reconnect(self, *, emit_cancelled: bool = False) -> None:
+        """non-slot helper：停 timer + 清状态。emit_cancelled=True 时发「已取消」提示。"""
+        was_active = (self._reconnect_timer is not None
+                      and self._reconnect_timer.isActive())
+        if self._reconnect_timer is not None:
+            self._reconnect_timer.stop()
+        self._reconnect_target_serial = None
+        self._reconnect_attempt = 0
+        if emit_cancelled and was_active:
+            self.reconnect_status.emit("cancelled", "")
+
+    @Slot()
+    def _reconnect_tick(self) -> None:
+        """worker 线程 3s 一次：轮询目标 J-Link 是否回来，回来就 _do_connect 重连。
+
+        串行匹配：只认 _reconnect_target_serial，避免用户插了另一个 J-Link 被误连。
+        成功 -> 停 timer + emit success；失败 -> emit failed，下一拍（3s）再试；
+        设备没回来 -> 静默等下一拍（不计数、不刷屏）。
+        """
+        if self._reconnect_target_serial is None:
+            self._stop_reconnect()
+            return
+        # 已连上（竞态/手动连接成功）-> 收尾
+        if self._state == _STATE_CONNECTED:
+            self._stop_reconnect()
+            return
+        try:
+            emus = self.jlink.connected_emulators()
+        except Exception as e:
+            self._logger.warning(f"重连轮询枚举失败：{e}")
+            return   # 枚举本身异常，下一拍再试
+        if not any(str(getattr(e, "SerialNumber", "")) == self._reconnect_target_serial
+                   for e in emus):
+            return   # 设备还没插回，静默等
+        self._reconnect_attempt += 1
+        n = self._reconnect_attempt
+        self.reconnect_status.emit("attempt", str(n))
+        params = self._last_connect_params
+        if params is None:
+            self._stop_reconnect(emit_cancelled=True)
+            return
+        self._do_connect(*params)
+        if self._state == _STATE_CONNECTED:
+            self.reconnect_status.emit("success", str(n))
+            self._stop_reconnect()
+        else:
+            self.reconnect_status.emit("failed", str(n))   # 3s 后下一拍再试
+
+
     @Slot(str, bool)
     def _on_send_data(self, data: str, is_hex: bool) -> None:
         if self._state != _STATE_CONNECTED:
@@ -687,7 +789,10 @@ class JLinkWorker(QObject):
             self._rtt_drain_timer.stop()
             self._rtt_drain_timer.deleteLater()
             self._rtt_drain_timer = None
-        # self.thread() 返回 worker 被 moveTo 的那个 QThread
+        if self._reconnect_timer is not None:
+            self._reconnect_timer.stop()
+            self._reconnect_timer.deleteLater()
+            self._reconnect_timer = None
         t = self.thread()
         if t is not None:
             t.quit()

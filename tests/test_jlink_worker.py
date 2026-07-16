@@ -427,3 +427,98 @@ def test_normal_disconnect_does_not_emit_unexpected(worker):
 
     assert not unexpected, "主动断开不应 emit unexpected_disconnect"
     assert w.state_name() == "IDLE"
+
+
+def test_connect_prechecks_jlink_presence(worker):
+    """无 J-Link 时点击连接：connected_emulators 返回空 -> 气泡 warning + 不调 open（不弹 DLL 原生窗）。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.connected_emulators.return_value = []   # 无设备接入
+
+    logs = []
+    w.log_message.connect(lambda lv, m: logs.append((lv, m)))
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.6)
+
+    assert ("warning", "未检测到 J-Link 设备，请检查 USB 连接") in logs
+    assert not jl.open.called, "无设备不应调 jlink.open（避免弹出只能鼠标关闭的 DLL 窗）"
+    assert w.state_name() == "IDLE"
+
+
+def test_auto_reconnect_after_unexpected_disconnect(worker):
+    """物理掉线 + 自动重连使能：emit reconnect_status(disconnect_reconnecting)，
+    串行匹配 serial 后重连成功 -> emit success；只认上次那台 J-Link。"""
+    from types import SimpleNamespace
+    from PySide6.QtCore import QMetaObject
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.serial_number = 12345678
+    jl.rtt_read.return_value = []
+    # 枚举返回目标 serial（同一台 J-Link 还在）
+    jl.connected_emulators.return_value = [SimpleNamespace(SerialNumber=12345678)]
+
+    w.set_auto_reconnect_requested.emit(True)
+    _drain_events(0.2)
+    assert w._auto_reconnect_enabled is True
+
+    status = []
+    w.reconnect_status.connect(lambda k, d: status.append((k, d)))
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.5)
+    assert w.state_name() == "CONNECTED"
+
+    # 模拟物理掉线：rtt_read 抛异常 -> drain 检出 -> 走自动重连路径
+    jl.rtt_read.side_effect = RuntimeError("device gone")
+    deadline = time.time() + 2.0
+    while not any(k == "disconnect_reconnecting" for k, _ in status) and time.time() < deadline:
+        QCoreApplication.processEvents()
+        time.sleep(0.02)
+    assert any(k == "disconnect_reconnecting" for k, _ in status), f"应 emit disconnect_reconnecting，got {status}"
+    assert w.state_name() == "IDLE"
+    assert w._reconnect_timer is not None and w._reconnect_timer.isActive(), "重连 timer 应已启动"
+
+    # 恢复 rtt_read（重连后的新读线程不应再立即抛异常），手动驱动一拍重连（worker 线程）
+    jl.rtt_read.side_effect = None
+    jl.rtt_read.return_value = []
+    QMetaObject.invokeMethod(w, "_reconnect_tick", Qt.ConnectionType.QueuedConnection)
+    deadline = time.time() + 2.0
+    while not any(k == "success" for k, _ in status) and time.time() < deadline:
+        QCoreApplication.processEvents()
+        time.sleep(0.02)
+    assert any(k == "success" for k, _ in status), f"应 emit success，got {status}"
+    assert w.state_name() == "CONNECTED"
+
+
+def test_auto_reconnect_only_matches_same_serial(worker):
+    """串行匹配：枚举里没有目标 serial 时不重连（避免误连另一台 J-Link）。"""
+    from types import SimpleNamespace
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.serial_number = 12345678
+    jl.rtt_read.return_value = []
+    w.set_auto_reconnect_requested.emit(True)
+    _drain_events(0.2)
+    status = []
+    w.reconnect_status.connect(lambda k, d: status.append((k, d)))
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.5)
+
+    # 掉线
+    jl.rtt_read.side_effect = RuntimeError("gone")
+    deadline = time.time() + 2.0
+    while not any(k == "disconnect_reconnecting" for k, _ in status) and time.time() < deadline:
+        QCoreApplication.processEvents()
+        time.sleep(0.02)
+
+    # 枚举返回的是【另一台】J-Link（serial 不同）-> 不应 attempt
+    jl.connected_emulators.return_value = [SimpleNamespace(SerialNumber=99999999)]
+    jl.rtt_read.side_effect = None
+    from PySide6.QtCore import QMetaObject
+    QMetaObject.invokeMethod(w, "_reconnect_tick", Qt.ConnectionType.QueuedConnection)
+    _drain_events(0.4)
+    assert not any(k == "attempt" for k, _ in status), "serial 不匹配不应发起重连"
+    assert not any(k == "success" for k, _ in status), "另一台 J-Link 不应被误连"
+    assert w.state_name() == "IDLE"

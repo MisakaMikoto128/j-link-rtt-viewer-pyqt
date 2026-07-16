@@ -24,10 +24,12 @@ class FakeWorker(QObject):
     stop_log_recording_requested = Signal()
     rtt_data_received = Signal(str)
     unexpected_disconnect = Signal(str)
+    reconnect_status = Signal(str, str)
     connection_state_changed = Signal(bool)
     command_result = Signal(str, bool, str)
     log_message = Signal(str, str)
     stop_requested = Signal()
+    set_auto_reconnect_requested = Signal(bool)
 
     def __init__(self):
         super().__init__()
@@ -336,20 +338,25 @@ def test_toolbar_clear_empties_display(rtt_page, qtbot):
 
 
 def test_left_panel_no_inflate_and_title_stays_short(rtt_page, qtbot):
-    """Bug 1 + Bug 2 回归：左侧面板固定 280px。
+    """Bug 1 + Bug 2 + 展开卡片回归：左侧面板固定 280px。
 
     - 连接后「设备信息」标题保持简短，不再拼成「设备信息 - 型号 / 接口 / 速率 kHz」
       长串撑大面板（曾导致同行速率框/A+ 等控件被挤出可视区）。
-    - 中英文下面板内部最小宽度均不超过 280（FlowLayout 换行 + 标题 wordWrap），
-      即任何控件内容变化都不会反向撑开/挤压面板。
+    - 展开「设备信息」卡片显示长固件版本串时，面板也不膨胀（值标签 wordWrap）。
+    - 中/英/法下面板内部最小宽度均不超过 280（FlowLayout 换行 + 标题/标签 wordWrap
+      + 法语用更短同义译名），即任何控件内容变化都不反向撑开/挤压面板。
     """
     from PySide6.QtWidgets import QApplication, QScrollArea
     from core.i18n_service import JsonTranslator
     page, worker, _ = rtt_page
+    # 注入长固件版本串，覆盖展开卡片时的最长值
+    worker._device_info["jlink_firmware"] = "J-Link V11 compiled May 17 2024 16:31:23"
 
     def inner_min_width() -> int:
         sa = page._config_panel.findChild(QScrollArea)
         inner = sa.widget()
+        # 必须 invalidate 再 activate：仅 activate 会返回结构变更前的陈旧缓存
+        inner.layout().invalidate()
         inner.layout().activate()
         return inner.layout().minimumSize().width()
 
@@ -363,13 +370,19 @@ def test_left_panel_no_inflate_and_title_stays_short(rtt_page, qtbot):
     assert "kHz" not in page.gb_info.getTitle()
     assert inner_min_width() <= 280
 
-    # 切英文（Bug 2）：仍不膨胀
+    # 展开设备信息卡片（Bug：长固件串曾撑大面板）
+    page._set_info_expanded(True)
+    assert inner_min_width() <= 280
+    page._set_info_expanded(False)
+
+    # 切英文 / 法语（Bug 2）：仍不膨胀
     qapp = QApplication.instance()
-    t = JsonTranslator("en")
-    qapp.installTranslator(t)
-    try:
-        page._retranslate_ui()
-        assert "kHz" not in page.gb_info.getTitle()
-        assert inner_min_width() <= 280
-    finally:
-        qapp.removeTranslator(t)
+    for lang in ("en", "fr"):
+        t = JsonTranslator(lang)
+        qapp.installTranslator(t)
+        try:
+            page._retranslate_ui()
+            assert "kHz" not in page.gb_info.getTitle()
+            assert inner_min_width() <= 280
+        finally:
+            qapp.removeTranslator(t)

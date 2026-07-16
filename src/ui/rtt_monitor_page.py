@@ -122,6 +122,16 @@ _DEFAULT_BG_QCOLOR = QColor("#222222")
 _DEFAULT_SEND_ECHO_COLOR = "#FFA500"  # 发送回显默认色（橙色）
 _DISCONNECT_ALERT_COLOR = "#cc0000"  # 意外断开红字提示色（与 ANSI red 一致）
 
+# 自动重连各阶段提示色：disconnect=橙红（告警）、attempt=琥珀（进行中）、
+# success=绿、failed=红、cancelled=灰。
+_RECONNECT_COLORS: dict[str, str] = {
+    "disconnect_reconnecting": "#cc6600",
+    "attempt": "#b8860b",
+    "success": "#2e7d32",
+    "failed": "#cc0000",
+    "cancelled": "#888888",
+}
+
 # 编码显示名映射（权威定义在 settings_page._ENCODING_DISPLAY，此处为本地副本）
 _ENCODING_LABEL_MAP: dict[str, str] = {
     "utf-8": "UTF-8", "gbk": "GBK", "utf-16-le": "UTF-16-LE",
@@ -724,18 +734,20 @@ class RTTMonitorPage(QWidget):
         _tip(self.btn_connect, self.tr("F2 连接 / F3 断开"))
         v.addWidget(self.btn_connect)
 
-        row_reset = FlowLayout()
-        row_reset.setHorizontalSpacing(6)
-        row_reset.setVerticalSpacing(6)
+        row_reset = QHBoxLayout()
+        row_reset.setSpacing(6)
+        row_reset.setContentsMargins(0, 0, 0, 0)
         self.btn_reset = PushButton(FluentIcon.SYNC, self.tr("重置目标"), inner)
         _tip(self.btn_reset, self.tr("F4 重置目标"))
         self.btn_reset.setEnabled(False)
+        self.btn_reset.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.btn_reset_halt = PushButton(
             FluentIcon.PAUSE_BOLD, self.tr("重置并暂停"), inner)
         _tip(self.btn_reset_halt, self.tr("复位 MCU 并停在复位状态（halt）"))
         self.btn_reset_halt.setEnabled(False)
-        row_reset.addWidget(self.btn_reset)
-        row_reset.addWidget(self.btn_reset_halt)
+        self.btn_reset_halt.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        row_reset.addWidget(self.btn_reset, 1)
+        row_reset.addWidget(self.btn_reset_halt, 1)
         v.addLayout(row_reset)
 
         # ---- 分隔线 ----
@@ -746,6 +758,8 @@ class RTTMonitorPage(QWidget):
         # ════════════════════════════════════════════════════════════
         self.gb_info = HeaderCardWidget(inner)
         self.gb_info.setTitle(self.tr("设备信息"))
+        # 标题可换行：法语「Infos appareil」等长译名不至于撑大 280px 面板
+        self.gb_info.headerLabel.setWordWrap(True)
         self.btn_info_toggle = TransparentToolButton(
             FluentIcon.CHEVRON_DOWN_MED, self.gb_info)
         self.gb_info.headerLayout.addStretch(1)
@@ -770,9 +784,13 @@ class RTTMonitorPage(QWidget):
         ]
         for i, (text, key) in enumerate(self._info_rows):
             lbl_row = BodyLabel(self.tr(f"{text}:"))
+            lbl_row.setWordWrap(True)
             self._info_row_labels[key] = lbl_row
             info_grid.addWidget(lbl_row, i, 0)
             lbl = StrongBodyLabel("-")
+            # 值标签可换行：固件版本等长串（如 "J-Link V11 compiled ..."）
+            # 展开卡片时不至于撑大 280px 面板把同行控件挤出。
+            lbl.setWordWrap(True)
             self._info_labels[key] = lbl
             info_grid.addWidget(lbl, i, 1)
         self.gb_info.viewLayout.addWidget(self._info_container)
@@ -878,6 +896,7 @@ class RTTMonitorPage(QWidget):
         row_font = QHBoxLayout()
         row_font.setSpacing(6)
         self._lbl_font_size_label = BodyLabel(self.tr("字号"))
+        self._lbl_font_size_label.setWordWrap(True)
         row_font.addWidget(self._lbl_font_size_label)
         row_font.addStretch(1)
         self.btn_font_minus = TransparentToolButton(inner)
@@ -912,6 +931,7 @@ class RTTMonitorPage(QWidget):
         row_timed = QHBoxLayout()
         row_timed.setSpacing(6)
         self.chk_timed_send = CheckBox(self.tr("定时发送"))
+        self.chk_timed_send.setFixedHeight(_CTRL_H)
         self.le_timed_interval = LineEdit(inner)
         self.le_timed_interval.setText("1.0")
         self.le_timed_interval.setFixedSize(_INPUT_W, _CTRL_H)
@@ -952,11 +972,13 @@ class RTTMonitorPage(QWidget):
         row_echo.addWidget(self.btn_send_color)
         v.addLayout(row_echo)
 
-        # 脚本
-        row_crc = FlowLayout()
-        row_crc.setHorizontalSpacing(6)
-        row_crc.setVerticalSpacing(6)
+        # 脚本：右对齐，与上方「定时发送 / 显示发送字符串」同行控件右边缘对齐。
+        # spacing 用 4（非 6）：组合框内容 226 + 复选框 29 + spacing 需 ≤ 260 才不撑大
+        # 280px 面板，6 会让行最小宽度到 261（+20=281 超 1px）。4px 间距视觉无差。
+        row_crc = QHBoxLayout()
+        row_crc.setSpacing(4)
         self.chk_crc_script = CheckBox(self.tr("脚本"))
+        self.chk_crc_script.setFixedHeight(_CTRL_H)
         self.cb_crc_algo = ComboBox(inner)
         self.cb_crc_algo.setFixedHeight(_CTRL_H)
         for display_name, _ in CRC_ALGORITHMS:
@@ -965,8 +987,17 @@ class RTTMonitorPage(QWidget):
         self.cb_crc_algo.setCurrentIndex(self._cfg.get("send_script_index"))  # 默认 CRC-16/MODBUS
         _tip(self.cb_crc_algo, self.tr("发送时追加脚本后缀（CRC / 自动换行）"))
         row_crc.addWidget(self.chk_crc_script)
+        row_crc.addStretch(1)
         row_crc.addWidget(self.cb_crc_algo)
         v.addLayout(row_crc)
+
+        # 自动重连：物理掉线后轮询同一台 J-Link（按 serial 区分）自动重连
+        self.chk_auto_reconnect = CheckBox(self.tr("自动重连"))
+        self.chk_auto_reconnect.setFixedHeight(_CTRL_H)
+        self.chk_auto_reconnect.setChecked(self._cfg.get("auto_reconnect"))
+        _tip(self.chk_auto_reconnect, self.tr("设备被物理拔出后自动尝试重连同一台 J-Link"))
+        self.chk_auto_reconnect.toggled.connect(self._on_auto_reconnect_toggled)
+        v.addWidget(self.chk_auto_reconnect)
 
         v.addStretch(1)
         return panel
@@ -1268,6 +1299,7 @@ class RTTMonitorPage(QWidget):
         self._worker.rtt_data_received.connect(self._on_rtt_data, Qt.QueuedConnection)
         self._worker.connection_state_changed.connect(self._on_state_changed, Qt.QueuedConnection)
         self._worker.unexpected_disconnect.connect(self._on_unexpected_disconnect, Qt.QueuedConnection)
+        self._worker.reconnect_status.connect(self._on_reconnect_status, Qt.QueuedConnection)
 
         self._cfg.font_changed.connect(self._apply_font)
         self._cfg.max_display_lines_changed.connect(self.display.setMaximumBlockCount)
@@ -1620,6 +1652,34 @@ class RTTMonitorPage(QWidget):
         ts = f"{now.year}/{now.month}/{now.day} {now.hour:02d}:{now.minute:02d}:{now.second:02d}"
         msg = f"{ts} -> {device} {self.tr('连接意外断开')}\n"
         self._append_styled_line(msg, _DISCONNECT_ALERT_COLOR, bold=True)
+
+    def _on_auto_reconnect_toggled(self, checked: bool) -> None:
+        """「自动重连」复选框：持久化 + 通知 worker（worker 取消时会停轮询 timer）。"""
+        self._cfg.set("auto_reconnect", checked)
+        self._worker.set_auto_reconnect_requested.emit(checked)
+
+    def _on_reconnect_status(self, kind: str, detail: str) -> None:
+        """自动重连状态：worker emit (kind, detail) -> UI 生成时间戳 + 染色行插入显示区。
+
+        kind: disconnect_reconnecting(detail=设备标识) / attempt(detail=次数) /
+              success(detail=次数) / failed(detail=次数) / cancelled(detail=空)。
+        """
+        from datetime import datetime
+        now = datetime.now()
+        ts = f"{now.year}/{now.month}/{now.day} {now.hour:02d}:{now.minute:02d}:{now.second:02d}"
+        if kind == "disconnect_reconnecting":
+            line = self.tr("{id} 连接意外断开，正在尝试自动重连…").format(id=detail)
+        elif kind == "attempt":
+            line = self.tr("正在尝试重新连接 [第 {n} 次]…").format(n=detail)
+        elif kind == "success":
+            line = self.tr("正在尝试重新连接 [第 {n} 次]  连接成功").format(n=detail)
+        elif kind == "failed":
+            line = self.tr("正在尝试重新连接 [第 {n} 次]  失败，3 秒后重试").format(n=detail)
+        elif kind == "cancelled":
+            line = self.tr("自动重连已取消")
+        else:
+            return
+        self._append_styled_line(f"{ts} -> {line}\n", _RECONNECT_COLORS.get(kind, "#888888"), bold=True)
 
     def _set_connected_ui(self, info: dict) -> None:
         self._is_connected = True
@@ -2162,6 +2222,10 @@ class RTTMonitorPage(QWidget):
         self.chk_crc_script.setText(self.tr("脚本"))
         _tip(self.cb_crc_algo, self.tr("发送时追加脚本后缀（CRC / 自动换行）"))
         self.cb_crc_algo.setItemText(len(CRC_ALGORITHMS), self.tr("自动换行"))
+
+        # 自动重连
+        self.chk_auto_reconnect.setText(self.tr("自动重连"))
+        _tip(self.chk_auto_reconnect, self.tr("设备被物理拔出后自动尝试重连同一台 J-Link"))
 
         # 右侧收窄工具栏 tooltips
         _tip(self.btn_panel_toggle, self.tr("显示/隐藏配置面板"))

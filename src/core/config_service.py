@@ -65,6 +65,9 @@ class ConfigService(QObject):
         # 连接 / 断开时自动在 RTT 显示区插入一条分隔标记（便于会话分段）
         "auto_mark_on_connect": False,
         "auto_mark_on_disconnect": False,
+        # 自动重连：物理掉线后轮询 J-Link 是否回来，回来后自动重连同一台（按 serial 区分）。
+        # 与 reset_mode 无关：reset_mode 是「重置按钮」的行为，auto_reconnect 是「掉线后」的行为。
+        "auto_reconnect": False,
         # 重置按钮行为：
         #   "normal"         → jlink.reset + rtt_stop/start（默认；适合大多数 MCU）
         #   "auto_reconnect" → 重置 = 断开+重连（更可靠，但有 ~1s 延迟）

@@ -28,10 +28,12 @@ class FakeWorker(QObject):
     stop_log_recording_requested = Signal()
     rtt_data_received = Signal(str)
     unexpected_disconnect = Signal(str)
+    reconnect_status = Signal(str, str)
     connection_state_changed = Signal(bool)
     command_result = Signal(str, bool, str)
     log_message = Signal(str, str)
     stop_requested = Signal()
+    set_auto_reconnect_requested = Signal(bool)
 
     def __init__(self):
         super().__init__()
