@@ -80,6 +80,11 @@ class JLinkWorker(QObject):
 
     # ---- 输出信号 ----
     rtt_data_received = Signal(str)
+    # 意外断开（物理掉线）：read_thread 在 rtt_read 抛异常且仍处于连接态时
+    # 置 _unexpected_disconnect_pending，由 worker 线程的 _drain_rtt_buffer 检出，
+    # 在 worker 线程 emit 设备标识给 UI（红字提示）。不让 read_thread 直接 emit：
+    # native threading.Thread emit Qt 跨线程信号在 PySide6 上不可靠（同 _rtt_drain_buffer）。
+    unexpected_disconnect = Signal(str)
     # 注意：connection_state_changed 不传 dict——PySide6 跨线程 emit dict
     # 会触发 setParent cross-thread 警告并卡 worker 线程。设备信息改用
     # get_device_info() 同步方法（lock 保护）让 UI 主动取。
@@ -117,6 +122,12 @@ class JLinkWorker(QObject):
         self._rtt_drain_buffer: list[str] = []
         self._rtt_drain_lock = threading.Lock()
         self._rtt_drain_timer: QTimer | None = None
+
+        # 意外断开中转：read_thread 检出 rtt_read 异常（物理掉线）时置位，
+        # _drain_rtt_buffer 在 worker 线程检出后调 _on_unexpected_disconnect 闭环。
+        # 同 _rtt_drain_buffer：read_thread 不直接 emit Qt 信号。
+        self._unexpected_disconnect_lock = threading.Lock()
+        self._unexpected_disconnect_pending = False
 
         # 设备信息：worker 端用 lock 保护，UI 通过 get_device_info() 同步读。
         # 不通过信号传 dict——dict 跨线程 marshalling 在 PySide6 上会卡 worker 线程。
@@ -299,6 +310,8 @@ class JLinkWorker(QObject):
         self._state = _STATE_IDLE
         # 对称重置 _stop_read：让 flag 生命周期清晰（契约：disconnect 完后是干净态）
         self._stop_read = False
+        # 清掉可能残留的意外断开标记：正常断开路径不走红字提示
+        self._unexpected_disconnect_pending = False
         with self._info_lock:
             self._device_info = {}
         # 仅重置会话时长为 0（断开态标记）：收发计数跨断开保留，由 reset_counts()
@@ -367,6 +380,11 @@ class JLinkWorker(QObject):
                 # 不 emit log_message——避免 native thread 跨线程 emit。
                 # 错误从 logger 文件看，足够诊断。
                 self._logger.error(f"RTT 读异常：{e}")
+                # 仅在仍处于连接态时标记意外断开：正常 _do_disconnect 会先把
+                # _state 置为 DISCONNECTING，此时异常属于 teardown 副作用，不算意外。
+                if self._state == _STATE_CONNECTED:
+                    with self._unexpected_disconnect_lock:
+                        self._unexpected_disconnect_pending = True
                 self._stop_read = True
                 break
             time.sleep(self._poll_interval)
@@ -375,11 +393,36 @@ class JLinkWorker(QObject):
     def _drain_rtt_buffer(self) -> None:
         """worker 线程槽：50ms 一次，把 read_thread 累积的数据合并 emit 给 UI。"""
         with self._rtt_drain_lock:
-            if not self._rtt_drain_buffer:
-                return
-            merged = "".join(self._rtt_drain_buffer)
-            self._rtt_drain_buffer.clear()
-        self.rtt_data_received.emit(merged)
+            if self._rtt_drain_buffer:
+                merged = "".join(self._rtt_drain_buffer)
+                self._rtt_drain_buffer.clear()
+            else:
+                merged = ""
+        # read_thread 检出的意外断开（物理掉线）：在 worker 线程闭环处理
+        with self._unexpected_disconnect_lock:
+            unexpected = self._unexpected_disconnect_pending
+            self._unexpected_disconnect_pending = False
+        # 先把残留数据 emit 出去（断开前最后一帧），再处理意外断开
+        if merged:
+            self.rtt_data_received.emit(merged)
+        if unexpected:
+            self._on_unexpected_disconnect()
+
+    def _on_unexpected_disconnect(self) -> None:
+        """read_thread 检出物理掉线后，在 worker 线程闭环：捕获设备标识 ->
+        emit 给 UI 显示红字提示 -> _do_disconnect 清理并 emit 连接状态 False。
+
+        状态守卫：若已不在 CONNECTED（用户主动断开与掉线竞态），直接返回，
+        不重复清理也不误报红字。
+        """
+        if self._state != _STATE_CONNECTED:
+            return
+        with self._info_lock:
+            serial = self._device_info.get("jlink_serial")
+        identifier = f"J-Link {serial}" if serial else "-"
+        self._logger.error(f"检测到意外断开：{identifier}")
+        self.unexpected_disconnect.emit(identifier)
+        self._do_disconnect()
 
     # ============================================================
     # 命令槽

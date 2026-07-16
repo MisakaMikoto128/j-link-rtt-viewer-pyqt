@@ -274,6 +274,7 @@
   "连接/断开": "Connect/Disconnect",
   "连接中…": "Connecting…",
   "连接参数": "Connection Parameters",
+  "连接意外断开": "Connection lost unexpectedly",
   "连接时自动插入标记": "Auto-insert mark on connect",
   "连接设置": "Connection Settings",
   "选择…": "Choose…",

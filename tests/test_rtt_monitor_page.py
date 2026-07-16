@@ -23,6 +23,7 @@ class FakeWorker(QObject):
     start_log_recording_requested = Signal(str)
     stop_log_recording_requested = Signal()
     rtt_data_received = Signal(str)
+    unexpected_disconnect = Signal(str)
     connection_state_changed = Signal(bool)
     command_result = Signal(str, bool, str)
     log_message = Signal(str, str)

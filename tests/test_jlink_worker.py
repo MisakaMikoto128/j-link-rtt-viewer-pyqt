@@ -377,3 +377,53 @@ def test_log_recording_writes_file(worker, tmp_path):
     logs = list(tmp_path.glob("*.log"))
     assert len(logs) == 1
     assert "hello log" in logs[0].read_text(encoding="utf-8")
+
+
+def test_unexpected_disconnect_emits_signal(worker):
+    """物理掉线：rtt_read 抛异常 -> emit unexpected_disconnect(设备标识) + 转断开态。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.serial_number = 12345678
+    # 读循环空转，不产生噪声也不提前触发异常
+    jl.rtt_read.return_value = []
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.5)
+    assert w.state_name() == "CONNECTED"
+
+    unexpected = []
+    w.unexpected_disconnect.connect(lambda d: unexpected.append(d))
+    states = []
+    w.connection_state_changed.connect(lambda c: states.append(c))
+
+    # 模拟物理掉线：下一次 rtt_read 抛异常
+    jl.rtt_read.side_effect = RuntimeError("device gone")
+
+    # 轮询等待 read_thread 命中异常 + drain timer(50ms) 检出闭环
+    deadline = time.time() + 2.0
+    while not unexpected and time.time() < deadline:
+        QCoreApplication.processEvents()
+        time.sleep(0.02)
+
+    assert unexpected, "应 emit unexpected_disconnect"
+    assert "12345678" in unexpected[0], f"标识应含 J-Link serial，got {unexpected[0]!r}"
+    assert w.state_name() == "IDLE"
+    assert False in states, "应 emit connection_state_changed(False)"
+
+
+def test_normal_disconnect_does_not_emit_unexpected(worker):
+    """用户主动断开不应触发意外断开红字提示。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.rtt_read.return_value = []
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.5)
+
+    unexpected = []
+    w.unexpected_disconnect.connect(lambda d: unexpected.append(d))
+    w.disconnect_requested.emit()
+    _drain_events(0.6)
+
+    assert not unexpected, "主动断开不应 emit unexpected_disconnect"
+    assert w.state_name() == "IDLE"

@@ -119,6 +119,7 @@ _DEFAULT_FG_QCOLOR = QColor("#dddddd")
 _DEFAULT_BG_QCOLOR = QColor("#222222")
 
 _DEFAULT_SEND_ECHO_COLOR = "#FFA500"  # 发送回显默认色（橙色）
+_DISCONNECT_ALERT_COLOR = "#cc0000"  # 意外断开红字提示色（与 ANSI red 一致）
 
 # 编码显示名映射（权威定义在 settings_page._ENCODING_DISPLAY，此处为本地副本）
 _ENCODING_LABEL_MAP: dict[str, str] = {
@@ -1258,6 +1259,7 @@ class RTTMonitorPage(QWidget):
         # 「emit 调用从 native threading.Thread 发起」场景下误判 sender thread 走 DirectConnection。
         self._worker.rtt_data_received.connect(self._on_rtt_data, Qt.QueuedConnection)
         self._worker.connection_state_changed.connect(self._on_state_changed, Qt.QueuedConnection)
+        self._worker.unexpected_disconnect.connect(self._on_unexpected_disconnect, Qt.QueuedConnection)
 
         self._cfg.font_changed.connect(self._apply_font)
         self._cfg.max_display_lines_changed.connect(self.display.setMaximumBlockCount)
@@ -1407,27 +1409,41 @@ class RTTMonitorPage(QWidget):
         if self.chk_show_send_text.isChecked():
             self._echo_sent_text(orig_text)
 
-    def _echo_sent_text(self, text: str) -> None:
-        """在显示区追加一行 » 开头的回显文本，颜色由用户选中的 btn_send_color 决定。
+    def _append_styled_line(self, text: str, color: str, *,
+                            bold: bool = False, force_scroll: bool = False) -> None:
+        """在显示区末尾追加一行染色文本（自动滚动判断 + 程序性滚动围栏）。
 
-        复用 _insert_mark_text 的自动滚动判断逻辑：插入前判断 at_bottom，
-        插入后用 _programmatic_scroll_guard 保护程序性滚动。
+        发送回显 / 会话标记 / 意外断开红字提示 三处同形态：都是把一段带颜色的
+        文本追加到显示区末尾。统一在此处理 at_bottom 判断 + 换行 + cursor +
+        QTextCharFormat，避免每处各写一份而漏 reset 程序性滚动标志。
+
+        force_scroll=True 时不看 chk_auto_scroll（会话标记：用户主动插入，
+        即使关闭自动滚动也跟到末尾）；其余按 chk_auto_scroll 决定。
         """
         sb = self.display.verticalScrollBar()
         at_bottom = sb.value() >= sb.maximum() - 4
-
         cursor = self.display.textCursor()
         cursor.movePosition(QTextCursor.End)
         if cursor.columnNumber() != 0:
             cursor.insertText("\n")
-
         fmt = QTextCharFormat()
-        fmt.setForeground(QColor(self._cfg.get("send_text_color") or _DEFAULT_SEND_ECHO_COLOR))
-        cursor.insertText(f"\u00bb {text}\n", fmt)
-
-        if at_bottom and self.chk_auto_scroll.isChecked():
+        fmt.setForeground(QColor(color))
+        if bold:
+            fmt.setFontWeight(QFont.Bold)
+        cursor.insertText(text, fmt)
+        if at_bottom and (force_scroll or self.chk_auto_scroll.isChecked()):
             with self._programmatic_scroll_guard():
                 sb.setValue(sb.maximum())
+
+    def _echo_sent_text(self, text: str) -> None:
+        """在显示区追加一行 » 开头的回显文本，颜色由用户选中的 btn_send_color 决定。
+
+        插入与自动滚动由 _append_styled_line 统一处理。
+        """
+        self._append_styled_line(
+            f"\u00bb {text}\n",
+            self._cfg.get("send_text_color") or _DEFAULT_SEND_ECHO_COLOR,
+        )
 
     def _on_crc_script_toggled(self, checked: bool) -> None:
         """CRC 脚本 checkbox 切换：顶部边框上色 + 由上而下的红色渐变背景。
@@ -1583,6 +1599,19 @@ class RTTMonitorPage(QWidget):
             if self._cfg.get("auto_mark_on_disconnect"):
                 ts = datetime.now().strftime("%H:%M:%S")
                 self._insert_mark_text(self.tr("已断开 @ {ts}").format(ts=ts))
+
+    def _on_unexpected_disconnect(self, device: str) -> None:
+        """物理掉线：在显示区追加一行红色时间戳提示。
+
+        worker 检出 rtt_read 异常后 emit 设备标识；此处生成时间戳并染色插入。
+        连接按钮状态由随后的 connection_state_changed(False) -> _set_disconnected_ui
+        切回“连接”。
+        """
+        from datetime import datetime
+        now = datetime.now()
+        ts = f"{now.year}/{now.month}/{now.day} {now.hour:02d}:{now.minute:02d}:{now.second:02d}"
+        msg = f"{ts} -> {device} {self.tr('连接意外断开')}\n"
+        self._append_styled_line(msg, _DISCONNECT_ALERT_COLOR, bold=True)
 
     def _set_connected_ui(self, info: dict) -> None:
         self._is_connected = True
@@ -1747,21 +1776,12 @@ class RTTMonitorPage(QWidget):
         被用户点 "插入标记" + 连接/断开自动标记共用。
         """
         line = f"──── {text} ────" if text else "─" * 50
-        sb = self.display.verticalScrollBar()
-        at_bottom = sb.value() >= sb.maximum() - 4
-
-        cursor = self.display.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        if cursor.columnNumber() != 0:
-            cursor.insertText("\n")
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(self._cfg.get("mark_color") or "#ffff55"))
-        fmt.setFontWeight(QFont.Bold)
-        cursor.insertText(line + "\n", fmt)
-
-        if at_bottom:
-            with self._programmatic_scroll_guard():
-                sb.setValue(sb.maximum())
+        self._append_styled_line(
+            line + "\n",
+            self._cfg.get("mark_color") or "#ffff55",
+            bold=True,
+            force_scroll=True,
+        )
 
     def _on_insert_mark(self) -> None:
         text = self.le_mark.currentText().strip()
