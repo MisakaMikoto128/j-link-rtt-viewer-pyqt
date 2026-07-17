@@ -62,3 +62,6 @@ installer/*
 
 # i18n demo (独立于主项目)
 demo/
+
+# 临时诊断脚本（最小 demo 等）
+scratch/
