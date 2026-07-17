@@ -75,7 +75,7 @@ def main() -> int:
     # 全局界面字号：QApplication.setFont 设默认字号，所有 widget 继承。
     # RTT 显示区 / 内存页 hex dump 有各自字号覆盖（_apply_font 单独 setFont）。
     _app_font = app.font()
-    _app_font.setPointSize(int(cfg.get("ui_font_size") or 14))
+    _app_font.setPointSize(int(cfg.get("ui_font_size") or 10))
     app.setFont(_app_font)
 
     from ui.main_window import MainWindow

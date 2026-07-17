@@ -72,6 +72,10 @@ class MainWindow(FluentWindow):
             self.setWindowIcon(QIcon(str(icon_path)))
         self.setMinimumSize(480, 540)
         self._restore_geometry()
+        # 首次刷新全局界面字号：qfluentwidgets 控件用自己的默认字号（pixelSize），
+        # 不继承 QApplication.setFont，故构造后遍历 setFont 强制覆盖（否则首次显示
+        # 用控件默认字号，改字号才生效）。改默认 10pt 时正因此 bug 才被发现。
+        self._apply_ui_font_size(int(cfg.get("ui_font_size") or 10))
 
     def _add_nav(self, widget, icon, text_key, position=NavigationItemPosition.TOP) -> None:
         """添加导航项并记录 route_key → tr_key 映射。"""

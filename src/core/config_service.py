@@ -47,7 +47,7 @@ class ConfigService(QObject):
         "memory_font_size": 12,
         # 全局界面字号：QApplication.setFont 控制所有 UI 控件（按钮/标签/发送框）。
         # RTT 显示区 / 内存页 hex dump 有各自字号覆盖，不受此项影响。
-        "ui_font_size": 14,
+        "ui_font_size": 10,
         "max_display_lines": 10000,
         "rtt_poll_interval_ms": 100,   # RTT 轮询间隔（ms）—— 旧版叫 rx_timeout_ms，已迁移
         "rtt_encoding": "utf-8",       # RTT 解码编码：utf-8 / gbk / utf-16-le / latin-1 / ascii
@@ -185,7 +185,7 @@ class ConfigService(QObject):
         if disk.get("memory_font_size", 1) <= 0:
             disk["memory_font_size"] = 12
         if disk.get("ui_font_size", 1) <= 0:
-            disk["ui_font_size"] = 14
+            disk["ui_font_size"] = 10
         for key, default in self.DEFAULTS.items():
             if key not in disk:
                 continue
