@@ -57,7 +57,7 @@ class FakeWorker(QObject):
         return {"bytes": 0, "lines": 0, "session_start_ts": 0.0}
 
     def get_num_up_channels(self) -> int:
-        return 1
+        return getattr(self, "_num_up", 1)
 
 
 @pytest.fixture
@@ -463,3 +463,44 @@ def test_clear_button_clears_channel_buffers(rtt_page, qtbot):
     assert page.display.toPlainText() == ""
     assert page._channel_buffers == {}
     assert page._all_rtt_buffer == ""
+
+
+# ============================================================
+# 通道上限收紧（bug 回归：选超出范围通道连接后状态脱节）
+# ============================================================
+def test_overflow_channel_pulled_back_on_connect(rtt_page, qtbot):
+    """选超出 MCU 实际通道数的通道连接：setRange 后应显式拉回，三处状态一致。
+
+    回归 bug：setRange 静默 clamp 不发 valueChanged → _view_channel 滞留旧值，
+    显示空 + SpinBox 显示值与实际视图脱节。修复后超出时主动 setValue(上限)。
+    """
+    page, worker, _ = rtt_page
+    worker._num_up = 1   # MCU 只有通道 0
+    page.sp_channel.setValue(4)   # 用户故意选 4
+    qtbot.wait(20)
+    assert page._view_channel == 4
+
+    worker.connection_state_changed.emit(True)
+    qtbot.wait(30)
+    # 上限收紧到 0，且显式拉回 → 三处一致
+    assert page.sp_channel.maximum() == 0
+    assert page.sp_channel.value() == 0
+    assert page._view_channel == 0, "超出上限后 _view_channel 应同步拉回 0"
+    assert page._send_channel == 0
+
+    # 此时通道 0 数据应正常显示（bug 修复前因 _view_channel=4 过滤而空白）
+    worker.rtt_data_received.emit(0, "after-pullback\n")
+    qtbot.wait(30)
+    assert "after-pullback" in page.display.toPlainText()
+
+
+def test_all_channel_not_pulled_back_on_connect(rtt_page, qtbot):
+    """「全部通道」(-1) 在连接收紧上限时不应被拉回具体通道。"""
+    page, worker, _ = rtt_page
+    worker._num_up = 1
+    page.sp_channel.setValue(-1)   # 全部通道
+    qtbot.wait(20)
+    worker.connection_state_changed.emit(True)
+    qtbot.wait(30)
+    assert page.sp_channel.value() == -1, "全部通道不应因连接被退出"
+    assert page._view_channel == -1

@@ -744,7 +744,7 @@ class RTTMonitorPage(QWidget):
         self.sp_channel.setRange(CHANNEL_ALL, 15)
         self.sp_channel.setSpecialValueText(self.tr("全部通道"))
         self.sp_channel.setValue(self._cfg.get("rtt_channel"))
-        _tip(self.sp_channel, self.tr("-1/全部 = 合并查看所有通道；发送仍走最近选中的具体通道"))
+        _tip(self.sp_channel, self.tr("全部 = 合并查看所有通道；发送走最近选中的具体通道"))
         self.sp_channel.setFixedHeight(_CTRL_H)
         self.sp_channel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.sp_channel.setMinimumWidth(50)
@@ -1696,17 +1696,28 @@ class RTTMonitorPage(QWidget):
     def _update_channel_range_from_worker(self) -> None:
         """连接成功后按 MCU 上报的上行通道数收紧 SpinBox 上限（下限恒 -1=全部）。
 
-        当前选中通道超出新上限时不强改（worker 只是读不到该通道数据），
-        避免静默改动用户选择。
+        关键：setRange 后若当前值超出新上限，Qt 只会静默 clamp 显示值、**不发
+        valueChanged**——UI 内部 _view_channel 会和 SpinBox 显示脱节（bug：选超出
+        范围的通道连接后显示空 + 显示值与实际视图不一致）。所以超出时主动
+        setValue(上限)，走正常 _on_channel_changed 路径同步 _view_channel + 重渲染
+        + 通知 worker，保证三处（显示值 / _view_channel / worker 视图）一致。
         """
         n = max(1, int(self._worker.get_num_up_channels()))
+        max_ch = n - 1
         self.sp_channel.blockSignals(True)
         try:
-            self.sp_channel.setRange(CHANNEL_ALL, n - 1)
+            self.sp_channel.setRange(CHANNEL_ALL, max_ch)
+            clamped = self.sp_channel.value()   # setRange 可能已静默 clamp 显示值
         finally:
             self.sp_channel.blockSignals(False)
+        # setRange 静默 clamp 不发 valueChanged（Qt 实测：clamp 后 setValue(同值) 也是
+        # no-op 不发信号），所以不能靠信号同步。若 clamp 后的值与 _view_channel 不一致，
+        # 直接复用 _on_channel_changed 同步三处状态（_view_channel/_send_channel/cfg/
+        # worker/重渲染）。「全部通道」(-1) 永不拉回——对任何 MCU 都合法。
+        if clamped != self._view_channel and self._view_channel != CHANNEL_ALL:
+            self._on_channel_changed(clamped)
         _tip(self.sp_channel,
-             self.tr("MCU 上报 {n} 个上行通道；-1/全部 = 合并查看，发送走最近选中的具体通道").format(n=n))
+             self.tr("MCU 实际上报 {n} 个通道；全部 = 合并查看").format(n=n))
 
     def _on_unexpected_disconnect(self, device: str) -> None:
         """物理掉线：在显示区追加一行红色时间戳提示。
