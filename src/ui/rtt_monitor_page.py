@@ -744,7 +744,7 @@ class RTTMonitorPage(QWidget):
         self.sp_channel.setRange(CHANNEL_ALL, 15)
         self.sp_channel.setSpecialValueText(self.tr("全部通道"))
         self.sp_channel.setValue(self._cfg.get("rtt_channel"))
-        _tip(self.sp_channel, self.tr("全部 = 合并查看所有通道；发送走最近选中的具体通道"))
+        self._update_channel_tooltip()
         self.sp_channel.setFixedHeight(_CTRL_H)
         self.sp_channel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.sp_channel.setMinimumWidth(50)
@@ -1450,6 +1450,22 @@ class RTTMonitorPage(QWidget):
             self.tr("发送通道: {ch}").format(ch=self._send_channel))
         self.lbl_send_ch_hint.setVisible(self._view_channel == CHANNEL_ALL)
 
+    def _update_channel_tooltip(self) -> None:
+        """刷新 RTT 通道 SpinBox 的 tooltip。
+
+        已连接：显示 MCU 实际上报通道数；未连接：显示通用说明。
+        语言切换时 _retranslate_ui 也调用本方法重走 tr()，保证 tooltip 跟随语言。
+        """
+        if not hasattr(self, "sp_channel"):
+            return
+        if getattr(self, "_is_connected", False):
+            n = max(1, int(self._worker.get_num_up_channels()))
+            _tip(self.sp_channel,
+                 self.tr("MCU 实际上报 {n} 个通道；全部 = 合并查看").format(n=n))
+        else:
+            _tip(self.sp_channel,
+                 self.tr("全部 = 合并查看所有通道；发送走最近选中的具体通道"))
+
     def _on_send_clicked(self) -> None:
         if not self._is_connected:
             _infobar.warn(self, self.tr("未连接目标"), self.tr("请先连接 J-Link 和目标设备后再发送"))
@@ -1716,8 +1732,7 @@ class RTTMonitorPage(QWidget):
         # worker/重渲染）。「全部通道」(-1) 永不拉回——对任何 MCU 都合法。
         if clamped != self._view_channel and self._view_channel != CHANNEL_ALL:
             self._on_channel_changed(clamped)
-        _tip(self.sp_channel,
-             self.tr("MCU 实际上报 {n} 个通道；全部 = 合并查看").format(n=n))
+        self._update_channel_tooltip()
 
     def _on_unexpected_disconnect(self, device: str) -> None:
         """物理掉线：在显示区追加一行红色时间戳提示。
@@ -1804,7 +1819,9 @@ class RTTMonitorPage(QWidget):
         self.btn_toolbar_connect.setIcon(FluentIcon.PLAY)
         # 断开时停止定时发送
         self._timed_send_timer.stop()
-        
+        # 断开后 tooltip 从「MCU 实际上报 N」回到通用说明
+        self._update_channel_tooltip()
+
 
     def _update_stats(self) -> None:
         """1s 一次：从 worker 同步收发计数与连接时长并刷新状态栏。
@@ -2296,6 +2313,7 @@ class RTTMonitorPage(QWidget):
         self._lbl_rtt_channel.setText(self.tr("RTT 通道"))
         # SpinBox 特殊值文本 + 发送通道提示也要重翻译
         self.sp_channel.setSpecialValueText(self.tr("全部通道"))
+        self._update_channel_tooltip()
         self._update_send_ch_hint()
         # btn_connect 文字随连接状态变化：按当前状态刷新文字。
         # 连接中（disabled）态保留"连接中…"，由后续状态回调覆盖。
