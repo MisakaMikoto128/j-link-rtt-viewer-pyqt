@@ -266,6 +266,46 @@ def test_send_data_when_not_connected(worker):
     assert ("send_data", False) == (results[0][0], results[0][1])
 
 
+def test_send_data_unspecified_error_rewritten(worker):
+    """rtt_write 抛通用 "Unspecified error" 时，提示改写成可操作文案（带通道号）。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    _set_allocated_channels(jl, 1)
+    jl.rtt_read.return_value = []
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.5)
+
+    jl.rtt_write.side_effect = RuntimeError("Unspecified error.")
+    results = []
+    w.command_result.connect(lambda c, ok, msg: results.append((c, ok, msg)))
+    w.send_data_requested.emit("hi", False)
+    _drain_events(0.3)
+    assert results[0][0] == "send_data" and results[0][1] is False
+    msg = results[0][2]
+    assert "通道 0" in msg, f"应带通道号，got {msg!r}"
+    assert "通信异常" in msg, f"Unspecified 应改写成可操作提示，got {msg!r}"
+
+
+def test_send_data_specific_error_preserved(worker):
+    """有具体信息的异常原样保留（带通道号前缀），不误改写。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    _set_allocated_channels(jl, 1)
+    jl.rtt_read.return_value = []
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.5)
+
+    jl.rtt_write.side_effect = RuntimeError("Target not connected")
+    results = []
+    w.command_result.connect(lambda c, ok, msg: results.append((c, ok, msg)))
+    w.send_data_requested.emit("hi", False)
+    _drain_events(0.3)
+    msg = results[0][2]
+    assert "通道 0" in msg and "Target not connected" in msg
+
+
 def test_reset_target(worker):
     w, jl = worker
     jl.opened.return_value = False

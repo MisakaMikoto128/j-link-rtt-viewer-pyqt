@@ -640,8 +640,15 @@ class JLinkWorker(QObject):
             ok = written == len(payload)
             self.command_result.emit("send_data", ok, "" if ok else "rtt_write 写入不完整")
         except Exception as e:
-            self._logger.error(f"发送数据失败：{e}")
-            self.command_result.emit("send_data", False, str(e))
+            self._logger.error(f"发送数据失败（通道 {self._send_channel}）：{e}")
+            raw = str(e).strip()
+            # pylink/J-Link DLL 的通用错误（如 "Unspecified error."）对用户无意义，
+            # 替换成可操作提示；有具体信息的原样保留。
+            if not raw or "unspecified" in raw.lower():
+                msg = f"发送失败（通道 {self._send_channel}）：J-Link 通信异常，请检查连接与通道"
+            else:
+                msg = f"发送失败（通道 {self._send_channel}）：{raw}"
+            self.command_result.emit("send_data", False, msg)
 
     def _pause_read_thread(self) -> None:
         """停 read_thread 并 join；做 jlink reset / rtt_stop_start / export
