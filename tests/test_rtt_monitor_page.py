@@ -22,7 +22,7 @@ class FakeWorker(QObject):
     set_poll_interval_requested = Signal(int)
     start_log_recording_requested = Signal(str)
     stop_log_recording_requested = Signal()
-    rtt_data_received = Signal(str)
+    rtt_data_received = Signal(int, str)  # (channel, text)
     unexpected_disconnect = Signal(str)
     reconnect_status = Signal(str, str)
     connection_state_changed = Signal(bool)
@@ -53,8 +53,11 @@ class FakeWorker(QObject):
     def get_log_path(self) -> str | None:
         return None
 
-    def get_stats(self) -> tuple[int, int, float]:
-        return (0, 0, 0.0)
+    def get_stats(self, channel: int | None = None) -> dict:
+        return {"bytes": 0, "lines": 0, "session_start_ts": 0.0}
+
+    def get_num_up_channels(self) -> int:
+        return 1
 
 
 @pytest.fixture
@@ -165,7 +168,7 @@ def test_state_changed_to_disconnected_resets_ui(rtt_page, qtbot):
 def test_rtt_data_received_appends_to_display(rtt_page, qtbot):
     """worker.rtt_data_received 进来的文本应追加到 display。"""
     page, worker, _ = rtt_page
-    worker.rtt_data_received.emit("hello from MCU\n")
+    worker.rtt_data_received.emit(0, "hello from MCU\n")
     qtbot.wait(50)
     assert "hello from MCU" in page.display.toPlainText()
 
@@ -272,10 +275,10 @@ def test_auto_frame_inserts_newline_on_gap(rtt_page, qtbot):
     page.chk_auto_frame.setChecked(True)
     page.le_frame_timeout.setText("5")  # 5ms 阈值
     # 第一批数据
-    worker.rtt_data_received.emit("frame1")
+    worker.rtt_data_received.emit(0, "frame1")
     qtbot.wait(30)  # 等 > 5ms
     # 第二批数据
-    worker.rtt_data_received.emit("frame2")
+    worker.rtt_data_received.emit(0, "frame2")
     qtbot.wait(30)
     text = page.display.toPlainText()
     # 两帧之间应有换行
@@ -329,7 +332,7 @@ def test_toolbar_pause_syncs_with_left_panel_checkbox(rtt_page, qtbot):
 def test_toolbar_clear_empties_display(rtt_page, qtbot):
     """工具栏清空按钮应清空显示区。"""
     page, worker, _ = rtt_page
-    worker.rtt_data_received.emit("some data\n")
+    worker.rtt_data_received.emit(0, "some data\n")
     qtbot.wait(30)
     assert "some data" in page.display.toPlainText()
     page.btn_toolbar_clear.click()
@@ -386,3 +389,77 @@ def test_left_panel_no_inflate_and_title_stays_short(rtt_page, qtbot):
             assert inner_min_width() <= 280
         finally:
             qapp.removeTranslator(t)
+
+
+# ============================================================
+# 多通道 RTT（v0.4.0）
+# ============================================================
+def test_channel_switch_renders_per_channel_history(rtt_page, qtbot):
+    """切通道后显示各自通道历史，不互相追加。"""
+    page, worker, _ = rtt_page
+    worker.rtt_data_received.emit(0, "ch0-line\n")
+    qtbot.wait(30)
+    assert "ch0-line" in page.display.toPlainText()
+
+    # 切到通道 1（空历史）→ 显示区应为空
+    page.sp_channel.setValue(1)
+    qtbot.wait(30)
+    assert page.display.toPlainText() == ""
+
+    # 通道 1 收数据，通道 0 同时收（后台缓冲）
+    worker.rtt_data_received.emit(1, "ch1-line\n")
+    worker.rtt_data_received.emit(0, "ch0-more\n")
+    qtbot.wait(30)
+    assert "ch1-line" in page.display.toPlainText()
+    assert "ch0-more" not in page.display.toPlainText(), "非视图通道只入缓冲不渲染"
+
+    # 切回通道 0 → 完整历史（含切走期间收到的）
+    page.sp_channel.setValue(0)
+    qtbot.wait(30)
+    text = page.display.toPlainText()
+    assert "ch0-line" in text
+    assert "ch0-more" in text
+    assert "ch1-line" not in text
+
+
+def test_all_channels_view_merges_and_send_hint(rtt_page, qtbot):
+    """-1 全部通道：合并显示 + 发送通道提示可见 + 发送通道保持最近具体通道。"""
+    page, worker, _ = rtt_page
+    page.sp_channel.setValue(1)   # 先选具体通道 1（成为发送通道）
+    qtbot.wait(20)
+    assert page._send_channel == 1
+
+    page.sp_channel.setValue(-1)  # 全部通道
+    qtbot.wait(20)
+    assert page._view_channel == -1
+    assert page._send_channel == 1, "全部通道视图不应改动发送通道"
+    # isVisible() 在父 widget 未 show 时恒 False；显隐状态用 isHidden() 判定
+    assert not page.lbl_send_ch_hint.isHidden()
+    assert "1" in page.lbl_send_ch_hint.text()
+
+    worker.rtt_data_received.emit(0, "from-ch0\n")
+    worker.rtt_data_received.emit(1, "from-ch1\n")
+    qtbot.wait(30)
+    text = page.display.toPlainText()
+    assert "from-ch0" in text
+    assert "from-ch1" in text, "全部通道视图应渲染所有通道"
+
+    # 切回具体通道 → 提示隐藏
+    page.sp_channel.setValue(0)
+    qtbot.wait(20)
+    assert page.lbl_send_ch_hint.isHidden()
+
+
+def test_clear_button_clears_channel_buffers(rtt_page, qtbot):
+    """清除按钮清空所有通道历史缓冲。"""
+    page, worker, _ = rtt_page
+    worker.rtt_data_received.emit(0, "ch0-data\n")
+    worker.rtt_data_received.emit(1, "ch1-data\n")
+    qtbot.wait(30)
+    assert page._channel_buffers.get(0)
+    assert page._channel_buffers.get(1)
+    page.btn_clear.click()
+    qtbot.wait(20)
+    assert page.display.toPlainText() == ""
+    assert page._channel_buffers == {}
+    assert page._all_rtt_buffer == ""

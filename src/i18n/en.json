@@ -307,5 +307,10 @@
   "默认": "Default",
   "（未选择保存路径）": "(No save path selected)",
   "（立即生效）": "(takes effect immediately)",
-  "💾 保存": "💾 Save"
+  "💾 保存": "💾 Save",
+  "全部通道": "All Channels",
+  "发送通道: {ch}": "TX Channel: {ch}",
+  "每通道历史缓存": "Per-Channel History",
+  "-1/全部 = 合并查看所有通道；发送仍走最近选中的具体通道": "-1/All = merged view of all channels; TX uses last selected channel",
+  "MCU 上报 {n} 个上行通道；-1/全部 = 合并查看，发送走最近选中的具体通道": "MCU reports {n} up channels; -1/All = merged view, TX uses last selected"
 }

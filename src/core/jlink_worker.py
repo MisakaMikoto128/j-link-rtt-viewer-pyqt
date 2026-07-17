@@ -44,6 +44,13 @@ RESET_MODE_AUTO_RECONNECT = "auto_reconnect"
 # reset 后让 CPU 停在复位状态（不运行、不断开重连）。
 RESET_MODE_HALT = "halt"
 
+# RTT 通道模型（worker 是权威定义，UI 只引用常量）：
+# - 视图通道 -1 = 「全部通道」（合并视图），>=0 = 具体上行通道
+# - 发送通道恒为具体通道：跟随最近选中的具体通道，初始 0
+# - 探测范围：MCU 端 _SEGGER_RTT 控制块上报的 MaxNumUpBuffers（rtt_get_num_up_buffers）
+CHANNEL_ALL = -1
+CHANNEL_DEFAULT = 0
+
 
 def encode_send_payload(data: str, is_hex: bool) -> bytes:
     """把发送文本编码为写入 RTT 的字节：HEX 模式按十六进制解码，否则 UTF-8 编码。
@@ -80,7 +87,9 @@ class JLinkWorker(QObject):
     stop_requested = Signal()
 
     # ---- 输出信号 ----
-    rtt_data_received = Signal(str)
+    # 通道号 + 文本。int+str 是安全的跨线程类型（dict 会踩 PySide6 marshalling 坑）。
+    # 显示区分发 / 按通道历史 / 全部通道合并 都在 UI 侧做，worker 只负责读 + 标注来源。
+    rtt_data_received = Signal(int, str)
     # 意外断开（物理掉线）：read_thread 在 rtt_read 抛异常且仍处于连接态时
     # 置 _unexpected_disconnect_pending，由 worker 线程的 _drain_rtt_buffer 检出，
     # 在 worker 线程 emit 设备标识给 UI（红字提示）。不让 read_thread 直接 emit：
@@ -106,13 +115,15 @@ class JLinkWorker(QObject):
         super().__init__()
         self._logger = get_logger()
         self._state: str = _STATE_IDLE
-        self._channel: int = 0
+        self._view_channel: int = CHANNEL_DEFAULT   # UI 选择的视图通道（-1 = 全部）
+        self._send_channel: int = CHANNEL_DEFAULT   # 实际发送通道（恒为具体通道）
+        self._num_up_channels: int = 1              # MCU 上报的上行通道数（连接后探测）
         self._paused: bool = False
         self._ready: bool = False
 
         # 这些在 initialize() 内（worker 线程）创建/启动：
         self.jlink: pylink.JLink | None = None
-        self._decoder: codecs.IncrementalDecoder | None = None
+        self._decoders: dict[int, codecs.IncrementalDecoder] = {}  # 每通道独立 decoder
         self._encoding: str = "utf-8"      # 可由 UI 改：utf-8/gbk/utf-16-le/...
         self._read_thread: threading.Thread | None = None
         self._stop_read: bool = False
@@ -120,11 +131,9 @@ class JLinkWorker(QObject):
         self._log_file = None
         self._log_path: str | None = None
 
-        # RTT 数据中转：read_thread 写入 buffer（lock 保护），worker 线程 QTimer 取出合并 emit。
-        # **关键**：避免 native threading.Thread 直接 emit Qt signal——
-        # PySide6 从非 QThread 的 pthread emit 跨线程信号会产生 setParent cross-thread 警告，
-        # 并可能让主线程事件循环异常（卡 UI）。
-        self._rtt_drain_buffer: list[str] = []
+        # RTT 数据中转：read_thread 写入 (channel, text)（lock 保护），worker 线程
+        # QTimer 取出合并 emit。**关键**：避免 native threading.Thread 直接 emit Qt signal。
+        self._rtt_drain_buffer: list[tuple[int, str]] = []
         self._rtt_drain_lock = threading.Lock()
         self._rtt_drain_timer: QTimer | None = None
 
@@ -151,10 +160,9 @@ class JLinkWorker(QObject):
         self._reconnect_target_serial: str | None = None
         self._reconnect_attempt: int = 0
 
-        # 数据吞吐统计：read_thread 写入，UI 1s 一次同步读取（GIL + lock 保护）
+        # 数据吞吐统计（按通道）：read_thread 写入，UI 1s 一次同步读取（GIL + lock 保护）
         self._stats_lock = threading.Lock()
-        self._total_bytes: int = 0
-        self._total_lines: int = 0
+        self._channel_stats: dict[int, tuple[int, int]] = {}  # ch -> (bytes, lines)
         self._session_start_ts: float = 0.0   # 0 = 未开始会话
 
     # ============================================================
@@ -175,7 +183,7 @@ class JLinkWorker(QObject):
     def initialize(self) -> None:
         """在 worker 线程内创建所有 thread-affinity 敏感的对象。"""
         self.jlink = pylink.JLink()
-        self._reset_decoder()
+        self._reset_decoders()
 
         # 把输入信号连到本地槽（同线程，DirectConnection）
         self.connect_requested.connect(self._on_connect)
@@ -225,22 +233,33 @@ class JLinkWorker(QObject):
         with self._info_lock:
             return dict(self._device_info)
 
-    def get_stats(self) -> tuple[int, int, float]:
-        """同步取吞吐统计 (total_bytes, total_lines, session_start_ts)。
-        session_start_ts == 0 表示尚未开始 / 已断开。
+    def get_stats(self, channel: int | None = None) -> dict:
+        """同步取吞吐统计。channel=None → 全部通道合计；否则只取该通道。
+
+        返回 {"bytes": int, "lines": int, "session_start_ts": float}。
+        session_start_ts == 0 表示尚未开始 / 已断开。返回 dict 安全（非跨线程信号，
+        是 UI 主动调的同步方法）。
         """
         with self._stats_lock:
-            return self._total_bytes, self._total_lines, self._session_start_ts
+            if channel is None:
+                b = sum(v[0] for v in self._channel_stats.values())
+                ln = sum(v[1] for v in self._channel_stats.values())
+            else:
+                b, ln = self._channel_stats.get(channel, (0, 0))
+            return {"bytes": b, "lines": ln, "session_start_ts": self._session_start_ts}
+
+    def get_num_up_channels(self) -> int:
+        """同步取 MCU 上报的上行通道数（连接时探测）。UI 用来动态调 SpinBox 上限。"""
+        return self._num_up_channels
 
     def reset_counts(self) -> None:
-        """清零收发字节/行计数，保留会话时长（_session_start_ts 不变）。
+        """清零所有通道的收发字节/行计数，保留会话时长（_session_start_ts 不变）。
 
         供 UI「重置计数」按钮调用：用户主动清零收发统计，会话时长继续累计。
         与 _read_loop 增量写之间的竞争由 _stats_lock 串行化。
         """
         with self._stats_lock:
-            self._total_bytes = 0
-            self._total_lines = 0
+            self._channel_stats = {}
 
     # ============================================================
     # 连接 / 断开
@@ -258,7 +277,9 @@ class JLinkWorker(QObject):
             self.log_message.emit("warning", "已连接，先断开再切换设备")
             return
         self._state = _STATE_CONNECTING
-        self._channel = channel
+        self._view_channel = channel
+        if channel >= 0:
+            self._send_channel = channel
         try:
             # 预查 J-Link 是否接入：connected_emulators() 用 JLINKARM_EMU_GetList 纯枚举，
             # 不弹 DLL 原生选择窗。空则气泡提示 + 回退（_do_disconnect emit 状态 False
@@ -282,7 +303,8 @@ class JLinkWorker(QObject):
             self.jlink.set_tif(tif)
             self.jlink.set_speed(int(speed))
             self.jlink.connect(target)
-            self._reset_decoder()
+            self._reset_decoders()
+            self._num_up_channels = self._detect_num_up_channels()
 
             if self.jlink.connected():
                 self._state = _STATE_CONNECTED
@@ -293,7 +315,8 @@ class JLinkWorker(QObject):
                 # 新会话：仅重置时长起点；收发计数跨连接累计，由 reset_counts() 显式清零
                 with self._stats_lock:
                     self._session_start_ts = time.time()
-                self._logger.info(f"已连接 {target} ({iface} {speed}kHz, RTT ch{channel})")
+                self._logger.info(
+                    f"已连接 {target} ({iface} {speed}kHz, RTT 上行通道数 {self._num_up_channels})")
                 self.connection_state_changed.emit(True)
                 self._restart_read_thread()
             else:
@@ -319,16 +342,23 @@ class JLinkWorker(QObject):
         # 1. 停读线程（同 reset / export 共用 helper）
         self._pause_read_thread()
 
-        # 把 buffer 里残留的数据也 emit 出去，避免最后一帧丢失
-        with self._rtt_drain_lock:
-            tail = "".join(self._rtt_drain_buffer)
-            self._rtt_drain_buffer.clear()
-        if tail:
-            self.rtt_data_received.emit(tail)
+        # 2. 掉线竞态闭环：read_thread 可能在死前已置 _unexpected_disconnect_pending，
+        #    但 drain timer(50ms) 还没来得及转。这里先把它 drain 掉——否则 buffer 数据
+        #    会先 emit 给 UI，而 state(False) 在 was_active=False 下不 emit，UI 卡死。
+        #    （bug：多通道读循环高频触发 rtt_read 异常时此竞态概率显著升高）
+        with self._unexpected_disconnect_lock:
+            pending_unexpected = self._unexpected_disconnect_pending
+            self._unexpected_disconnect_pending = False
+        if pending_unexpected and self._state == _STATE_CONNECTED:
+            self._on_unexpected_disconnect()
+            return  # _on_unexpected_disconnect 内部已走完整断开流程
+
+        # 3. 正常断开：把 buffer 残留数据按通道 emit 出去（最后一帧不丢）
+        self._emit_pending_drain()
 
         self._close_log_file()
 
-        # 2. rtt_stop + close（无条件调用，pylink 1.6.0 直接调，
+        # 4. rtt_stop + close（无条件调用，pylink 1.6.0 直接调，
         #    异常只 warning 不阻断——守卫反而会因内部状态时序问题误判）
         try:
             self.jlink.rtt_stop()
@@ -346,6 +376,8 @@ class JLinkWorker(QObject):
         self._unexpected_disconnect_pending = False
         with self._info_lock:
             self._device_info = {}
+        self._num_up_channels = 1
+        self._decoders.clear()
         # 仅重置会话时长为 0（断开态标记）：收发计数跨断开保留，由 reset_counts()
         # 显式清零。start_ts=0 让 UI 的 _update_stats 显示时长占位、不再按连接态累计。
         with self._stats_lock:
@@ -353,6 +385,19 @@ class JLinkWorker(QObject):
         if was_active:
             self._logger.info("已断开 J-Link")
             self.connection_state_changed.emit(False)
+
+    def _detect_num_up_channels(self) -> int:
+        """连接后探测 MCU 端 RTT 上行通道数（_SEGGER_RTT 控制块的 MaxNumUpBuffers）。
+
+        返回 >= 1 的整数；探测失败（旧固件 / J-Link 固件不支持 / 控制块未找到）
+        回退 1（只读通道 0，行为同旧版）。
+        """
+        try:
+            n = int(self.jlink.rtt_get_num_up_buffers())
+            return max(1, n)
+        except Exception as e:
+            self._logger.warning(f"探测 RTT 上行通道数失败，回退 1：{e}")
+            return 1
 
     def _collect_device_info(self, target: str, iface: str, speed: int) -> dict:
         try:
@@ -374,14 +419,42 @@ class JLinkWorker(QObject):
     # ============================================================
     # RTT 读循环
     # ============================================================
-    def _reset_decoder(self) -> None:
-        """重建 incremental decoder。"""
-        try:
-            self._decoder = codecs.getincrementaldecoder(self._encoding)(errors="replace")
-        except LookupError:
-            self._logger.warning(f"未知编码 {self._encoding}，回退 utf-8")
-            self._encoding = "utf-8"
-            self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    def _reset_decoders(self) -> None:
+        """清空每通道 decoder 表。懒创建：下一个读拍按需重建，用当前编码。"""
+        self._decoders = {}
+
+    def _get_decoder(self, channel: int) -> codecs.IncrementalDecoder:
+        """每通道独立 incremental decoder——不同通道是独立字节流，共享会让
+        一通道的半字节状态污染另一通道。懒创建，编码切换时 _reset_decoders 全清。"""
+        dec = self._decoders.get(channel)
+        if dec is None:
+            try:
+                dec = codecs.getincrementaldecoder(self._encoding)(errors="replace")
+            except LookupError:
+                self._logger.warning(f"未知编码 {self._encoding}，回退 utf-8")
+                self._encoding = "utf-8"
+                dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            self._decoders[channel] = dec
+        return dec
+
+    def _poll_all_channels(self) -> None:
+        """一拍：遍历所有已配置上行通道（0.._num_up_channels-1），读到的数据
+        标注通道号进 drain buffer + 按通道累计统计。与 UI 当前查看哪个通道无关——
+        切通道是纯显示行为，worker 始终读所有通道，保证各通道历史完整。"""
+        for ch in range(self._num_up_channels):
+            data = self.jlink.rtt_read(ch, 4096)
+            if not data:
+                continue
+            raw_len = len(data)
+            decoded = self._get_decoder(ch).decode(bytes(data))
+            if not decoded:
+                continue
+            with self._rtt_drain_lock:
+                self._rtt_drain_buffer.append((ch, decoded))
+            with self._stats_lock:
+                b, ln = self._channel_stats.get(ch, (0, 0))
+                self._channel_stats[ch] = (b + raw_len, ln + decoded.count("\n"))
+            self._write_log_file(decoded)
 
     def _read_loop(self) -> None:
         """daemon 读线程：在独立 Python 线程跑，照搬参考项目模式。
@@ -397,17 +470,7 @@ class JLinkWorker(QObject):
         while not self._stop_read:
             try:
                 if self._state == _STATE_CONNECTED and not self._paused and self.jlink is not None:
-                    data = self.jlink.rtt_read(self._channel, 4096)
-                    if data:
-                        raw_len = len(data)
-                        decoded = self._decoder.decode(bytes(data))
-                        if decoded:
-                            with self._rtt_drain_lock:
-                                self._rtt_drain_buffer.append(decoded)
-                            with self._stats_lock:
-                                self._total_bytes += raw_len
-                                self._total_lines += decoded.count("\n")
-                            self._write_log_file(decoded)
+                    self._poll_all_channels()
             except Exception as e:
                 # 不 emit log_message——避免 native thread 跨线程 emit。
                 # 错误从 logger 文件看，足够诊断。
@@ -424,21 +487,30 @@ class JLinkWorker(QObject):
     @Slot()
     def _drain_rtt_buffer(self) -> None:
         """worker 线程槽：50ms 一次，把 read_thread 累积的数据合并 emit 给 UI。"""
-        with self._rtt_drain_lock:
-            if self._rtt_drain_buffer:
-                merged = "".join(self._rtt_drain_buffer)
-                self._rtt_drain_buffer.clear()
-            else:
-                merged = ""
         # read_thread 检出的意外断开（物理掉线）：在 worker 线程闭环处理
         with self._unexpected_disconnect_lock:
             unexpected = self._unexpected_disconnect_pending
             self._unexpected_disconnect_pending = False
         # 先把残留数据 emit 出去（断开前最后一帧），再处理意外断开
-        if merged:
-            self.rtt_data_received.emit(merged)
+        self._emit_pending_drain()
         if unexpected:
             self._on_unexpected_disconnect()
+
+    def _emit_pending_drain(self) -> None:
+        """把 drain buffer 里残留数据按通道分组 emit（不处理意外断开标记）。
+
+        拆成独立 helper：_drain_rtt_buffer（50ms timer）与 _do_disconnect（掉线竞态下
+        抢先 emit 最后一帧）共用，避免 disconnect 路径和 drain timer 重复 emit。
+        """
+        with self._rtt_drain_lock:
+            if not self._rtt_drain_buffer:
+                return
+            grouped: dict[int, list[str]] = {}
+            for ch, text in self._rtt_drain_buffer:
+                grouped.setdefault(ch, []).append(text)
+            self._rtt_drain_buffer.clear()
+        for ch, parts in grouped.items():
+            self.rtt_data_received.emit(ch, "".join(parts))
 
     def _on_unexpected_disconnect(self) -> None:
         """read_thread 检出物理掉线后，在 worker 线程闭环：捕获设备标识 ->
@@ -536,7 +608,7 @@ class JLinkWorker(QObject):
             return
         try:
             payload = encode_send_payload(data, is_hex)
-            written = self.jlink.rtt_write(self._channel, payload)
+            written = self.jlink.rtt_write(self._send_channel, payload)
             ok = written == len(payload)
             self.command_result.emit("send_data", ok, "" if ok else "rtt_write 写入不完整")
         except Exception as e:
@@ -590,7 +662,7 @@ class JLinkWorker(QObject):
             time.sleep(0.1)  # 等 MCU 重新初始化 _SEGGER_RTT 控制块
             self.jlink.rtt_stop()
             self.jlink.rtt_start()
-            self._reset_decoder()
+            self._reset_decoders()
         except Exception as e:
             ok, err = False, str(e)
             self._logger.error(f"重置失败：{e}")
@@ -650,8 +722,13 @@ class JLinkWorker(QObject):
 
     @Slot(int)
     def _on_set_channel(self, channel: int) -> None:
-        self._channel = channel
-        self.log_message.emit("info", f"RTT 通道切换为 {channel}")
+        """UI 切换视图通道。-1 = 全部通道；>=0 = 具体通道（同时成为发送通道）。"""
+        self._view_channel = channel
+        if channel >= 0:
+            self._send_channel = channel
+            self.log_message.emit("info", f"RTT 通道切换为 {channel}")
+        else:
+            self.log_message.emit("info", f"RTT 通道切换为全部（发送仍走 {self._send_channel}）")
 
     @Slot(bool)
     def _on_set_paused(self, paused: bool) -> None:
@@ -668,13 +745,13 @@ class JLinkWorker(QObject):
 
     @Slot(str)
     def _on_set_encoding(self, encoding: str) -> None:
-        """切换 RTT 解码编码（utf-8 / gbk / utf-16-le / latin-1 / ascii）。立即重建 decoder。"""
+        """切换 RTT 解码编码（utf-8 / gbk / utf-16-le / latin-1 / ascii）。清空所有通道 decoder。"""
         if not encoding:
             return
         if encoding == self._encoding:
             return
         self._encoding = encoding
-        self._reset_decoder()
+        self._reset_decoders()
         self._logger.info(f"RTT 解码编码切换为 {encoding}")
 
     @Slot(bool)

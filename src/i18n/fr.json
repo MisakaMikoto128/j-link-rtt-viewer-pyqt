@@ -307,5 +307,10 @@
   "默认": "Par défaut",
   "（未选择保存路径）": "(Aucun chemin de sauvegarde sélectionné)",
   "（立即生效）": "(Effectif immédiatement)",
-  "💾 保存": "💾 Enregistrer"
+  "💾 保存": "💾 Enregistrer",
+  "全部通道": "Tous les canaux",
+  "发送通道: {ch}": "Canal TX : {ch}",
+  "每通道历史缓存": "Historique par canal",
+  "-1/全部 = 合并查看所有通道；发送仍走最近选中的具体通道": "-1/Tous = vue fusionnée ; TX utilise le dernier canal sélectionné",
+  "MCU 上报 {n} 个上行通道；-1/全部 = 合并查看，发送走最近选中的具体通道": "MCU signale {n} canaux montants ; -1/Tous = vue fusionnée, TX dernier canal"
 }

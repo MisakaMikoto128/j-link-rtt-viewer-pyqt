@@ -69,7 +69,7 @@ from qfluentwidgets import (
 from core.ansi_parser import AnsiAttrs, parse_ansi
 from core.config_service import ConfigService
 from core.crc_utils import CRC_ALGORITHMS, compute_crc
-from core.jlink_worker import RESET_MODE_HALT, JLinkWorker, encode_send_payload
+from core.jlink_worker import CHANNEL_ALL, CHANNEL_DEFAULT, RESET_MODE_HALT, JLinkWorker, encode_send_payload
 
 from . import _infobar
 from .widgets.search_bar import SearchBar
@@ -434,6 +434,16 @@ class RTTMonitorPage(QWidget):
         # 发送字节统计缓存（跨连接累计；_update_stats 从 worker 同步）
         self._send_total_bytes = 0
         self._send_last_bytes = 0
+
+        # 多通道历史缓冲（切通道显示各自历史的关键）：
+        # - _channel_buffers[ch]：该通道已接收的纯文本，上限 rtt_channel_history_chars（默认 200k）
+        # - _all_rtt_buffer：全部通道按到达顺序合并的文本（「全部通道」视图用），同上限
+        # - _view_channel：当前视图通道（-1=全部）；_send_channel：实际发送通道（恒为具体通道）
+        # 清空按钮 / 通道切换只重建显示，不改缓冲；缓冲由「清除」按钮一并清空。
+        self._channel_buffers: dict[int, str] = {}
+        self._all_rtt_buffer: str = ""
+        self._view_channel: int = self._cfg.get("rtt_channel")
+        self._send_channel: int = self._view_channel if self._view_channel >= 0 else CHANNEL_DEFAULT
         
         # 自动断帧：上次接收数据的时间戳
         import time as _time_mod
@@ -729,8 +739,12 @@ class RTTMonitorPage(QWidget):
         self._lbl_rtt_channel.setFixedHeight(_CTRL_H)
         row_ch.addWidget(self._lbl_rtt_channel)
         self.sp_channel = SpinBox(inner)
-        self.sp_channel.setRange(0, 15)
+        # -1 = 全部通道（显示为「全部通道」文本）；上限 15 是占位，连接成功后
+        # 按 MCU 实际上报通道数收紧（_update_channel_range_from_worker）
+        self.sp_channel.setRange(CHANNEL_ALL, 15)
+        self.sp_channel.setSpecialValueText(self.tr("全部通道"))
         self.sp_channel.setValue(self._cfg.get("rtt_channel"))
+        _tip(self.sp_channel, self.tr("-1/全部 = 合并查看所有通道；发送仍走最近选中的具体通道"))
         self.sp_channel.setFixedHeight(_CTRL_H)
         self.sp_channel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.sp_channel.setMinimumWidth(50)
@@ -1096,7 +1110,7 @@ class RTTMonitorPage(QWidget):
         self.btn_toolbar_clear = ToolButton(FluentIcon.DELETE, self._toolbar)
         self.btn_toolbar_clear.setFixedSize(36, 30)
         _tip(self.btn_toolbar_clear, self.tr("清除显示"))
-        self.btn_toolbar_clear.clicked.connect(self.display.clear)
+        self.btn_toolbar_clear.clicked.connect(self._on_clear_clicked)
 
         # 保存
         self.btn_toolbar_save = ToolButton(FluentIcon.SAVE, self._toolbar)
@@ -1187,6 +1201,13 @@ class RTTMonitorPage(QWidget):
         v.addWidget(self.display, 1)
         v.addWidget(self._toolbar)
         v.addLayout(send_area)
+        # 发送通道提示：仅「全部通道」视图时可见（此时视图通道 ≠ 发送通道，需提示用户）
+        self.lbl_send_ch_hint = BodyLabel("")
+        self.lbl_send_ch_hint.setStyleSheet("color: #888888; font-size: 11px;")
+        self.lbl_send_ch_hint.setContentsMargins(4, 0, 4, 0)
+        self.lbl_send_ch_hint.setVisible(getattr(self, "_view_channel", CHANNEL_DEFAULT) == CHANNEL_ALL)
+        v.addWidget(self.lbl_send_ch_hint)
+        self._update_send_ch_hint()
         v.addLayout(status_row)
         return panel
 
@@ -1259,7 +1280,7 @@ class RTTMonitorPage(QWidget):
         self.btn_connect.clicked.connect(self._on_connect_clicked)
         self.btn_reset.clicked.connect(self._on_reset_clicked)
         self.btn_reset_halt.clicked.connect(self._on_reset_halt_clicked)
-        self.btn_clear.clicked.connect(self.display.clear)
+        self.btn_clear.clicked.connect(self._on_clear_clicked)
         self.chk_pause.toggled.connect(self._worker.set_pause_receive_requested.emit)
         self.chk_power.toggled.connect(self._worker.set_power_output_requested.emit)
         self.sp_channel.valueChanged.connect(self._on_channel_changed)
@@ -1407,8 +1428,27 @@ class RTTMonitorPage(QWidget):
         self.lbl_status_rx.setText(self.tr("接收: 0 - 0"))
 
     def _on_channel_changed(self, ch: int) -> None:
+        """通道 SpinBox 变化：更新视图通道 + 发送通道 + 持久化 + 通知 worker + 重渲染。
+
+        -1 = 全部通道（合并视图）；>=0 = 具体通道（同时成为发送通道）。
+        显示区历史不清——worker 始终读所有通道，UI 按通道缓存历史，切换只是换视图。
+        """
+        self._view_channel = ch
+        if ch >= 0:
+            self._send_channel = ch
         self._cfg.set("rtt_channel", ch)
         self._worker.set_rtt_channel_requested.emit(ch)
+        self._update_send_ch_hint()
+        self._render_view()
+        self._update_stats()  # 接收统计立即按新通道口径刷新（不等 1s tick）
+
+    def _update_send_ch_hint(self) -> None:
+        """发送通道提示：「全部通道」视图时显示当前实际发送通道。"""
+        if not hasattr(self, "lbl_send_ch_hint") or not hasattr(self, "_send_channel"):
+            return
+        self.lbl_send_ch_hint.setText(
+            self.tr("发送通道: {ch}").format(ch=self._send_channel))
+        self.lbl_send_ch_hint.setVisible(self._view_channel == CHANNEL_ALL)
 
     def _on_send_clicked(self) -> None:
         if not self._is_connected:
@@ -1467,6 +1507,10 @@ class RTTMonitorPage(QWidget):
 
         force_scroll=True 时不看 chk_auto_scroll（会话标记：用户主动插入，
         即使关闭自动滚动也跟到末尾）；其余按 chk_auto_scroll 决定。
+
+        注意：这类「非 RTT 数据」的染色行只入显示区，**不写入 _channel_buffers /
+        _all_rtt_buffer**——它们不是通道数据，切通道重建视图时不应复现（会话标记 /
+        回显属于"当时的显示状态"，不是设备数据流）。
         """
         sb = self.display.verticalScrollBar()
         at_bottom = sb.value() >= sb.maximum() - 4
@@ -1638,6 +1682,7 @@ class RTTMonitorPage(QWidget):
             # 同步从 worker 取 device_info（lock 保护，不走跨线程 dict signal）
             info = self._worker.get_device_info()
             self._set_connected_ui(info)
+            self._update_channel_range_from_worker()
             if self._cfg.get("auto_mark_on_connect"):
                 target = info.get("target_device", "—")
                 ts = datetime.now().strftime("%H:%M:%S")
@@ -1647,6 +1692,21 @@ class RTTMonitorPage(QWidget):
             if self._cfg.get("auto_mark_on_disconnect"):
                 ts = datetime.now().strftime("%H:%M:%S")
                 self._insert_mark_text(self.tr("已断开 @ {ts}").format(ts=ts))
+
+    def _update_channel_range_from_worker(self) -> None:
+        """连接成功后按 MCU 上报的上行通道数收紧 SpinBox 上限（下限恒 -1=全部）。
+
+        当前选中通道超出新上限时不强改（worker 只是读不到该通道数据），
+        避免静默改动用户选择。
+        """
+        n = max(1, int(self._worker.get_num_up_channels()))
+        self.sp_channel.blockSignals(True)
+        try:
+            self.sp_channel.setRange(CHANNEL_ALL, n - 1)
+        finally:
+            self.sp_channel.blockSignals(False)
+        _tip(self.sp_channel,
+             self.tr("MCU 上报 {n} 个上行通道；-1/全部 = 合并查看，发送走最近选中的具体通道").format(n=n))
 
     def _on_unexpected_disconnect(self, device: str) -> None:
         """物理掉线：在显示区追加一行红色时间戳提示。
@@ -1736,10 +1796,15 @@ class RTTMonitorPage(QWidget):
         
 
     def _update_stats(self) -> None:
-        """1s 一次：从 worker 同步收发计数与连接时长并刷新状态栏。"""
+        """1s 一次：从 worker 同步收发计数与连接时长并刷新状态栏。
+
+        接收计数按当前视图通道口径：「全部通道」= 所有通道合计；具体通道 = 该通道。
+        """
         if not hasattr(self, "lbl_status_duration"):
             return
-        total_b, _total_l, start_ts = self._worker.get_stats()
+        ch = None if self._view_channel == CHANNEL_ALL else self._view_channel
+        st = self._worker.get_stats(ch)
+        total_b, start_ts = st["bytes"], st["session_start_ts"]
         # 接收：总数 - 上一次接收增量（自上次轮询起的新增字节）
         delta_b = max(0, total_b - self._stats_prev_bytes)
         self._stats_prev_bytes = total_b
@@ -1757,19 +1822,36 @@ class RTTMonitorPage(QWidget):
             display: str = _ENCODING_LABEL_MAP.get(encoding, encoding.upper())
             self.lbl_status_encoding.setText(self.tr("编码: {name}").format(name=display))
 
-    def _on_rtt_data(self, text: str) -> None:
-        """worker 已经 50ms 合并好，直接 insertText。
+    def _on_rtt_data(self, channel: int, text: str) -> None:
+        """worker 50ms 合并后按通道推来的数据：先按通道入历史缓冲，再决定渲染。
 
-        支持：
-        - HEX 显示：每字节大写 HEX + 空格
-        - 自动断帧：两批数据间隔 > 阈值时自动插入换行
+        - 缓冲：_channel_buffers[ch] 存该通道历史，_all_rtt_buffer 存合并历史，
+          上限 rtt_channel_history_chars（默认 200k，超出丢最旧）。
+        - 渲染：仅当数据通道与当前视图匹配才实时插入显示区
+          （全部通道视图 = 任何通道都渲染）。
         """
         if not text:
             return
 
-        # 自动断帧：两批数据间隔超过阈值时插入换行
+        # 1) 按通道入历史缓冲（无论当前是否查看，保证切通道后历史完整）
+        limit = int(self._cfg.get("rtt_channel_history_chars") or 200000)
+        buf = self._channel_buffers.get(channel, "") + text
+        if len(buf) > limit:
+            buf = buf[-limit:]
+        self._channel_buffers[channel] = buf
+        self._all_rtt_buffer += text
+        if len(self._all_rtt_buffer) > limit:
+            self._all_rtt_buffer = self._all_rtt_buffer[-limit:]
+
+        # 2) 视图不匹配：只入缓冲，不渲染（数据已由 worker 按通道合并，此处是纯显示分支）
+        if self._view_channel != CHANNEL_ALL and channel != self._view_channel:
+            return
+
+        # 3) 实时渲染（当前视图通道的数据）
+        # 自动断帧：仅「非全部通道」视图启用——多通道合并视图里时间间隙没有帧语义
         now = self._time_mod.time()
-        if (self.chk_auto_frame.isChecked()
+        if (self._view_channel != CHANNEL_ALL
+                and self.chk_auto_frame.isChecked()
                 and self._last_rx_time > 0
                 and (now - self._last_rx_time) * 1000 > self._get_frame_timeout_ms()):
             # 插入换行分隔不同帧
@@ -1807,6 +1889,39 @@ class RTTMonitorPage(QWidget):
         if at_bottom and self.chk_auto_scroll.isChecked():
             with self._programmatic_scroll_guard():
                 sb.setValue(sb.maximum())
+
+    def _render_view(self) -> None:
+        """切通道后重建显示区：把当前视图通道的历史缓冲重新 ANSI 解析 + 渲染。
+
+        重建是一次性的（切通道动作），渲染后滚到底。搜索高亮 / 匹配计数属于旧文档，
+        重建后清空（搜索栏本身保留，用户可重新搜索）。
+        """
+        if self._view_channel == CHANNEL_ALL:
+            text = self._all_rtt_buffer
+        else:
+            text = self._channel_buffers.get(self._view_channel, "")
+        self.display.setExtraSelections([])
+        self.display.clear()
+        if not text:
+            return
+        cursor = self.display.textCursor()
+        if self.chk_hex_display.isChecked():
+            try:
+                raw = text.encode(self._cfg.get("rtt_encoding") or "utf-8", errors="replace")
+            except LookupError:
+                raw = text.encode("utf-8", errors="replace")
+            cursor.insertText(" ".join(f"{b:02X}" for b in raw) + " ")
+        else:
+            for seg, attrs in parse_ansi(text):
+                cursor.insertText(seg, self._fmt(attrs))
+        with self._programmatic_scroll_guard():
+            self.display.verticalScrollBar().setValue(self.display.verticalScrollBar().maximum())
+
+    def _on_clear_clicked(self) -> None:
+        """清除按钮：显示区 + 所有通道历史缓冲一并清空（明确丢弃历史）。"""
+        self.display.clear()
+        self._channel_buffers.clear()
+        self._all_rtt_buffer = ""
 
     def _on_auto_scroll_toggled(self, checked: bool) -> None:
         """checkbox 勾选/取消：持久化 + 勾选时立即跳到底并恢复跟踪。"""
@@ -2168,6 +2283,9 @@ class RTTMonitorPage(QWidget):
         self._lbl_iface.setText(self.tr("接口"))
         self._lbl_speed.setText(self.tr("速度"))
         self._lbl_rtt_channel.setText(self.tr("RTT 通道"))
+        # SpinBox 特殊值文本 + 发送通道提示也要重翻译
+        self.sp_channel.setSpecialValueText(self.tr("全部通道"))
+        self._update_send_ch_hint()
         # btn_connect 文字随连接状态变化：按当前状态刷新文字。
         # 连接中（disabled）态保留"连接中…"，由后续状态回调覆盖。
         if self.btn_connect.isEnabled():

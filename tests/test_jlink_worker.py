@@ -300,7 +300,8 @@ def test_set_channel_takes_effect(worker):
     w, jl = worker
     w.set_rtt_channel_requested.emit(5)
     _drain_events(0.2)
-    assert w._channel == 5
+    assert w._view_channel == 5
+    assert w._send_channel == 5
 
 
 def test_power_output_on_off(worker):
@@ -522,3 +523,166 @@ def test_auto_reconnect_only_matches_same_serial(worker):
     assert not any(k == "attempt" for k, _ in status), "serial 不匹配不应发起重连"
     assert not any(k == "success" for k, _ in status), "另一台 J-Link 不应被误连"
     assert w.state_name() == "IDLE"
+
+
+# ============================================================
+# 多通道 RTT（v0.4.0）
+# ============================================================
+def _make_channel_reader(per_channel: dict):
+    """生成 rtt_read(channel, n) 的 side_effect：按通道返回预置数据（读一次后清空）。"""
+    def _read(ch, n):
+        data = per_channel.get(ch, b"")
+        per_channel[ch] = b""
+        return list(data) if data else []
+    return _read
+
+
+def test_connect_detects_num_up_channels(worker):
+    """连接成功后调 rtt_get_num_up_buffers 探测通道数；get_num_up_channels 可读。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.rtt_get_num_up_buffers.return_value = 3
+    jl.rtt_read.return_value = []
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.5)
+    assert w.state_name() == "CONNECTED"
+    assert jl.rtt_get_num_up_buffers.called, "连接后应探测上行通道数"
+    assert w.get_num_up_channels() == 3
+
+
+def test_connect_detect_num_up_channels_fallback(worker):
+    """rtt_get_num_up_buffers 抛异常（旧固件/控制块未找到）时回退 1，不影响连接。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.rtt_get_num_up_buffers.side_effect = RuntimeError("not supported")
+    jl.rtt_read.return_value = []
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.5)
+    assert w.state_name() == "CONNECTED", "探测失败不应让连接失败"
+    assert w.get_num_up_channels() == 1
+
+
+def test_read_loop_reads_all_channels_and_tags(worker):
+    """多通道：读循环遍历所有通道，rtt_data_received 带通道号，统计按通道记账。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.rtt_get_num_up_buffers.return_value = 2
+    per_ch = {0: b"hello-ch0\n", 1: b"hello-ch1\n"}
+    jl.rtt_read.side_effect = _make_channel_reader(per_ch)
+
+    received = []
+    w.rtt_data_received.connect(lambda ch, text: received.append((ch, text)))
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.8)
+
+    assert w.state_name() == "CONNECTED"
+    channels_seen = {ch for ch, _ in received}
+    assert channels_seen == {0, 1}, f"应读到 0/1 两个通道，got {channels_seen}"
+    texts = dict()
+    for ch, t in received:
+        texts[ch] = texts.get(ch, "") + t
+    assert "hello-ch0" in texts.get(0, "")
+    assert "hello-ch1" in texts.get(1, "")
+
+    st0 = w.get_stats(0)
+    st1 = w.get_stats(1)
+    st_all = w.get_stats(None)
+    assert st0["bytes"] >= len("hello-ch0\n")
+    assert st1["bytes"] >= len("hello-ch1\n")
+    assert st_all["bytes"] == st0["bytes"] + st1["bytes"], "全部通道 = 各通道合计"
+
+
+def test_per_channel_decoder_independence(worker):
+    """两通道各自 decoder：UTF-8 多字节字符跨包拆分，两通道互不污染。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.rtt_get_num_up_buffers.return_value = 2
+    received = []
+    w.rtt_data_received.connect(lambda ch, text: received.append((ch, text)))
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.3)
+    assert w.state_name() == "CONNECTED"
+
+    # ch0 先发半字节，ch1 发完整字符——若共享 decoder，ch1 会被 ch0 的半字节污染
+    hanzi = "中".encode("utf-8")  # 3 字节
+    per_ch = {0: hanzi[:1], 1: "X".encode("utf-8")}
+    jl.rtt_read.side_effect = _make_channel_reader(per_ch)
+    _drain_events(0.5)
+    # ch0 补发剩余字节
+    per_ch = {0: hanzi[1:]}
+    jl.rtt_read.side_effect = _make_channel_reader(per_ch)
+    _drain_events(0.5)
+
+    texts = dict()
+    for ch, t in received:
+        texts[ch] = texts.get(ch, "") + t
+    assert "中" in texts.get(0, ""), f"ch0 应拼出完整汉字，got {texts.get(0)!r}"
+    assert "X" in texts.get(1, ""), f"ch1 应有完整 X，got {texts.get(1)!r}"
+
+
+def test_set_channel_all_keeps_send_channel(worker):
+    """切到 -1（全部通道）不改变发送通道；切回具体通道更新发送通道。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.rtt_get_num_up_buffers.return_value = 3
+    jl.rtt_read.return_value = []
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.4)
+
+    w.set_rtt_channel_requested.emit(2)
+    _drain_events(0.2)
+    assert w._view_channel == 2
+    assert w._send_channel == 2
+
+    w.set_rtt_channel_requested.emit(-1)  # 全部通道
+    _drain_events(0.2)
+    assert w._view_channel == -1
+    assert w._send_channel == 2, "全部通道视图不应改动发送通道"
+
+    w.set_rtt_channel_requested.emit(0)
+    _drain_events(0.2)
+    assert w._send_channel == 0
+
+
+def test_send_uses_send_channel(worker):
+    """rtt_write 始终走 _send_channel（与视图通道无关）。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.rtt_get_num_up_buffers.return_value = 2
+    jl.rtt_read.return_value = []
+    jl.rtt_write.return_value = 5
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.4)
+
+    w.set_rtt_channel_requested.emit(1)
+    _drain_events(0.2)
+    w.set_rtt_channel_requested.emit(-1)  # 视图切全部，发送通道仍是 1
+    _drain_events(0.2)
+    w.send_data_requested.emit("hello", False)
+    _drain_events(0.3)
+    assert jl.rtt_write.called
+    assert jl.rtt_write.call_args[0][0] == 1, "发送应走 _send_channel=1，不是视图通道 -1"
+
+
+def test_reset_counts_clears_all_channels(worker):
+    """reset_counts 清零所有通道的统计。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.rtt_get_num_up_buffers.return_value = 2
+    per_ch = {0: b"a\n", 1: b"b\n"}
+    jl.rtt_read.side_effect = _make_channel_reader(per_ch)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.6)
+    assert w.get_stats(None)["bytes"] > 0
+
+    w.reset_counts()
+    assert w.get_stats(None)["bytes"] == 0
+    assert w.get_stats(0)["bytes"] == 0
+    assert w.get_stats(1)["bytes"] == 0

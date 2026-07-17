@@ -199,6 +199,19 @@ class SettingsPage(QWidget):
         self._setting_rows.append(row_max)
         rtt_lay.addWidget(row_max)
 
+        # 每通道历史缓存：切通道时各通道各自的历史能完整复现的上限（字符数）
+        self.sp_channel_hist = SpinBox(self)
+        self.sp_channel_hist.setRange(10, 5000)   # × 1000 字符 = 10k ~ 5M
+        self.sp_channel_hist.setSingleStep(50)
+        self.sp_channel_hist.setSuffix(" k字符")
+        self.sp_channel_hist.setValue(
+            max(10, int(self._cfg.get("rtt_channel_history_chars") or 200000) // 1000))
+        self.sp_channel_hist.valueChanged.connect(
+            lambda v: self._cfg.set("rtt_channel_history_chars", v * 1000))
+        row_ch_hist = _SettingRow("每通道历史缓存", self.sp_channel_hist)
+        self._setting_rows.append(row_ch_hist)
+        rtt_lay.addWidget(row_ch_hist)
+
         self.sp_poll = SpinBox(self)
         self.sp_poll.setRange(5, 1000)   # 5ms - 1s
         self.sp_poll.setSuffix(" ms")

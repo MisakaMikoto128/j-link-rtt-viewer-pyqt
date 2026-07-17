@@ -34,7 +34,8 @@ class ConfigService(QObject):
         "target_mcu": "",
         "interface": "SWD",
         "speed_khz": 4000,
-        "rtt_channel": 0,
+        "rtt_channel": 0,            # -1 = 全部通道视图（UI 显示为「全部通道」）；>=0 = 具体通道
+        "rtt_channel_history_chars": 200000,  # 每通道历史缓存上限（字符数），超出丢弃最旧
         "send_history": [],
         "theme": "auto",            # light / dark / auto
         "theme_color": "#28afe9",

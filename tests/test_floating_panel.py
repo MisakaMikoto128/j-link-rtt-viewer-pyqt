@@ -26,7 +26,7 @@ class FakeWorker(QObject):
     set_poll_interval_requested = Signal(int)
     start_log_recording_requested = Signal(str)
     stop_log_recording_requested = Signal()
-    rtt_data_received = Signal(str)
+    rtt_data_received = Signal(int, str)
     unexpected_disconnect = Signal(str)
     reconnect_status = Signal(str, str)
     connection_state_changed = Signal(bool)
@@ -43,8 +43,11 @@ class FakeWorker(QObject):
     def get_device_info(self) -> dict:
         return dict(self._device_info)
 
-    def get_stats(self) -> tuple[int, int, float]:
-        return (0, 0, 0.0)
+    def get_stats(self, channel: int | None = None) -> dict:
+        return {"bytes": 0, "lines": 0, "session_start_ts": 0.0}
+
+    def get_num_up_channels(self) -> int:
+        return 1
 
 
 @pytest.fixture
