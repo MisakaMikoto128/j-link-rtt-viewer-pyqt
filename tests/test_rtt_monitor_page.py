@@ -354,14 +354,32 @@ def test_left_panel_no_inflate_and_title_stays_short(rtt_page, qtbot):
     page, worker, _ = rtt_page
     # 注入长固件版本串，覆盖展开卡片时的最长值
     worker._device_info["jlink_firmware"] = "J-Link V11 compiled May 17 2024 16:31:23"
+    page.show()
+    QApplication.instance().processEvents()
 
     def inner_min_width() -> int:
+        """inner 直接子项在 panel 坐标系的最右边界（>280 表示内容溢出到右侧）。
+
+        量 layout item geometry（而非 findChildren 深层 widget，避免误量 ComboBox
+        popup 等隐藏子 widget）。inner.setMaximumWidth 约束实际渲染宽度，故量 item
+        实际 geometry 才反映「内容是否被钳在 panel 内」的真实行为。
+        """
         sa = page._config_panel.findChild(QScrollArea)
         inner = sa.widget()
+        lay = inner.layout()
         # 必须 invalidate 再 activate：仅 activate 会返回结构变更前的陈旧缓存
-        inner.layout().invalidate()
-        inner.layout().activate()
-        return inner.layout().minimumSize().width()
+        lay.invalidate()
+        lay.activate()
+        QApplication.instance().processEvents()
+        panel = page._config_panel
+        mx = 0
+        for i in range(lay.count()):
+            g = lay.itemAt(i).geometry()
+            if g.isValid() and not g.isNull():
+                r = inner.mapTo(panel, g.topRight()).x()
+                if r > mx:
+                    mx = r
+        return mx
 
     # 断开态：标题简短，面板不膨胀
     assert page.gb_info.getTitle() == "设备信息"

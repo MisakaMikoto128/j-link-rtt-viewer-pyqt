@@ -673,6 +673,13 @@ class RTTMonitorPage(QWidget):
         inner.setStyleSheet(
             "QWidget#configInner { background: transparent; }")
         scroll.setWidget(inner)
+        # 内容硬宽度上限 = viewport 宽：根治多语言下按钮/标签文字变长撑开内容
+        # 溢出 panel 右边界的问题。inner 膨胀只压缩/裁剪在 panel 内，不外溢右侧。
+        # 动态跟随 viewport（垂直滚动条显隐会让 viewport 宽 ±15px），由 eventFilter
+        # 在 viewport resize 时同步；此处先存引用 + 装过滤器。
+        self._config_inner = inner
+        self._config_vp = scroll.viewport()
+        self._config_vp.installEventFilter(self)
 
         pl = QVBoxLayout(panel)
         pl.setContentsMargins(0, 0, 0, 0)
@@ -1223,6 +1230,21 @@ class RTTMonitorPage(QWidget):
         self._on_resize_debounce()
         # 悬浮卡片跟随窗口尺寸重定位（仅可见时）
         self._reposition_floating_card()
+
+    def eventFilter(self, obj, event):
+        """左侧配置面板 viewport resize -> 同步 inner.setMaximumWidth = viewport 宽。
+
+        根治多语言下按钮/标签文字变长撑开内容溢出 panel 的问题：给 inner 设硬宽度
+        上限，内容膨胀只压缩/裁剪在 panel 内，不外溢到右侧被遮挡。不靠 FlowLayout
+        /逐语言调翻译，一处声明全局生效（符合「panel 宽度彻底固定」的设计哲学）。
+        实测 en 下最右按钮 x 从 437（溢出 158px）钳到 270（不溢出）。
+        """
+        if (obj is getattr(self, "_config_vp", None)
+                and event.type() == QEvent.Type.Resize):
+            w = event.size().width()
+            if w > 0:
+                self._config_inner.setMaximumWidth(w)
+        return super().eventFilter(obj, event)
 
     def _on_resize_debounce(self) -> None:
         w = self.width()
