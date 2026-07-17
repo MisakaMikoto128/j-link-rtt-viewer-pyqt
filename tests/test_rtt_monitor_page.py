@@ -11,8 +11,9 @@ from PySide6.QtCore import QObject, Signal
 
 class FakeWorker(QObject):
     """与 JLinkWorker 同形的信号 stub。RTTMonitorPage 只需要这些通道。"""
-    connect_requested = Signal(str, str, int, int)
+    connect_requested = Signal(str, str, int, int, str)
     disconnect_requested = Signal()
+    enumerate_devices_requested = Signal()
     reset_requested = Signal(str)
     send_data_requested = Signal(str, bool)
     set_pause_receive_requested = Signal(bool)
@@ -28,6 +29,7 @@ class FakeWorker(QObject):
     connection_state_changed = Signal(bool)
     command_result = Signal(str, bool, str)
     log_message = Signal(str, str)
+    devices_enumerated = Signal(str)
     stop_requested = Signal()
     set_auto_reconnect_requested = Signal(bool)
 
@@ -522,3 +524,71 @@ def test_all_channel_not_pulled_back_on_connect(rtt_page, qtbot):
     qtbot.wait(30)
     assert page.sp_channel.value() == -1, "全部通道不应因连接被退出"
     assert page._view_channel == -1
+
+
+# ============================================================
+# J-Link 设备下拉（多 J-Link 接入）
+# ============================================================
+def test_devices_enumerated_populates_combo(rtt_page, qtbot):
+    """worker devices_enumerated("s1|p1;s2|p2") 应重建下拉项并选中第一台。"""
+    page, worker, _ = rtt_page
+    worker.devices_enumerated.emit("12345678|J-Link PLUS;87654321|J-Link EDU")
+    qtbot.wait(30)
+    assert page.cb_jlink.count() == 2
+    assert page.cb_jlink.itemText(0) == "12345678"
+    assert page.cb_jlink.itemText(1) == "87654321"
+    assert page.cb_jlink.currentText() == "12345678"
+
+
+def test_devices_enumerated_keeps_previous_selection_if_present(rtt_page, qtbot):
+    """刷新后上次选中的 serial 还在 → 保留选中（不被重置到第一台）。"""
+    page, worker, _ = rtt_page
+    worker.devices_enumerated.emit("111|A;222|B")
+    qtbot.wait(30)
+    page.cb_jlink.setCurrentIndex(1)   # 选 222
+    qtbot.wait(10)
+    worker.devices_enumerated.emit("111|A;222|B;333|C")
+    qtbot.wait(30)
+    assert page.cb_jlink.currentText() == "222"
+
+
+def test_devices_enumerated_falls_back_to_first_when_selection_gone(rtt_page, qtbot):
+    """上次选中的 serial 被拔掉 → 选中回退到第一台。"""
+    page, worker, _ = rtt_page
+    worker.devices_enumerated.emit("111|A;222|B")
+    qtbot.wait(30)
+    page.cb_jlink.setCurrentIndex(1)   # 选 222
+    qtbot.wait(10)
+    worker.devices_enumerated.emit("111|A;333|C")   # 222 没了
+    qtbot.wait(30)
+    assert page.cb_jlink.currentText() == "111"
+
+
+def test_devices_enumerated_empty_clears_combo(rtt_page, qtbot):
+    """无设备：devices_enumerated("") 清空下拉。"""
+    page, worker, _ = rtt_page
+    worker.devices_enumerated.emit("111|A")
+    qtbot.wait(30)
+    assert page.cb_jlink.count() == 1
+    worker.devices_enumerated.emit("")
+    qtbot.wait(30)
+    assert page.cb_jlink.count() == 0
+
+
+def test_disconnect_when_connected_jlink_removed(rtt_page, qtbot):
+    """连接状态下上次选中的 J-Link 被拔掉：应立即触发断开。"""
+    page, worker, _ = rtt_page
+    worker.devices_enumerated.emit("111|A;222|B")
+    qtbot.wait(30)
+    page.cb_jlink.setCurrentIndex(1)   # 选 222
+    qtbot.wait(10)
+    page._set_connected_ui(worker.get_device_info())
+    assert page._is_connected is True
+
+    disconnects = []
+    worker.disconnect_requested.connect(lambda: disconnects.append(1))
+    # 刷新回来只剩 111（222 被拔了）
+    worker.devices_enumerated.emit("111|A")
+    qtbot.wait(30)
+    assert page._is_connected is False, "选中的 J-Link 被拔掉应立即断开 UI"
+    assert disconnects, "应 emit disconnect_requested"

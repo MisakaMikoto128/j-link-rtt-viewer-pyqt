@@ -4,6 +4,7 @@
 处理 queued connection。
 """
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,6 +21,12 @@ def worker(qapp, monkeypatch):
     fake_jlink_instance = MagicMock()
     fake_jlink_instance.opened.return_value = False
     fake_jlink_instance.connected.return_value = False
+    # 默认枚举返回一台 serial=12345678 的假 J-Link：测试只关心业务流，
+    # 不被 _do_connect 开头的「无设备 / 选中 serial 不在线」前置校验挡住。
+    # 要测「无设备」的用例自己覆盖 connected_emulators.return_value = []。
+    fake_jlink_instance.connected_emulators.return_value = [
+        SimpleNamespace(SerialNumber=12345678, acProduct=b"J-Link PLUS")
+    ]
     fake_jlink_cls.return_value = fake_jlink_instance
 
     monkeypatch.setattr(jw_mod.pylink, "JLink", fake_jlink_cls)
@@ -70,7 +77,7 @@ def test_connect_sequence(worker):
     states = []
     w.connection_state_changed.connect(lambda c: states.append(c))
 
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(1.0)
 
     # 调用顺序（pylink 1.6.0）：open() → close() → open(serial) → rtt_start() → set_tif() → set_speed() → connect()
@@ -95,7 +102,7 @@ def test_no_double_open(worker):
     jl.opened.return_value = True  # 已 open
     jl.connected.return_value = True
 
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(1.0)
 
     assert jl.open.call_count == 0  # 已 open 不再 open
@@ -106,7 +113,7 @@ def test_disconnect_sequence_with_guards(worker):
     # 先连上
     jl.opened.return_value = True
     jl.connected.return_value = True
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
     # _on_connect 会启动真实的 _read_thread（threading.Thread）
     assert w._read_thread is not None
@@ -130,7 +137,7 @@ def test_disconnect_always_calls_cleanup(worker):
     # 连接然后让 opened/connected 都变 false（模拟中途掉线）
     jl.opened.return_value = True
     jl.connected.return_value = True
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
 
     jl.opened.return_value = False
@@ -156,7 +163,7 @@ def test_reconnect_after_disconnect(worker):
 
     jl.opened.return_value = True
     jl.connected.return_value = True
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
 
     w.disconnect_requested.emit()
@@ -168,7 +175,7 @@ def test_reconnect_after_disconnect(worker):
     open_calls_before = jl.open.call_count
     jl.opened.side_effect = [False, True]  # 第一次 check False → open() → 之后 True
     jl.connected.return_value = True
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
 
     assert jl.open.call_count > open_calls_before
@@ -181,7 +188,7 @@ def test_set_tif_swd_vs_jtag(worker):
     jl.opened.return_value = False
     jl.connected.return_value = True
 
-    w.connect_requested.emit("STM32G070CB", "JTAG", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "JTAG", 4000, 0, "0")
     _drain_events(0.5)
     assert jl.set_tif.call_args[0][0] == pylink.enums.JLinkInterfaces.JTAG
 
@@ -190,7 +197,7 @@ def test_set_tif_swd_vs_jtag(worker):
 
     jl.opened.return_value = False
     jl.connected.return_value = True
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
     assert jl.set_tif.call_args[0][0] == pylink.enums.JLinkInterfaces.SWD
 
@@ -235,7 +242,7 @@ def test_send_data_text(worker):
     jl.opened.return_value = False
     jl.connected.return_value = True
     jl.rtt_write.return_value = 5
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.3)
 
     w.send_data_requested.emit("hello", False)
@@ -248,7 +255,7 @@ def test_send_data_hex(worker):
     jl.opened.return_value = False
     jl.connected.return_value = True
     jl.rtt_write.return_value = 3
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.3)
 
     w.send_data_requested.emit("AA BB\nCC", True)
@@ -273,7 +280,7 @@ def test_send_data_unspecified_error_rewritten(worker):
     jl.connected.return_value = True
     _set_allocated_channels(jl, 1)
     jl.rtt_read.return_value = []
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
 
     jl.rtt_write.side_effect = RuntimeError("Unspecified error.")
@@ -294,7 +301,7 @@ def test_send_data_specific_error_preserved(worker):
     jl.connected.return_value = True
     _set_allocated_channels(jl, 1)
     jl.rtt_read.return_value = []
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
 
     jl.rtt_write.side_effect = RuntimeError("Target not connected")
@@ -310,7 +317,7 @@ def test_reset_target(worker):
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.3)
 
     w.reset_requested.emit("normal")
@@ -323,7 +330,7 @@ def test_reset_and_halt(worker):
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.3)
     jl.reset.reset_mock()
     jl.close.reset_mock()
@@ -348,7 +355,7 @@ def test_power_output_on_off(worker):
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.3)
 
     w.set_power_output_requested.emit(True)
@@ -365,7 +372,7 @@ def test_read_memory_emits_bytes(worker):
     jl.opened.return_value = False
     jl.connected.return_value = True
     jl.memory_read.return_value = [0x12345678]
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.3)
 
     received = []
@@ -382,7 +389,7 @@ def test_export_firmware_progress(worker, tmp_path):
     jl.connected.return_value = True
     # 8 KB = 2 chunks, 每 chunk 1024 words
     jl.memory_read.side_effect = [[0xAA] * 1024, [0xBB] * 1024]
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.3)
 
     progress = []
@@ -403,7 +410,7 @@ def test_log_recording_writes_file(worker, tmp_path):
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.3)
 
     w.start_log_recording_requested.emit(str(tmp_path))
@@ -428,7 +435,7 @@ def test_unexpected_disconnect_emits_signal(worker):
     jl.serial_number = 12345678
     # 读循环空转，不产生噪声也不提前触发异常
     jl.rtt_read.return_value = []
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
     assert w.state_name() == "CONNECTED"
 
@@ -458,7 +465,7 @@ def test_normal_disconnect_does_not_emit_unexpected(worker):
     jl.opened.return_value = False
     jl.connected.return_value = True
     jl.rtt_read.return_value = []
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
 
     unexpected = []
@@ -479,12 +486,82 @@ def test_connect_prechecks_jlink_presence(worker):
 
     logs = []
     w.log_message.connect(lambda lv, m: logs.append((lv, m)))
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.6)
 
     assert ("warning", "未检测到 J-Link 设备，请检查 USB 连接") in logs
     assert not jl.open.called, "无设备不应调 jlink.open（避免弹出只能鼠标关闭的 DLL 窗）"
     assert w.state_name() == "IDLE"
+
+
+def test_connect_warns_and_backs_off_when_selected_serial_offline(worker):
+    """指定的 J-Link serial 不在当前接入列表里：warning + 回退，不调 open。"""
+    from types import SimpleNamespace
+    w, jl = worker
+    jl.opened.return_value = False
+    # 枚举里只有 serial=111 的 J-Link，用户选的是 222
+    jl.connected_emulators.return_value = [SimpleNamespace(SerialNumber=111)]
+    logs = []
+    w.log_message.connect(lambda lv, m: logs.append((lv, m)))
+
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "222")
+    _drain_events(0.6)
+
+    assert any(lv == "warning" and "222" in m for lv, m in logs), \
+        f"应提示选中的 J-Link 不在线，got {logs}"
+    assert not jl.open.called, "选中设备不在线不应调 jlink.open"
+    assert w.state_name() == "IDLE"
+
+
+def test_enumerate_devices_formats_semicolon_lines(worker):
+    """enumerate_devices_requested → devices_enumerated 按 "serial|product;..." 格式返回。"""
+    from types import SimpleNamespace
+    w, jl = worker
+    jl.connected_emulators.return_value = [
+        SimpleNamespace(SerialNumber=12345678, acProduct=b"J-Link PLUS"),
+        SimpleNamespace(SerialNumber=87654321, acProduct=b"J-Link EDU"),
+    ]
+    got = []
+    w.devices_enumerated.connect(lambda s: got.append(s))
+
+    w.enumerate_devices_requested.emit()
+    _drain_events(0.6)
+
+    assert got, "应 emit devices_enumerated"
+    assert got[-1] == "12345678|J-Link PLUS;87654321|J-Link EDU"
+
+
+def test_enumerate_devices_empty_when_no_jlink(worker):
+    """无设备 / 枚举抛异常：devices_enumerated 发空串。"""
+    w, jl = worker
+    jl.connected_emulators.return_value = []
+    got = []
+    w.devices_enumerated.connect(lambda s: got.append(s))
+
+    w.enumerate_devices_requested.emit()
+    _drain_events(0.6)
+    assert got and got[-1] == ""
+
+    jl.connected_emulators.side_effect = RuntimeError("dll gone")
+    w.enumerate_devices_requested.emit()
+    _drain_events(0.6)
+    assert got[-1] == "", "枚举异常也应发空串（worker 不抛给 UI）"
+
+
+def test_enumerate_devices_skips_invalid_serial(worker):
+    """serial<=0 的条目被跳过（无法用于 open(serial_no=...)）。"""
+    from types import SimpleNamespace
+    w, jl = worker
+    jl.connected_emulators.return_value = [
+        SimpleNamespace(SerialNumber=0, acProduct=b"Ghost"),
+        SimpleNamespace(SerialNumber=555, acProduct=b"Real"),
+    ]
+    got = []
+    w.devices_enumerated.connect(lambda s: got.append(s))
+
+    w.enumerate_devices_requested.emit()
+    _drain_events(0.6)
+    assert got[-1] == "555|Real"
 
 
 def test_auto_reconnect_after_unexpected_disconnect(worker):
@@ -506,7 +583,7 @@ def test_auto_reconnect_after_unexpected_disconnect(worker):
 
     status = []
     w.reconnect_status.connect(lambda k, d: status.append((k, d)))
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
     assert w.state_name() == "CONNECTED"
 
@@ -544,7 +621,7 @@ def test_auto_reconnect_only_matches_same_serial(worker):
     _drain_events(0.2)
     status = []
     w.reconnect_status.connect(lambda k, d: status.append((k, d)))
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
 
     # 掉线
@@ -600,7 +677,7 @@ def test_connect_detects_num_up_channels(worker):
     jl.connected.return_value = True
     _set_allocated_channels(jl, 3)
     jl.rtt_read.return_value = []
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
     assert w.state_name() == "CONNECTED"
     assert w.get_num_up_channels() == 3
@@ -625,7 +702,7 @@ def test_detect_counts_allocated_not_declared(worker):
         return SimpleNamespace(SizeOfBuffer=0)   # 空槽
     jl.rtt_get_buf_descriptor.side_effect = _desc
     jl.rtt_read.return_value = []
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
     assert w.state_name() == "CONNECTED"
     assert w.get_num_up_channels() == 1, "应只数已分配缓冲，不是声明数 3"
@@ -645,7 +722,7 @@ def test_detect_retries_then_succeeds(worker):
     ]
     jl.rtt_get_buf_descriptor.side_effect = lambda ch, up=True: SimpleNamespace(SizeOfBuffer=1024)
     jl.rtt_read.return_value = []
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(1.0)
     assert w.state_name() == "CONNECTED"
     assert w.get_num_up_channels() == 2, "retry 后应探测到 2"
@@ -659,7 +736,7 @@ def test_connect_detect_num_up_channels_fallback(worker):
     jl.connected.return_value = True
     jl.rtt_get_num_up_buffers.side_effect = RuntimeError("not supported")
     jl.rtt_read.return_value = []
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
     assert w.state_name() == "CONNECTED", "探测失败不应让连接失败"
     assert w.get_num_up_channels() == 1
@@ -676,7 +753,7 @@ def test_read_loop_reads_all_channels_and_tags(worker):
 
     received = []
     w.rtt_data_received.connect(lambda ch, text: received.append((ch, text)))
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.8)
 
     assert w.state_name() == "CONNECTED"
@@ -704,7 +781,7 @@ def test_per_channel_decoder_independence(worker):
     _set_allocated_channels(jl, 2)
     received = []
     w.rtt_data_received.connect(lambda ch, text: received.append((ch, text)))
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.3)
     assert w.state_name() == "CONNECTED"
 
@@ -732,7 +809,7 @@ def test_set_channel_all_keeps_send_channel(worker):
     jl.connected.return_value = True
     _set_allocated_channels(jl, 3)
     jl.rtt_read.return_value = []
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.4)
 
     w.set_rtt_channel_requested.emit(2)
@@ -758,7 +835,7 @@ def test_send_uses_send_channel(worker):
     _set_allocated_channels(jl, 2)
     jl.rtt_read.return_value = []
     jl.rtt_write.return_value = 5
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.4)
 
     w.set_rtt_channel_requested.emit(1)
@@ -779,7 +856,7 @@ def test_reset_counts_clears_all_channels(worker):
     _set_allocated_channels(jl, 2)
     per_ch = {0: b"a\n", 1: b"b\n"}
     jl.rtt_read.side_effect = _make_channel_reader(per_ch)
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.6)
     assert w.get_stats(None)["bytes"] > 0
 

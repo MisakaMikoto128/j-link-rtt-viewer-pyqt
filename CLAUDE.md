@@ -805,3 +805,20 @@ self.btn_reset_halt.setText(self.tr("重置并暂停"))
 
 参考：`src/core/jlink_worker.py` `_detect_num_up_channels`、commit `78660d5`。
 
+
+---
+
+## 多 J-Link 接入：设备选择 + 按 serial 连接 + auto_reconnect 串行匹配
+
+**现象**：用户电脑同时插了多台 J-Link 时，原来的「open() 空参让 pylink 自己挑」会随机抢到一台（或弹 DLL 原生选择窗）；auto_reconnect 在用户换了另一台 J-Link 后仍会连上（因为 open() 空参不区分设备）。
+
+**原因**：pylink 1.6.0 的 `open()` 空参 = 「any available J-Link」，多设备下不可控。必须用 `open(serial_no=int)` 按序列号打开指定设备；识别 J-Link 的唯一稳定 ID 就是 `connected_emulators()` 返回的 `SerialNumber`（int）。
+
+**处理**：
+1. **设备选择下拉**：UI 在连接按钮上方加一个 ComboBox（串口助手的串口选择同款），显示文本即 serial 号。worker 提供 `enumerate_devices_requested` → `devices_enumerated(str)`（分号分隔 `"serial|product"`，str 跨线程安全）枚举接口，UI 刷新按钮 / 启动 `QTimer.singleShot(0)` 自动触发。**worker 不做可用性裁决**——UI 自己判断「上次选中的 serial 还在不在这批里」，不在且已连接则立即断开（不等 read_thread 检出 rtt_read 异常，滞后可能几秒）。
+2. **连接**：`connect_requested` 5 参（target/iface/speed/channel/jlink_serial）。serial 非空且非 "0" 时 `_do_connect` 双开都 `open(serial_no=int)`；serial == "0" 视为「未指定」走 open() 空参（UI 启动后首次连接的默认串，也是测试 fixture 的默认值——避免改 38 个既有 emit 的真实 serial）。
+3. **auto_reconnect 串行匹配**：`_last_connect_params` 改 5 元组，第 5 元素是连接成功时**真实读回**的 `serial_number`（不是 UI 传的"0"）。`_reconnect_tick` 里先枚举校验目标 serial 在接入列表（不在静默等下一拍），再 `_do_connect(*params)` 内部再做一次——两层防御。
+
+**判别**：J-Link 的唯一 ID 是 `SerialNumber`（int），不是 USB 地址、不是产品名、不是枚举索引（同一台设备插拔后枚举索引会变）。
+
+参考：`src/core/jlink_worker.py` `_on_enumerate_devices` / `_do_connect` / `_reconnect_tick`、`src/ui/rtt_monitor_page.py` `_on_devices_enumerated` / `_on_connect_clicked`、commit `<本轮>`。

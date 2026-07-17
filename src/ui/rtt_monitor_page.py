@@ -697,6 +697,25 @@ class RTTMonitorPage(QWidget):
         v.addWidget(self._lbl_conn_settings)
         _INPUT_W = 120
         _CTRL_H = 33
+        # ---- J-Link 设备选择行（多 J-Link 接入时选哪台；串口助手的串口选择同款）----
+        row_jlink = QHBoxLayout()
+        row_jlink.setSpacing(6)
+        row_jlink.setContentsMargins(0, 0, 0, 0)
+        self._lbl_jlink_device = BodyLabel(self.tr("J-Link"))
+        self._lbl_jlink_device.setFixedHeight(_CTRL_H)
+        row_jlink.addWidget(self._lbl_jlink_device)
+        # 显示文本即 serial 号（这台 J-Link 的唯一识别），不额外存 userData
+        self.cb_jlink = ComboBox(inner)
+        self.cb_jlink.setFixedHeight(_CTRL_H)
+        self.cb_jlink.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.cb_jlink.setMinimumWidth(50)
+        row_jlink.addWidget(self.cb_jlink, 1)
+        self.btn_jlink_refresh = TransparentToolButton(FluentIcon.SYNC, inner)
+        _tip(self.btn_jlink_refresh, self.tr("刷新 J-Link 设备列表"))
+        self.btn_jlink_refresh.setFixedSize(_CTRL_H, _CTRL_H)
+        row_jlink.addWidget(self.btn_jlink_refresh)
+        v.addLayout(row_jlink)
+
         self.cb_target = EditableComboBox(inner)
         self.cb_target.setPlaceholderText(self.tr("目标设备"))
         chip_list = self._cfg.get_chip_list()
@@ -1367,6 +1386,14 @@ class RTTMonitorPage(QWidget):
         self._worker.command_result.connect(self._on_command_result, Qt.QueuedConnection)
         self._worker.log_message.connect(self._on_log_message, Qt.QueuedConnection)
 
+        # J-Link 设备下拉：刷新按钮 → worker 枚举；结果 QueuedConnection 回来填充。
+        # 构造完成后异步触发首次枚举（此时 worker 线程已 start、信号已连好，
+        # 用 QTimer.singleShot(0) 把它排到事件循环下一轮，避免 initialize()
+        # 的 connect 还没跑完就被 emit 丢弃）。
+        self.btn_jlink_refresh.clicked.connect(self._on_jlink_refresh_clicked)
+        self._worker.devices_enumerated.connect(self._on_devices_enumerated, Qt.QueuedConnection)
+        QTimer.singleShot(0, self._on_jlink_refresh_clicked)
+
     # ------------------------------------------------------------------
     # 槽函数
     # ------------------------------------------------------------------
@@ -1395,11 +1422,66 @@ class RTTMonitorPage(QWidget):
         if self.btn_reset.isEnabled():
             self.btn_reset.click()
 
+    # ------------------------------------------------------------------
+    # J-Link 设备下拉（多 J-Link 接入时选哪台；串口助手串口选择同款）
+    # ------------------------------------------------------------------
+    def _on_jlink_refresh_clicked(self) -> None:
+        """刷新按钮 / 启动首次枚举：把请求发给 worker（pylink 在 worker 线程）。"""
+        self._worker.enumerate_devices_requested.emit()
+
+    def _on_devices_enumerated(self, data: str) -> None:
+        """worker 枚举结果回来：重建下拉项 + 校验当前选中是否还在线。
+
+        data 是分号分隔的 "serial|product" 列表（worker 端已清洗分隔符）。
+        可用性裁决全部在 UI 做（CLAUDE.md 多 J-Link 设计原则）：
+        - 当前选中的 serial 不在这批里 → 视为设备被拔掉，若正处于连接态立即
+          触发断开（不等 read_thread 检出 rtt_read 异常，可能滞后几秒）。
+        - 一台都没有 → 提示「未检测到 J-Link」。
+        """
+        serials: list[str] = []
+        if data:
+            for chunk in data.split(";"):
+                if not chunk:
+                    continue
+                serial, _, _product = chunk.partition("|")
+                serial = serial.strip()
+                if serial and serial.isdigit():
+                    serials.append(serial)
+
+        prev = self.cb_jlink.currentText().strip()
+        self.cb_jlink.blockSignals(True)
+        try:
+            self.cb_jlink.clear()
+            for s in serials:
+                self.cb_jlink.addItem(s)
+            if serials:
+                idx = self.cb_jlink.findText(prev)
+                self.cb_jlink.setCurrentIndex(idx if idx >= 0 else 0)
+        finally:
+            self.cb_jlink.blockSignals(False)
+
+        if not serials:
+            _infobar.warn(self, self.tr("提示"), self.tr("未检测到 J-Link 设备，请检查 USB 连接"))
+
+        # 拔掉检测：上次选中的 serial 没了 + 当前已连接 → 立刻断开
+        if prev and prev not in serials and self._is_connected:
+            _infobar.warn(self, self.tr("提示"),
+                          self.tr("当前连接的 J-Link（S/N: {sn}）已断开").format(sn=prev))
+            self._set_disconnected_ui()
+            self._worker.disconnect_requested.emit()
+
     def _on_connect_clicked(self) -> None:
         if not self._is_connected:
             target = self.cb_target.currentText().strip()
             if not target:
                 _infobar.warn(self, self.tr("提示"), self.tr("请先选择目标芯片"))
+                return
+            jlink_serial = self.cb_jlink.currentText().strip()
+            if not jlink_serial:
+                # 没选 J-Link 时主动去枚举一次（结果回来用户再点连接），
+                # 并给提示；不把空 serial 发给 worker（会走 open() 空参误连）
+                _infobar.warn(self, self.tr("提示"), self.tr("请先选择 J-Link 设备"))
+                self._on_jlink_refresh_clicked()
                 return
             iface = self.cb_iface.currentText()
             speed = int(self.cb_speed.currentText())
@@ -1412,7 +1494,7 @@ class RTTMonitorPage(QWidget):
             # 立即给 UI 反馈：禁用按钮 + 改文字
             self.btn_connect.setEnabled(False)
             self.btn_connect.setText(self.tr("连接中…"))
-            self._worker.connect_requested.emit(target, iface, speed, channel)
+            self._worker.connect_requested.emit(target, iface, speed, channel, jlink_serial)
         else:
             # 先恢复 UI 再 emit：万一 emit 异常或被堵也不影响按钮已经切回"连接"。
             # worker 内部 _do_disconnect 全部 try/except，不会失败。
@@ -2330,6 +2412,8 @@ class RTTMonitorPage(QWidget):
 
         # 连接设置区
         self.cb_target.setPlaceholderText(self.tr("目标设备"))
+        self._lbl_jlink_device.setText(self.tr("J-Link"))
+        _tip(self.btn_jlink_refresh, self.tr("刷新 J-Link 设备列表"))
         self._lbl_iface.setText(self.tr("接口"))
         self._lbl_speed.setText(self.tr("速度"))
         self._lbl_rtt_channel.setText(self.tr("RTT 通道"))

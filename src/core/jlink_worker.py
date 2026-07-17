@@ -69,7 +69,10 @@ class JLinkWorker(QObject):
     """J-Link 后台业务对象。**必须 moveToThread 到一个 QThread 后再用**。"""
 
     # ---- 输入信号 ----
-    connect_requested = Signal(str, str, int, int)
+    connect_requested = Signal(str, str, int, int, str)
+    # 枚举电脑上接入的 J-Link 列表（UI 设备下拉框填充）。worker 自己枚举：
+    # pylink 实例在 worker 线程创建，UI 直接调 pylink 会跨线程抢 DLL。
+    enumerate_devices_requested = Signal()
     disconnect_requested = Signal()
     send_data_requested = Signal(str, bool)
     reset_requested = Signal(str)  # mode: "normal" / "auto_reconnect" —— worker 内部一条龙
@@ -110,6 +113,9 @@ class JLinkWorker(QObject):
     memory_read_finished = Signal(int, bytes)
     firmware_export_progress = Signal(int, int)
     firmware_export_finished = Signal(bool, str, str)
+    # 枚举结果：分号分隔一行一台 "serial|product"（str 跨线程安全，dict/list 不行），
+    # 无设备时传空串。字段解析（含 acProduct 乱码容忍）在 UI 侧。
+    devices_enumerated = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -149,8 +155,11 @@ class JLinkWorker(QObject):
         self._info_lock = threading.Lock()
 
         # 上次成功连接的参数，给 auto_reconnect 模式重连用（worker 自给自足，
-        # UI 不再需要重新 emit connect_requested）。
-        self._last_connect_params: tuple[str, str, int, int] | None = None
+        # UI 不再需要重新 emit connect_requested）。serial 是 5 元组的第 5 元素，
+        # auto_reconnect 重连时必须显式带它：只有上次那台 J-Link 还在接入
+        # （serial 出现在 connected_emulators() 里）才允许重连——否则用户换了
+        # 另一台 J-Link 会被 open() 空参默认误连（CLAUDE.md 多 J-Link 设计原则）。
+        self._last_connect_params: tuple[str, str, int, int, str] | None = None
 
         # 自动重连（物理掉线后）：UI 勾选「自动重连」使能。掉线时若已使能，
         # 启动 _reconnect_timer 轮询 connected_emulators()，只认上次那个 serial，
@@ -187,6 +196,7 @@ class JLinkWorker(QObject):
 
         # 把输入信号连到本地槽（同线程，DirectConnection）
         self.connect_requested.connect(self._on_connect)
+        self.enumerate_devices_requested.connect(self._on_enumerate_devices)
         self.disconnect_requested.connect(self._on_disconnect)
         self.send_data_requested.connect(self._on_send_data)
         self.reset_requested.connect(self._on_reset)
@@ -262,17 +272,59 @@ class JLinkWorker(QObject):
             self._channel_stats = {}
 
     # ============================================================
+    # 设备枚举（UI J-Link 下拉框数据源）
+    # ============================================================
+    @Slot()
+    def _on_enumerate_devices(self) -> None:
+        """枚举当前接入的 J-Link，结果通过 devices_enumerated 发回 UI。
+
+        设备可用性状态完全由 UI 自己判断（上次枚举拿到过几台、当前 combo
+        选中项是否还在这批里），worker 不在枚举时做状态裁决。
+
+        格式约定：分号分隔多台，单台 "serial|product"；无设备/异常时发空串
+        （异常同时 log_message 提示）。acProduct 含 '|' 或 ';' 时截断丢弃——
+        这两个字符是分隔符，混进字段会破坏 UI 解析。
+        """
+        try:
+            emus = self.jlink.connected_emulators()
+        except Exception as e:
+            self._logger.warning(f"枚举 J-Link 失败：{e}")
+            self.log_message.emit("warning", f"刷新 J-Link 设备列表失败：{e}")
+            self.devices_enumerated.emit("")
+            return
+        lines: list[str] = []
+        for e in emus:
+            try:
+                serial = int(getattr(e, "SerialNumber", 0) or 0)
+            except Exception:
+                serial = 0
+            if serial <= 0:
+                continue  # 非法序列号无法用于 open(serial_no=...)，跳过
+            raw = getattr(e, "acProduct", b"")
+            if isinstance(raw, (bytes, bytearray)):
+                product = bytes(raw).decode("utf-8", errors="replace").strip("\x00").strip()
+            else:
+                product = str(raw or "").strip()
+            for sep in ("|", ";"):
+                if sep in product:
+                    product = product.split(sep, 1)[0].strip()
+            lines.append(f"{serial}|{product}")
+        self.devices_enumerated.emit(";".join(lines))
+
+    # ============================================================
     # 连接 / 断开
     # ============================================================
-    @Slot(str, str, int, int)
-    def _on_connect(self, target: str, iface: str, speed: int, channel: int) -> None:
+    @Slot(str, str, int, int, str)
+    def _on_connect(self, target: str, iface: str, speed: int, channel: int,
+                    jlink_serial: str) -> None:
         """connect_requested 信号槽。实现在 _do_connect，方便其他 worker 内部
         路径（如 _reset_with_reconnect）以普通函数方式直接调，不走信号队列。"""
         # 手动连接取消正在进行的自动重连，避免与定时器的 _do_connect 赛跑
         self._stop_reconnect()
-        self._do_connect(target, iface, speed, channel)
+        self._do_connect(target, iface, speed, channel, jlink_serial)
 
-    def _do_connect(self, target: str, iface: str, speed: int, channel: int) -> None:
+    def _do_connect(self, target: str, iface: str, speed: int, channel: int,
+                    jlink_serial: str = "") -> None:
         if self._state == _STATE_CONNECTED:
             self.log_message.emit("warning", "已连接，先断开再切换设备")
             return
@@ -284,19 +336,45 @@ class JLinkWorker(QObject):
             # 预查 J-Link 是否接入：connected_emulators() 用 JLINKARM_EMU_GetList 纯枚举，
             # 不弹 DLL 原生选择窗。空则气泡提示 + 回退（_do_disconnect emit 状态 False
             # 让 UI 按钮回正），避免无设备时 jlink.open() 弹出只能鼠标关闭的 DLL 弹窗。
-            if not self.jlink.connected_emulators():
+            emus = self.jlink.connected_emulators()
+            if not emus:
                 self.log_message.emit("warning", "未检测到 J-Link 设备，请检查 USB 连接")
+                self._do_disconnect()
+                return
+            # jlink_serial 是 UI 传的选中 J-Link serial，也可能是 "0"（UI 启动后
+            # 首次连接的默认串）。"0" 视为「未指定」：跳过 serial 匹配校验 + 走
+            # open() 空参（让 pylink 自己挑唯一接入的设备）。真实 serial 才校验
+            # 「这台还在接入」——否则 open(serial) 对不存在的 serial 会直接抛，
+            # 且「上次是 A，现在只剩 B」时 auto_reconnect 会误连 B（CLAUDE.md
+            # 多 J-Link 设计原则）。
+            if jlink_serial and jlink_serial != "0" and not any(
+                    str(int(getattr(e, "SerialNumber", 0) or 0)) == jlink_serial
+                    for e in emus):
+                self.log_message.emit(
+                    "warning", f"选中的 J-Link（S/N: {jlink_serial}）不在线，请刷新设备列表或重新选择")
                 self._do_disconnect()
                 return
             if not self.jlink.opened():
                 # 参考项目的双开模式（pylink 1.6.0 稳定工作的关键模式）：
                 # 先 open() 一次取 serial，close，再 open(serial)，然后 rtt_start
                 # 注意：rtt_start 必须在 connect(target) 之前调用
-                self.jlink.open()
-                ser_num = self.jlink.serial_number
-                self.jlink.close()
-                self.jlink.open(str(ser_num))
-                self.jlink.rtt_start()
+                if jlink_serial and jlink_serial != "0":
+                    # 指定了具体 J-Link：双开都按 serial（open() 空参在多设备下
+                    # 可能弹 DLL 选择窗或抢到另一台）
+                    self.jlink.open(serial_no=int(jlink_serial))
+                    ser_num = self.jlink.serial_number
+                    self.jlink.close()
+                    self.jlink.open(serial_no=int(ser_num))
+                    self.jlink.rtt_start()
+                else:
+                    # 未指定（"0" / 空串）：open() 空参，pylink 自己挑唯一接入的设备；
+                    # 内部调用方（auto_reconnect / reset_with_reconnect）永远带真实
+                    # serial，不走这里
+                    self.jlink.open()
+                    ser_num = self.jlink.serial_number
+                    self.jlink.close()
+                    self.jlink.open(str(ser_num))
+                    self.jlink.rtt_start()
 
             tif = pylink.enums.JLinkInterfaces.SWD if iface == "SWD" \
                 else pylink.enums.JLinkInterfaces.JTAG
@@ -308,7 +386,16 @@ class JLinkWorker(QObject):
 
             if self.jlink.connected():
                 self._state = _STATE_CONNECTED
-                self._last_connect_params = (target, iface, speed, channel)  # 给 auto_reconnect 重连用
+                # 连接成功：以实际打开的 serial（open 后真实读回）记入参数，
+                # 保证 auto_reconnect 重连时只认这台 J-Link。
+                # ser_num 只在「未 opened() 时走双开」分支赋值；opened()=True 的
+                # 已打开路径没有这变量，此时回退用 jlink.serial_number 直接读。
+                if self.jlink.opened():
+                    sn = self.jlink.serial_number
+                    actual_serial = str(int(sn)) if sn is not None else ""
+                else:
+                    actual_serial = jlink_serial or ""
+                self._last_connect_params = (target, iface, speed, channel, actual_serial)
                 info = self._collect_device_info(target, iface, speed)
                 with self._info_lock:
                     self._device_info = info
@@ -595,9 +682,13 @@ class JLinkWorker(QObject):
     def _reconnect_tick(self) -> None:
         """worker 线程 3s 一次：轮询目标 J-Link 是否回来，回来就 _do_connect 重连。
 
-        串行匹配：只认 _reconnect_target_serial，避免用户插了另一个 J-Link 被误连。
-        成功 -> 停 timer + emit success；失败 -> emit failed，下一拍（3s）再试；
-        设备没回来 -> 静默等下一拍（不计数、不刷屏）。
+        串行匹配：只认 _reconnect_target_serial（= 上次连接的 J-Link），避免用户
+        插了另一个 J-Link 被误连。成功 -> 停 timer + emit success；失败 -> emit
+        failed，下一拍（3s）再试；设备没回来 -> 静默等下一拍（不计数、不刷屏）。
+
+        双重校验：先在本方法里枚举一次确认目标 serial 在接入列表里（不在则静默
+        等下一拍，不 attempt），再让 _do_connect 内部用 5 元组第 5 元素的真实
+        serial 做最终把关——两层防御，即便 _do_connect 的校验被绕过，这里也挡住。
         """
         if self._reconnect_target_serial is None:
             self._stop_reconnect()
@@ -606,12 +697,13 @@ class JLinkWorker(QObject):
         if self._state == _STATE_CONNECTED:
             self._stop_reconnect()
             return
+        # 目标 J-Link 还没回来 -> 静默等下一拍（不 attempt、不刷屏）
         try:
             emus = self.jlink.connected_emulators()
         except Exception as e:
             self._logger.warning(f"重连轮询枚举失败：{e}")
             return   # 枚举本身异常，下一拍再试
-        if not any(str(getattr(e, "SerialNumber", "")) == self._reconnect_target_serial
+        if not any(str(int(getattr(e, "SerialNumber", 0) or 0)) == self._reconnect_target_serial
                    for e in emus):
             return   # 设备还没插回，静默等
         self._reconnect_attempt += 1
@@ -621,6 +713,7 @@ class JLinkWorker(QObject):
         if params is None:
             self._stop_reconnect(emit_cancelled=True)
             return
+        # 5 元组第 5 元素 = 上次连接的 J-Link serial，交给 _do_connect 最终把关
         self._do_connect(*params)
         if self._state == _STATE_CONNECTED:
             self.reconnect_status.emit("success", str(n))

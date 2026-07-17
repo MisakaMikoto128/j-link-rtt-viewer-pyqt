@@ -15,8 +15,9 @@ from PySide6.QtCore import QObject, Signal
 
 
 class FakeWorker(QObject):
-    connect_requested = Signal(str, str, int, int)
+    connect_requested = Signal(str, str, int, int, str)
     disconnect_requested = Signal()
+    enumerate_devices_requested = Signal()
     reset_requested = Signal(str)
     send_data_requested = Signal(str, bool)
     set_pause_receive_requested = Signal(bool)
@@ -32,6 +33,7 @@ class FakeWorker(QObject):
     connection_state_changed = Signal(bool)
     command_result = Signal(str, bool, str)
     log_message = Signal(str, str)
+    devices_enumerated = Signal(str)
     stop_requested = Signal()
     set_auto_reconnect_requested = Signal(bool)
 
