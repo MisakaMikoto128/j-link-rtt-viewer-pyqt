@@ -743,3 +743,21 @@ self.btn_reset_halt.setText(self.tr("重置并暂停"))
 关键不变量：清零 `start_ts` 必须在 `emit(False)` 之前，保证 UI 收到断开信号时 `get_stats()` 已报断开态（`start_ts == 0` 是 UI 轮询判定连接态的唯一真源）；收发计数是跨连接累计的运行态量，仅 `reset_counts()` 清零。
 
 参考：`src/core/jlink_worker.py` `_do_connect` / `_do_disconnect` / `reset_counts` / `get_stats`、`src/ui/rtt_monitor_page.py` `_update_stats` / `_set_disconnected_ui`。
+
+---
+
+## `rtt_get_num_up_buffers()` 返回声明数不是已分配数，通道数要用 buf descriptor 的 SizeOfBuffer 计数
+
+**现象**：多通道 RTT 上线后用户报"下位机实际上只有一个通道，但 RTT 选项能选 0、1、2，且故意选超出范围的通道（如 4）连接后会停在通道 2、显示区空白，只有断开重连才正常"。
+
+**原因**：`jlink.rtt_get_num_up_buffers()` 返回的是固件 `_SEGGER_RTT` 控制块里声明的 `MaxNumUpBuffers`（上行缓冲描述符数组大小），**含"声明了但没初始化的空槽"**。实测某 STM32F030 固件声明 3 个上行缓冲，但 `rtt_get_buf_descriptor(ch, up=True)` 显示只有 ch0 的 `SizeOfBuffer=1024`（真实缓冲，正是 SEGGER 默认 `BUFFER_SIZE_UP`），ch1/ch2 的 `SizeOfBuffer=0`（空槽，永远没数据）。用声明数 3 当通道数 -> SpinBox 显示 0/1/2，选 4 被拉回到 max=2（ch2 空槽无数据）-> 正是用户看到的"停在 2、空白"。而紧凑重连时 `rtt_get_num_up_buffers()` 会抛 `The RTT Control Block has not yet been found (wait?)`（RTT 控制块定位是异步的，connect 返回时 J-Link 可能还没扫描到 `_SEGGER_RTT`）-> 原实现回退 1 -> 只剩 ch0（有数据）-> 用户看到的"断开重连才正常"其实是回退的副作用，不是真修好了。
+
+**处理**：
+1. **通道数用 buf descriptor 的 SizeOfBuffer 计数**，不用 `rtt_get_num_up_buffers()` 的返回值。遍历各通道 `rtt_get_buf_descriptor(ch, up=True)`，数 `SizeOfBuffer > 0` 的（从 0 起连续，遇空槽即停--SEGGER RTT 通道按惯例从 0 连续分配），得实际已分配通道数（该固件 = 1）。
+2. **retry 要加在 buf descriptor 探测这一层**，不是加在 `rtt_get_num_up_buffers` 上。曾犯过的错：把 retry 加在 `rtt_get_num_up_buffers`（声明数 API）上，重连后也返回 3（还是显示 0/1/2），用户现象没变 -> 被撤销。retry 必须包住"取声明数 + 遍历 buf descriptor"整体，控制块未就绪时 0/150/300/450ms 重试 4 次再回退 1。
+3. **诊断方法论**：这种"现象反直觉、API 语义隐蔽"的硬件问题，不要在大工程里猜改--写最小 demo（纯 pylink / 纯 Qt / 完整 app）在真实硬件上逐步打印每步返回值，定位到根因（哪个 API 返回什么、SizeOfBuffer 几）再动手。本轮 5 个 demo（`scratch/demo1-5`，未入库）定位后才一次修对。
+
+判别：凡是"用户说的通道数"和"API 返回的通道数"对不上，先怀疑 API 返回的是声明数而非已分配数，用 `rtt_get_buf_descriptor().SizeOfBuffer` 交叉验证。
+
+参考：`src/core/jlink_worker.py` `_detect_num_up_channels`、commit `78660d5`。
+
