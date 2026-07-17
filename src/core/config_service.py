@@ -81,6 +81,10 @@ class ConfigService(QObject):
         #   "normal"         → jlink.reset + rtt_stop/start（默认；适合大多数 MCU）
         #   "auto_reconnect" → 重置 = 断开+重连（更可靠，但有 ~1s 延迟）
         "reset_mode": "normal",
+        # 上次手动选择/成功连接的 J-Link serial，用于下次启动时自动选中同一台；
+        # 空串表示没有历史（首次启动）。不在线时会以「离线占位」形式显示在 combo
+        # 中并带红点提示。
+        "last_jlink_serial": "",
         # 内存页用户选择持久化（地址/大小/字节序/字节每行/diff/自动刷新间隔/导出/写地址）
         # 不持久化：auto_refresh（断开会清掉）、goto/search（一次性）、write_data（误点高危）
         "mem_read_addr": "0x08000000",

@@ -47,11 +47,13 @@ from qfluentwidgets import (
     BodyLabel,
     CheckBox,
     ComboBox,
+    DotInfoBadge,
     EditableComboBox,
     FlowLayout,
     FluentIcon,
     HeaderCardWidget,
     HyperlinkButton,
+    InfoLevel,
     LineEdit,
     PlainTextEdit,
     PrimaryPushButton,
@@ -704,16 +706,26 @@ class RTTMonitorPage(QWidget):
         self._lbl_jlink_device = BodyLabel(self.tr("J-Link"))
         self._lbl_jlink_device.setFixedHeight(_CTRL_H)
         row_jlink.addWidget(self._lbl_jlink_device)
-        # 显示文本即 serial 号（这台 J-Link 的唯一识别），不额外存 userData
-        self.cb_jlink = ComboBox(inner)
+
+        # 在线状态小红点：ComboBox 左侧。目标 J-Link 当前在接入列表里 → 隐藏；
+        # 不在线（历史占位）→ 显示。用 DotInfoBadge.setLevel(ERROR) 保持 Fluent 风格。
+        self._jlink_status_dot = DotInfoBadge(inner)
+        self._jlink_status_dot.setLevel(InfoLevel.ERROR)
+        self._jlink_status_dot.setFixedSize(8, 8)
+        self._jlink_status_dot.hide()
+        row_jlink.addWidget(self._jlink_status_dot, alignment=Qt.AlignVCenter)
+
+        # 显示文本即 serial 号（这台 J-Link 的唯一识别），不额外存 userData。
+        # 当前值可能是历史选择（不在 combo items 里）的离线占位，也可能是当前
+        # 在线设备的 serial。下拉列表只包含当前电脑上的可用设备。
+        # 用 EditableComboBox 而非 ComboBox：qfluentwidgets ComboBox 不允许显示
+        # 非 items 的文本；EditableComboBox.setText() 可设任意占位，再 setReadOnly
+        # 禁止用户键盘输入即可。
+        self.cb_jlink = EditableComboBox(inner)
         self.cb_jlink.setFixedHeight(_CTRL_H)
         self.cb_jlink.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.cb_jlink.setMinimumWidth(50)
         row_jlink.addWidget(self.cb_jlink, 1)
-        self.btn_jlink_refresh = TransparentToolButton(FluentIcon.SYNC, inner)
-        _tip(self.btn_jlink_refresh, self.tr("刷新 J-Link 设备列表"))
-        self.btn_jlink_refresh.setFixedSize(_CTRL_H, _CTRL_H)
-        row_jlink.addWidget(self.btn_jlink_refresh)
         v.addLayout(row_jlink)
 
         self.cb_target = EditableComboBox(inner)
@@ -1386,13 +1398,38 @@ class RTTMonitorPage(QWidget):
         self._worker.command_result.connect(self._on_command_result, Qt.QueuedConnection)
         self._worker.log_message.connect(self._on_log_message, Qt.QueuedConnection)
 
-        # J-Link 设备下拉：刷新按钮 → worker 枚举；结果 QueuedConnection 回来填充。
-        # 构造完成后异步触发首次枚举（此时 worker 线程已 start、信号已连好，
-        # 用 QTimer.singleShot(0) 把它排到事件循环下一轮，避免 initialize()
-        # 的 connect 还没跑完就被 emit 丢弃）。
-        self.btn_jlink_refresh.clicked.connect(self._on_jlink_refresh_clicked)
+        # J-Link 设备下拉：自动刷新 200ms（worker 枚举），结果 QueuedConnection 回来填充。
+        # worker 不做可用性裁决——UI 自己判断上次选中 serial 在不在线、控制红点显隐。
+        self._jlink_refresh_timer = QTimer(self)
+        self._jlink_refresh_timer.setInterval(200)
+        self._jlink_refresh_timer.timeout.connect(self._worker.enumerate_devices_requested.emit)
+        self._jlink_refresh_timer.start()
+        # 启动时立即触发一次（不能等 200ms 后），这样首次打开 combo 就有数据；
+        # 放到 singleShot(0) 是为了让 worker.initialize() 和信号接线都就绪。
         self._worker.devices_enumerated.connect(self._on_devices_enumerated, Qt.QueuedConnection)
-        QTimer.singleShot(0, self._on_jlink_refresh_clicked)
+        QTimer.singleShot(0, self._worker.enumerate_devices_requested.emit)
+
+        # 用户手动选设备 → 持久化 + 红点同步。currentIndexChanged 只在用户
+        # 真的选了 items 里某一项时触发；用户点开但没选（或列表空）不会改值。
+        self.cb_jlink.currentIndexChanged.connect(self._on_jlink_selection_changed)
+
+    def _on_jlink_selection_changed(self) -> None:
+        """用户从下拉列表选了真实设备 → 持久化并同步红点。"""
+        serial = self.cb_jlink.currentText().strip()
+        if serial:
+            self._cfg.set("last_jlink_serial", serial)
+        self._sync_jlink_status_dot()
+
+    def _sync_jlink_status_dot(self) -> None:
+        """按当前 currentText 是否在当前可用设备列表里，显示/隐藏红点。"""
+        serial = self.cb_jlink.currentText().strip()
+        if not serial:
+            self._jlink_status_dot.hide()
+            return
+        online = self.cb_jlink.findText(serial) >= 0
+        self._jlink_status_dot.setVisible(not online)
+        # 在线时恢复可编辑为 False（用户只能从下拉选），离线占位只读
+        self.cb_jlink.setReadOnly(not online)
 
     # ------------------------------------------------------------------
     # 槽函数
@@ -1425,18 +1462,14 @@ class RTTMonitorPage(QWidget):
     # ------------------------------------------------------------------
     # J-Link 设备下拉（多 J-Link 接入时选哪台；串口助手串口选择同款）
     # ------------------------------------------------------------------
-    def _on_jlink_refresh_clicked(self) -> None:
-        """刷新按钮 / 启动首次枚举：把请求发给 worker（pylink 在 worker 线程）。"""
-        self._worker.enumerate_devices_requested.emit()
-
     def _on_devices_enumerated(self, data: str) -> None:
-        """worker 枚举结果回来：重建下拉项 + 校验当前选中是否还在线。
+        """worker 枚举结果回来：重建下拉项 + 同步红点 + 校验当前选中是否还在线。
 
         data 是分号分隔的 "serial|product" 列表（worker 端已清洗分隔符）。
         可用性裁决全部在 UI 做（CLAUDE.md 多 J-Link 设计原则）：
         - 当前选中的 serial 不在这批里 → 视为设备被拔掉，若正处于连接态立即
           触发断开（不等 read_thread 检出 rtt_read 异常，可能滞后几秒）。
-        - 一台都没有 → 提示「未检测到 J-Link」。
+        - 下拉列表只显示当前电脑可用设备；currentText 可以是历史选择（离线占位）。
         """
         serials: list[str] = []
         if data:
@@ -1448,25 +1481,41 @@ class RTTMonitorPage(QWidget):
                 if serial and serial.isdigit():
                     serials.append(serial)
 
+        # 当前值：可能是用户已选设备，也可能是历史离线占位。
+        # qfluentwidgets ComboBox 不允许显示非 items 的文本，所以用 EditableComboBox：
+        # 在线选择走 setCurrentIndex；离线占位走 setText + setReadOnly(True)。
         prev = self.cb_jlink.currentText().strip()
+        # 启动后首次枚举（prev 为空）且配置里有上次选择 → 以它作为期望占位：
+        # 一会儿在线就选中它，不在线就显示红点占位。
+        if not prev and not hasattr(self, "_jlink_initialized"):
+            prev = str(self._cfg.get("last_jlink_serial") or "").strip()
+            self._jlink_initialized = True
+
         self.cb_jlink.blockSignals(True)
+        self.cb_jlink.setReadOnly(False)
         try:
             self.cb_jlink.clear()
             for s in serials:
                 self.cb_jlink.addItem(s)
-            if serials:
-                idx = self.cb_jlink.findText(prev)
-                self.cb_jlink.setCurrentIndex(idx if idx >= 0 else 0)
+            if prev and prev in serials:
+                # 保持之前的在线选择（可能是历史选择刚好在线）
+                self.cb_jlink.setCurrentText(prev)
+            elif prev:
+                # 之前的值不在线了（或无设备但有历史）：显示为离线占位，
+                # items 是在线设备；红点由下面 _sync_jlink_status_dot 点亮。
+                self.cb_jlink.setText(prev)
+                self.cb_jlink.setReadOnly(True)
+            elif serials:
+                # 之前没有值，默认选第一台
+                self.cb_jlink.setCurrentIndex(0)
             else:
-                # 无设备时 combo 已空，但 currentText 可能还残留上次的 serial
-                # （clear() 后 currentText 不主动复位）——显式重置，避免
-                # 「combo 空但 currentText 还有值」的假选中
-                self.cb_jlink.setCurrentText("")
+                # 无设备也无历史：清空 currentText
+                self.cb_jlink.setText("")
         finally:
             self.cb_jlink.blockSignals(False)
 
-        if not serials:
-            _infobar.warn(self, self.tr("提示"), self.tr("未检测到 J-Link 设备，请检查 USB 连接"))
+        # 同步红点：currentText 不在 items 里 → 显示红点（离线占位）
+        self._sync_jlink_status_dot()
 
         # 拔掉检测：上次选中的 serial 没了 + 当前已连接 → 立刻断开
         if prev and prev not in serials and self._is_connected:
@@ -1482,11 +1531,10 @@ class RTTMonitorPage(QWidget):
                 _infobar.warn(self, self.tr("提示"), self.tr("请先选择目标芯片"))
                 return
             jlink_serial = self.cb_jlink.currentText().strip()
-            if not jlink_serial:
-                # 没选 J-Link 时主动去枚举一次（结果回来用户再点连接），
-                # 并给提示；不把空 serial 发给 worker（会走 open() 空参误连）
-                _infobar.warn(self, self.tr("提示"), self.tr("请先选择 J-Link 设备"))
-                self._on_jlink_refresh_clicked()
+            # 合并提示：combo 空 / 没设备 / 选的是离线占位，统一提示「未检测到 J-Link 设备」。
+            # 真正可以连接的唯一条件：currentText 是一个当前在线设备（出现在 items 里）。
+            if not jlink_serial or self.cb_jlink.findText(jlink_serial) < 0:
+                _infobar.warn(self, self.tr("提示"), self.tr("未检测到 J-Link 设备，请检查 USB 连接"))
                 return
             iface = self.cb_iface.currentText()
             speed = int(self.cb_speed.currentText())
@@ -1496,6 +1544,7 @@ class RTTMonitorPage(QWidget):
             self._cfg.set("interface", iface)
             self._cfg.set("speed_khz", speed)
             self._cfg.set("rtt_channel", channel)
+            self._cfg.set("last_jlink_serial", jlink_serial)
             # 立即给 UI 反馈：禁用按钮 + 改文字
             self.btn_connect.setEnabled(False)
             self.btn_connect.setText(self.tr("连接中…"))
@@ -1928,6 +1977,8 @@ class RTTMonitorPage(QWidget):
         self._timed_send_timer.stop()
         # 断开后 tooltip 从「MCU 实际上报 N」回到通用说明
         self._update_channel_tooltip()
+        # 断开时刷新一次红点（避免当前值已离线但红点没同步）
+        self._sync_jlink_status_dot()
 
 
     def _update_stats(self) -> None:
@@ -2418,7 +2469,6 @@ class RTTMonitorPage(QWidget):
         # 连接设置区
         self.cb_target.setPlaceholderText(self.tr("目标设备"))
         self._lbl_jlink_device.setText(self.tr("J-Link"))
-        _tip(self.btn_jlink_refresh, self.tr("刷新 J-Link 设备列表"))
         self._lbl_iface.setText(self.tr("接口"))
         self._lbl_speed.setText(self.tr("速度"))
         self._lbl_rtt_channel.setText(self.tr("RTT 通道"))

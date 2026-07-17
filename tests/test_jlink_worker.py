@@ -532,11 +532,13 @@ def test_enumerate_devices_formats_semicolon_lines(worker):
 
 
 def test_enumerate_devices_empty_when_no_jlink(worker):
-    """无设备 / 枚举抛异常：devices_enumerated 发空串。"""
+    """无设备 / 枚举抛异常：devices_enumerated 发空串；高频轮询失败不弹 UI warning。"""
     w, jl = worker
     jl.connected_emulators.return_value = []
     got = []
+    logs = []
     w.devices_enumerated.connect(lambda s: got.append(s))
+    w.log_message.connect(lambda lv, m: logs.append((lv, m)))
 
     w.enumerate_devices_requested.emit()
     _drain_events(0.6)
@@ -546,6 +548,8 @@ def test_enumerate_devices_empty_when_no_jlink(worker):
     w.enumerate_devices_requested.emit()
     _drain_events(0.6)
     assert got[-1] == "", "枚举异常也应发空串（worker 不抛给 UI）"
+    assert not any(lv == "warning" and "J-Link 设备列表" in m for lv, m in logs), \
+        "200ms 高频轮询失败不应弹 UI warning 刷屏"
 
 
 def test_enumerate_devices_skips_invalid_serial(worker):

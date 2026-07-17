@@ -282,14 +282,15 @@ class JLinkWorker(QObject):
         选中项是否还在这批里），worker 不在枚举时做状态裁决。
 
         格式约定：分号分隔多台，单台 "serial|product"；无设备/异常时发空串
-        （异常同时 log_message 提示）。acProduct 含 '|' 或 ';' 时截断丢弃——
-        这两个字符是分隔符，混进字段会破坏 UI 解析。
+        （异常只记日志，不再 emit log_message 到 UI —— 200ms 高频轮询下弹
+        warning 会刷屏）。acProduct 含 '|' 或 ';' 时截断丢弃——这两个字符是
+        分隔符，混进字段会破坏 UI 解析。
         """
         try:
             emus = self.jlink.connected_emulators()
         except Exception as e:
             self._logger.warning(f"枚举 J-Link 失败：{e}")
-            self.log_message.emit("warning", f"刷新 J-Link 设备列表失败：{e}")
+            # 高频轮询失败不弹 UI warning，避免刷屏；只发空串让红点/列表更新
             self.devices_enumerated.emit("")
             return
         lines: list[str] = []

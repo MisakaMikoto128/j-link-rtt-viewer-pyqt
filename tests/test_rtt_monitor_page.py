@@ -552,27 +552,75 @@ def test_devices_enumerated_keeps_previous_selection_if_present(rtt_page, qtbot)
     assert page.cb_jlink.currentText() == "222"
 
 
-def test_devices_enumerated_falls_back_to_first_when_selection_gone(rtt_page, qtbot):
-    """上次选中的 serial 被拔掉 → 选中回退到第一台。"""
+def test_devices_enumerated_keeps_offline_placeholder(rtt_page, qtbot):
+    """上次选中的 serial 不在当前列表 → 仍显示该 serial 并亮红点。"""
     page, worker, _ = rtt_page
+    page.show()
+    qtbot.wait(20)
+    # 先选中 222
     worker.devices_enumerated.emit("111|A;222|B")
-    qtbot.wait(30)
-    page.cb_jlink.setCurrentIndex(1)   # 选 222
-    qtbot.wait(10)
-    worker.devices_enumerated.emit("111|A;333|C")   # 222 没了
-    qtbot.wait(30)
-    assert page.cb_jlink.currentText() == "111"
+    qtbot.wait(50)
+    page.cb_jlink.setCurrentIndex(1)
+    qtbot.wait(20)
+    assert page.cb_jlink.currentText() == "222"
+    assert not page._jlink_status_dot.isVisible(), "222 在线时红点隐藏"
+    # 刷新后 222 不在线
+    worker.devices_enumerated.emit("111|A;333|C")
+    qtbot.wait(50)
+    assert page.cb_jlink.currentText() == "222", "离线占位应保持显示"
+    assert page.cb_jlink.count() == 2
+    assert page._jlink_status_dot.isVisible(), "222 离线时红点显示"
 
 
 def test_devices_enumerated_empty_clears_combo(rtt_page, qtbot):
-    """无设备：devices_enumerated("") 清空下拉。"""
+    """无设备且无历史：devices_enumerated("") 清空下拉和红点。"""
     page, worker, _ = rtt_page
+    # 先让 prev 为空：直接发空列表
+    worker.devices_enumerated.emit("")
+    qtbot.wait(50)
+    assert page.cb_jlink.count() == 0
+    assert page.cb_jlink.currentText() == ""
+    assert not page._jlink_status_dot.isVisible()
+
+
+def test_devices_enumerated_empty_keeps_history_placeholder(rtt_page, qtbot):
+    """无设备但有历史选择：保留离线占位并亮红点。"""
+    page, worker, _ = rtt_page
+    page.show()
+    qtbot.wait(20)
+    worker.devices_enumerated.emit("111|A")
+    qtbot.wait(50)
+    page.cb_jlink.setCurrentIndex(0)
+    qtbot.wait(20)
+    assert page.cb_jlink.currentText() == "111"
+    assert not page._jlink_status_dot.isVisible()
+
+    worker.devices_enumerated.emit("")
+    qtbot.wait(50)
+    assert page.cb_jlink.count() == 0
+    assert page.cb_jlink.currentText() == "111", "历史选择应作为离线占位保留"
+    assert page._jlink_status_dot.isVisible(), "无设备且历史占位应显示红点"
+
+
+def test_connect_warns_when_no_online_jlink(rtt_page, qtbot):
+    """选中的是离线占位/无设备时点连接：只弹一次『未检测到 J-Link 设备』。"""
+    page, worker, _ = rtt_page
+    page._set_connected_ui(worker.get_device_info())
+    page._set_disconnected_ui()
     worker.devices_enumerated.emit("111|A")
     qtbot.wait(30)
-    assert page.cb_jlink.count() == 1
+    page.cb_jlink.setCurrentIndex(0)
+    qtbot.wait(10)
+    # 拔掉 111，currentText 保持离线占位
     worker.devices_enumerated.emit("")
     qtbot.wait(30)
-    assert page.cb_jlink.count() == 0
+    assert page.cb_jlink.currentText() == "111"
+
+    connects = []
+    worker.connect_requested.connect(lambda *args: connects.append(args))
+    page._on_connect_clicked()
+    qtbot.wait(10)
+    assert not connects, "离线占位不应 emit connect_requested"
 
 
 def test_disconnect_when_connected_jlink_removed(rtt_page, qtbot):
