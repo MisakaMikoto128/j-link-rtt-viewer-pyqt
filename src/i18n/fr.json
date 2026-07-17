@@ -312,5 +312,6 @@
   "发送通道: {ch}": "Canal TX : {ch}",
   "每通道历史缓存": "Historique par canal",
   "全部 = 合并查看所有通道；发送走最近选中的具体通道": "Tous = vue fusionnée ; TX utilise le dernier canal sélectionné",
-  "MCU 实际上报 {n} 个通道；全部 = 合并查看": "MCU signale {n} canaux ; Tous = vue fusionnée"
+  "MCU 实际上报 {n} 个通道；全部 = 合并查看": "MCU signale {n} canaux ; Tous = vue fusionnée",
+  "界面字号": "Taille police UI"
 }

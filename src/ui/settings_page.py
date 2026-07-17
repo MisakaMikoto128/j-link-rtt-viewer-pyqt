@@ -154,6 +154,18 @@ class SettingsPage(QWidget):
         wrap.setLayout(color_row)
         app_lay.addWidget(wrap)
 
+        # 全局界面字号：QApplication.setFont 控制所有 UI 控件（按钮/标签/发送框）。
+        # RTT 显示区 / 内存页 hex dump 有各自字号覆盖，不受此项影响。
+        self.sp_ui_font_size = SpinBox(self)
+        self.sp_ui_font_size.setRange(8, 32)
+        self.sp_ui_font_size.setValue(max(8, int(self._cfg.get("ui_font_size") or 14)))
+        self.sp_ui_font_size.setSuffix(" pt")
+        self.sp_ui_font_size.valueChanged.connect(
+            lambda v: self._cfg.set("ui_font_size", v))
+        row_ui_font = _SettingRow("界面字号", self.sp_ui_font_size)
+        self._setting_rows.append(row_ui_font)
+        app_lay.addWidget(row_ui_font)
+
         # 系统字体列表（推荐字体置顶）
         families = self._build_font_family_list()
 

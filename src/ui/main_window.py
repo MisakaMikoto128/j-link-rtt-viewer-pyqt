@@ -55,6 +55,7 @@ class MainWindow(FluentWindow):
         self._cfg.rtt_poll_interval_changed.connect(self.worker.set_poll_interval_requested)
         self._cfg.rtt_encoding_changed.connect(self.worker.set_encoding_requested)
         self._cfg.language_changed.connect(_switch_language)
+        self._cfg.ui_font_size_changed.connect(self._apply_ui_font_size)
 
         # 5. 全局快捷键
         QShortcut(QKeySequence("F2"), self, self.rtt_page.on_shortcut_connect)
@@ -92,6 +93,22 @@ class MainWindow(FluentWindow):
                     item.setText(self.tr(text_key))
                 except Exception:
                     pass  # 某些导航 widget 可能没有 setText
+
+    def _apply_ui_font_size(self, size: int) -> None:
+        """运行时改全局界面字号：QApplication.setFont 设新默认字号，遍历已存在
+        widget 刷新（跳过有专属字体的 RTT/内存显示区，它们各自 _apply_font 覆盖）。
+
+        QApplication.setFont 只影响新建 widget，已存在的不会自动刷新，故遍历。
+        用动态属性 _custom_font 标记专属字体 widget（RTT display / 内存 display），
+        避免全局字号覆盖它们的等宽专用字号。
+        """
+        f = QApplication.font()
+        f.setPointSize(size)
+        QApplication.setFont(f)
+        for w in QApplication.allWidgets():
+            if w.property("_custom_font"):
+                continue
+            w.setFont(f)
 
     def _restore_geometry(self) -> None:
         geom_b64 = self._cfg.get("window_geometry")

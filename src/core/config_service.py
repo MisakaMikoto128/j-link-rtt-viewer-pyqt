@@ -24,6 +24,7 @@ class ConfigService(QObject):
     theme_color_changed = Signal(str)       # hex e.g. "#28afe9"
     font_changed = Signal(str, int)         # (family, size) — RTT 显示区字体
     memory_font_size_changed = Signal(int)  # 内存页 hex dump 字号（family 与 RTT 共用 font_family）
+    ui_font_size_changed = Signal(int)       # 全局界面字号（按钮/标签/发送框等非等宽区；RTT/内存显示区各自覆盖）
     max_display_lines_changed = Signal(int) # new max block count for QPlainTextEdit
     rtt_poll_interval_changed = Signal(int) # poll timer interval in ms
     rtt_encoding_changed = Signal(str)      # RTT 解码编码（utf-8 / gbk / utf-16-le / latin-1 / ascii）
@@ -44,6 +45,9 @@ class ConfigService(QObject):
         "font_size": 13,
         # 内存页 hex dump 字号（family 沿用 font_family）
         "memory_font_size": 12,
+        # 全局界面字号：QApplication.setFont 控制所有 UI 控件（按钮/标签/发送框）。
+        # RTT 显示区 / 内存页 hex dump 有各自字号覆盖，不受此项影响。
+        "ui_font_size": 14,
         "max_display_lines": 10000,
         "rtt_poll_interval_ms": 100,   # RTT 轮询间隔（ms）—— 旧版叫 rx_timeout_ms，已迁移
         "rtt_encoding": "utf-8",       # RTT 解码编码：utf-8 / gbk / utf-16-le / latin-1 / ascii
@@ -180,6 +184,8 @@ class ConfigService(QObject):
             disk["font_size"] = 13
         if disk.get("memory_font_size", 1) <= 0:
             disk["memory_font_size"] = 12
+        if disk.get("ui_font_size", 1) <= 0:
+            disk["ui_font_size"] = 14
         for key, default in self.DEFAULTS.items():
             if key not in disk:
                 continue
@@ -221,6 +227,8 @@ class ConfigService(QObject):
             self.font_changed.emit(self._data["font_family"], self._data["font_size"])
         elif key == "memory_font_size":
             self.memory_font_size_changed.emit(self._data["memory_font_size"])
+        elif key == "ui_font_size":
+            self.ui_font_size_changed.emit(self._data["ui_font_size"])
         elif key == "rtt_encoding":
             self.rtt_encoding_changed.emit(self._data["rtt_encoding"])
         elif key == "max_display_lines":

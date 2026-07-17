@@ -934,6 +934,8 @@ class MemoryViewerPage(QWidget):
             size = int(self._cfg.get("memory_font_size") or 12)
         font = QFont(family, size)
         self.display.setFont(font)
+        # 标记专属字体：全局界面字号热更新时跳过，保持等宽 + 内存页专用字号
+        self.display.setProperty("_custom_font", True)
         if hasattr(self, "lbl_font_size"):
             self.lbl_font_size.setText(str(size))
 

@@ -1154,9 +1154,7 @@ class RTTMonitorPage(QWidget):
         #     "(Hex 模式下用 16 进制字符)")
         _SEND_H = 110  # 约 6 行，发送按钮同高
         self.te_send.setFixedHeight(_SEND_H)
-        font = self.te_send.font()
-        font.setPointSize(12)
-        self.te_send.setFont(font)
+        # 发送框字体跟随全局界面字号（QApplication.font），不再硬编码 12pt
 
         # 发送按钮：正方形，高度=输入框高度，始终 enabled
         # 未连接时点击 → 提示"未连接目标"
@@ -2054,6 +2052,8 @@ class RTTMonitorPage(QWidget):
             font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
             font.setPointSize(size)
         self.display.setFont(font)
+        # 标记专属字体：全局界面字号热更新时跳过，保持等宽 + RTT 专用字号
+        self.display.setProperty("_custom_font", True)
         # 同步右上角字号显示
         if hasattr(self, "lbl_font_size"):
             self.lbl_font_size.setText(str(size))
