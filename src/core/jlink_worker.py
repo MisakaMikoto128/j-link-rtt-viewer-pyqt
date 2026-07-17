@@ -387,17 +387,45 @@ class JLinkWorker(QObject):
             self.connection_state_changed.emit(False)
 
     def _detect_num_up_channels(self) -> int:
-        """连接后探测 MCU 端 RTT 上行通道数（_SEGGER_RTT 控制块的 MaxNumUpBuffers）。
+        """连接后探测 MCU 端实际【已分配】的 RTT 上行通道数。
 
-        返回 >= 1 的整数；探测失败（旧固件 / J-Link 固件不支持 / 控制块未找到）
-        回退 1（只读通道 0，行为同旧版）。
+        关键：不用 rtt_get_num_up_buffers() 的返回值当通道数--它返回的是固件声明的
+        MaxNumUpBuffers（描述符数组大小），含「声明了但没初始化的空槽」。实测某
+        STM32F030 固件声明 3 个上行缓冲，但只有 ch0 真正分配了缓冲（SizeOfBuffer=1024），
+        ch1/ch2 的 SizeOfBuffer=0（空槽，永远没数据）。若用声明数 3，SpinBox 会显示
+        0/1/2 且选 4 拉回到 2（空槽无数据）--正是用户报的 bug。
+
+        正确口径：遍历各通道 buf descriptor，数 SizeOfBuffer>0 的（从 0 起连续）。
+        空槽即停（SEGGER RTT 通道按惯例从 0 连续分配）。
+
+        RTT 控制块定位是异步的--紧凑重连（断开立即重连 / auto_reconnect）时
+        rtt_get_num_up_buffers 会抛 "The RTT Control Block has not yet been found"。
+        故失败/返回 0 时短间隔重试，仍失败回退 1（只读 ch0，行为同旧版）。
         """
-        try:
-            n = int(self.jlink.rtt_get_num_up_buffers())
-            return max(1, n)
-        except Exception as e:
-            self._logger.warning(f"探测 RTT 上行通道数失败，回退 1：{e}")
-            return 1
+        last_err: str = ""
+        for attempt in range(4):   # 0ms / 150ms / 300ms / 450ms，覆盖典型定位窗口
+            try:
+                declared = int(self.jlink.rtt_get_num_up_buffers())
+                if declared < 1:
+                    raise RuntimeError(f"declared={declared}")
+                allocated = 0
+                for ch in range(declared):
+                    desc = self.jlink.rtt_get_buf_descriptor(ch, up=True)
+                    if getattr(desc, "SizeOfBuffer", 0) > 0:
+                        allocated += 1
+                    else:
+                        break   # 从 0 起连续，遇空槽即停
+                if allocated >= 1:
+                    self._logger.info(
+                        f"RTT 通道数探测：声明 {declared} / 实际分配 {allocated}（第 {attempt + 1} 次尝试）")
+                    return allocated
+                last_err = f"声明{declared}但无已分配缓冲"
+            except Exception as e:
+                last_err = str(e)
+            if attempt < 3:
+                time.sleep(0.15)
+        self._logger.warning(f"探测 RTT 上行通道数失败（重试 4 次），回退 1：{last_err}")
+        return 1
 
     def _collect_device_info(self, target: str, iface: str, speed: int) -> dict:
         try:

@@ -537,18 +537,79 @@ def _make_channel_reader(per_channel: dict):
     return _read
 
 
+def _set_allocated_channels(jl, n: int):
+    """mock：声明 n 个上行缓冲，前 n 个已分配（SizeOfBuffer>0），其余空槽。
+
+    对应真实固件：MaxNumUpBuffers=n 且 ch0..n-1 都初始化了缓冲。
+    worker 的 _detect_num_up_channels 用 SizeOfBuffer>0 计数，故应返回 n。
+    """
+    from types import SimpleNamespace
+    jl.rtt_get_num_up_buffers.return_value = n
+
+    def _desc(ch, up=True):
+        if ch < n:
+            return SimpleNamespace(SizeOfBuffer=1024)
+        raise RuntimeError("Invalid error code: -3")  # 超出声明范围
+    jl.rtt_get_buf_descriptor.side_effect = _desc
+
+
 def test_connect_detects_num_up_channels(worker):
-    """连接成功后调 rtt_get_num_up_buffers 探测通道数；get_num_up_channels 可读。"""
+    """连接成功后探测上行通道数；get_num_up_channels 可读。"""
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
-    jl.rtt_get_num_up_buffers.return_value = 3
+    _set_allocated_channels(jl, 3)
     jl.rtt_read.return_value = []
     w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
     _drain_events(0.5)
     assert w.state_name() == "CONNECTED"
-    assert jl.rtt_get_num_up_buffers.called, "连接后应探测上行通道数"
     assert w.get_num_up_channels() == 3
+
+
+def test_detect_counts_allocated_not_declared(worker):
+    """回归（真实硬件场景）：声明 3 个上行缓冲但只 ch0 分配了（ch1/ch2 空槽）-> 返回 1。
+
+    STM32F030 固件 MaxNumUpBuffers=3，但 aUp[1]/aUp[2] 未初始化（SizeOfBuffer=0）。
+    旧实现用 rtt_get_num_up_buffers() 返回 3，导致 SpinBox 显示 0/1/2 且选 4 拉回到
+    ch2（空槽无数据）。修法用 buf descriptor SizeOfBuffer>0 计数。
+    """
+    from types import SimpleNamespace
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.rtt_get_num_up_buffers.return_value = 3   # 声明 3
+    # 只有 ch0 有真实缓冲，ch1/ch2 是空槽
+    def _desc(ch, up=True):
+        if ch == 0:
+            return SimpleNamespace(SizeOfBuffer=1024)
+        return SimpleNamespace(SizeOfBuffer=0)   # 空槽
+    jl.rtt_get_buf_descriptor.side_effect = _desc
+    jl.rtt_read.return_value = []
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(0.5)
+    assert w.state_name() == "CONNECTED"
+    assert w.get_num_up_channels() == 1, "应只数已分配缓冲，不是声明数 3"
+
+
+def test_detect_retries_then_succeeds(worker):
+    """紧凑重连：控制块首次未就绪抛异常，retry 后成功探测到分配数。"""
+    from types import SimpleNamespace
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    # 前 2 次抛「控制块未找到」，第 3 次返回
+    jl.rtt_get_num_up_buffers.side_effect = [
+        RuntimeError("The RTT Control Block has not yet been found (wait?)"),
+        RuntimeError("The RTT Control Block has not yet been found (wait?)"),
+        2,
+    ]
+    jl.rtt_get_buf_descriptor.side_effect = lambda ch, up=True: SimpleNamespace(SizeOfBuffer=1024)
+    jl.rtt_read.return_value = []
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
+    _drain_events(1.0)
+    assert w.state_name() == "CONNECTED"
+    assert w.get_num_up_channels() == 2, "retry 后应探测到 2"
+
 
 
 def test_connect_detect_num_up_channels_fallback(worker):
@@ -569,7 +630,7 @@ def test_read_loop_reads_all_channels_and_tags(worker):
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
-    jl.rtt_get_num_up_buffers.return_value = 2
+    _set_allocated_channels(jl, 2)
     per_ch = {0: b"hello-ch0\n", 1: b"hello-ch1\n"}
     jl.rtt_read.side_effect = _make_channel_reader(per_ch)
 
@@ -600,7 +661,7 @@ def test_per_channel_decoder_independence(worker):
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
-    jl.rtt_get_num_up_buffers.return_value = 2
+    _set_allocated_channels(jl, 2)
     received = []
     w.rtt_data_received.connect(lambda ch, text: received.append((ch, text)))
     w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
@@ -629,7 +690,7 @@ def test_set_channel_all_keeps_send_channel(worker):
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
-    jl.rtt_get_num_up_buffers.return_value = 3
+    _set_allocated_channels(jl, 3)
     jl.rtt_read.return_value = []
     w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
     _drain_events(0.4)
@@ -654,7 +715,7 @@ def test_send_uses_send_channel(worker):
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
-    jl.rtt_get_num_up_buffers.return_value = 2
+    _set_allocated_channels(jl, 2)
     jl.rtt_read.return_value = []
     jl.rtt_write.return_value = 5
     w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
@@ -675,7 +736,7 @@ def test_reset_counts_clears_all_channels(worker):
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
-    jl.rtt_get_num_up_buffers.return_value = 2
+    _set_allocated_channels(jl, 2)
     per_ch = {0: b"a\n", 1: b"b\n"}
     jl.rtt_read.side_effect = _make_channel_reader(per_ch)
     w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0)
