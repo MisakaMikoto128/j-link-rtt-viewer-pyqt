@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QSplitter,
     QTextEdit,
-    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -107,8 +106,8 @@ class MemoryViewerPage(QWidget):
 
         self._build_ui()
         self._wire_signals()
-        # 应用初始字体（family 沿用 RTT 字体，size 独立 memory_font_size）
-        self._apply_font(self._cfg.get("font_family"), int(self._cfg.get("memory_font_size")))
+        # 应用初始字体（family 跟随全局界面字体 ui_font_family，size 独立 memory_font_size）
+        self._apply_font(self._cfg.get("ui_font_family") or "", int(self._cfg.get("memory_font_size")))
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -362,6 +361,9 @@ class MemoryViewerPage(QWidget):
         # PlainTextEdit 的鼠标事件在 viewport 上，需要 mouse tracking + filter
         self.display.viewport().setMouseTracking(True)
         self.display.viewport().installEventFilter(self)
+        # 用 Fluent 风格气泡替代原生 QToolTip（圆角 + 阴影，与全应用 tooltip 一致）
+        from .widgets.fluent_hover_tip import FluentHoverTip
+        self._hover_tip = FluentHoverTip(self.display)
 
     # ------------------------------------------------------------------
     # i18n：语言切换
@@ -483,8 +485,9 @@ class MemoryViewerPage(QWidget):
         # 字号 ± 按钮：走 cfg → memory_font_size_changed → _apply_font
         self.btn_font_minus.clicked.connect(lambda: self._adjust_font_size(-1))
         self.btn_font_plus.clicked.connect(lambda: self._adjust_font_size(+1))
-        # cfg 信号：family 跟 RTT 共用，size 独立
-        self._cfg.font_changed.connect(lambda fam, _sz: self._apply_font(fam, None))
+        # cfg 信号：family 跟随「全局界面字体」（ui_font_family）而非 RTT 的 font_family；
+        # size 走 memory_font_size（独立）。故 listen ui_font_family_changed 而非 font_changed。
+        self._cfg.ui_font_family_changed.connect(lambda fam: self._apply_font(fam, None))
         self._cfg.memory_font_size_changed.connect(lambda sz: self._apply_font(None, sz))
 
         self.display.cursorPositionChanged.connect(self._refresh_types)
@@ -609,7 +612,7 @@ class MemoryViewerPage(QWidget):
             if event.type() == QEvent.MouseMove:
                 self._show_hover_tooltip(event)
             elif event.type() == QEvent.Leave:
-                QToolTip.hideText()
+                self._hover_tip.hide()
         return super().eventFilter(obj, event)
 
     def _show_hover_tooltip(self, event) -> None:
@@ -619,7 +622,7 @@ class MemoryViewerPage(QWidget):
         offset = self._byte_offset_at(cursor.blockNumber(), cursor.positionInBlock())
         if offset < 0 or offset >= len(self._buffer):
             self._last_hover_offset = -1
-            QToolTip.hideText()
+            self._hover_tip.hide()
             return
         if offset == self._last_hover_offset:
             return  # 仍在同一字节，tooltip 已显示
@@ -633,7 +636,8 @@ class MemoryViewerPage(QWidget):
                 f"u32 LE: {le_u32}\n"
                 f"u32 BE: {be_u32}\n"
                 f"u16 LE: {le_u16}")
-        QToolTip.showText(event.globalPosition().toPoint(), text, self.display)
+        # duration=0：hover 持续显示直到鼠标移走（Leave 时 hide）
+        self._hover_tip.show_at(event.globalPosition().toPoint(), text, duration=0)
 
     def _rerender(self) -> None:
         if not self._buffer:
@@ -927,14 +931,22 @@ class MemoryViewerPage(QWidget):
     # 字体 / 字号
     # ------------------------------------------------------------------
     def _apply_font(self, family: str | None, size: int | None) -> None:
-        """family/size 任意一者传 None 表示沿用 cfg 当前值。"""
+        """family/size 任意一者传 None 表示沿用 cfg 当前值。
+
+        family：跟随「全局界面字体」（ui_font_family）——与内存页 history 一致；
+            空串展开成系统 UI family（core._ui_font.resolve_ui_family）。
+        size：内存页独立字号（memory_font_size），不随全局界面字号变。
+        """
         if family is None:
-            family = self._cfg.get("font_family") or "Consolas"
+            family = self._cfg.get("ui_font_family") or ""
+        from core._ui_font import resolve_ui_family
+        resolved = resolve_ui_family(family)
         if size is None or size <= 0:
             size = int(self._cfg.get("memory_font_size") or 12)
-        font = QFont(family, size)
+        font = QFont(resolved, size)
         self.display.setFont(font)
-        # 标记专属字体：全局界面字号热更新时跳过，保持等宽 + 内存页专用字号
+        # 标记专属字体：全局界面字号热更新时跳过（保持内存页专用字号）；
+        # 但全局界面 *family* 变更会经 ui_font_family_changed 走回来刷新这个 family。
         self.display.setProperty("_custom_font", True)
         if hasattr(self, "lbl_font_size"):
             self.lbl_font_size.setText(str(size))

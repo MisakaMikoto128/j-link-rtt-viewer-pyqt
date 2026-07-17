@@ -65,3 +65,7 @@ demo/
 
 # 临时诊断脚本（最小 demo 等）
 scratch/
+
+# qfluentwidgets 运行时写到 CWD 的配置副产物（setThemeColor 默认 save=True，
+# 相对路径 config/config.json；与项目自身 src/config.json 无关）
+config/

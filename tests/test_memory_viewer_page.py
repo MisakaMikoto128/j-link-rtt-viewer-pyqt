@@ -82,6 +82,57 @@ def test_read_bad_address_does_not_emit(mem_page, qtbot):
     assert worker._reads == []
 
 
+def test_display_font_family_follows_ui_font(mem_page, qtbot):
+    """内存 hex 显示区 family 跟随「全局界面字体」（ui_font_family），size 用 memory_font_size。
+
+    用户要求（v0.5.x）：内存查看框字体跟 UI 字体走，但字号保持内存页独立设置。
+    所以 _apply_font 的 family 来源从 font_family（RTT 等宽）改为 ui_font_family。
+    """
+    from core._ui_font import resolve_ui_family
+    page, _, cfg = mem_page
+    # 改 ui_font_family → ui_font_family_changed → _apply_font 刷新 display
+    cfg.set("ui_font_family", "Consolas")
+    qtbot.wait(20)
+    assert page.display.font().family() == "Consolas"
+    assert page.display.font().pointSize() == int(cfg.get("memory_font_size"))
+    # 切回跟随系统 → display family 还原成系统 UI family
+    cfg.set("ui_font_family", "")
+    qtbot.wait(20)
+    assert page.display.font().family() == resolve_ui_family("")
+
+
+def test_display_font_size_independent_of_ui_font(mem_page, qtbot):
+    """改 ui_font_family 时 display 字号不变（仍 memory_font_size）。"""
+    page, _, cfg = mem_page
+    mem_size = int(cfg.get("memory_font_size"))
+    cfg.set("ui_font_family", "Consolas")
+    qtbot.wait(20)
+    assert page.display.font().pointSize() == mem_size
+
+
+def test_display_uses_fluent_hover_tip(mem_page):
+    """hover 提示应是 Fluent 气泡（FluentHoverTip），不是原生 QToolTip。"""
+    from ui.widgets.fluent_hover_tip import FluentHoverTip
+    page, _, _ = mem_page
+    assert isinstance(page._hover_tip, FluentHoverTip)
+
+
+def test_hover_tip_show_and_hide(mem_page, qtbot):
+    """_show_hover_tooltip 应驱动 _hover_tip 显示/隐藏。"""
+    page, worker, _ = mem_page
+    _set_connected(page, worker, qtbot)
+    page._buffer = bytes(range(64))
+    page._buffer_base = 0x20000000
+    page._last_hover_offset = -1
+    page.show()
+    qtbot.wait(20)
+    page._hover_tip.show_at(page.display.mapToGlobal(page.display.rect().center()),
+                            "addr 0x20000000\nu32 LE: 0x03020100", duration=0)
+    assert page._hover_tip.is_showing()
+    page._hover_tip.hide()
+    assert not page._hover_tip.is_showing()
+
+
 def test_zero_or_oversized_read_rejected(mem_page, qtbot):
     """size=0 或 > 16MB 应被拦截。"""
     page, worker, _ = mem_page

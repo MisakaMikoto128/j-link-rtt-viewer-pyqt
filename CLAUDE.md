@@ -681,11 +681,55 @@ fmt.setForeground(_ANSI_QCOLORS.get(attrs.fg, _DEFAULT_FG_QCOLOR))
 def translate(self, context, source, disambiguation=None, n=-1):
     return self._dict.get(source, source)
 ```
-这样翻译表缺任意键（含未来新增）都退化显示源文本，绝不空白。`zh_CN` 为默认语言不安装 translator，`tr()` 直接返回 source，行为一致。补齐翻译表里缺失的键是另一回事（数据完整性），本条只保证「永不空白」。
+这样翻译表缺任意键（含未来新增）都退化显示源文本，绝不空白。`zh_CN` 现在也装 translator（见下一条），`tr()` 未命中仍返回 source，行为一致。补齐翻译表里缺失的键是另一回事（数据完整性），本条只保证「永不空白」。
 
 附带：设备信息行标签用 `self.tr(f"{text}:")`，键带冒号；翻译表键也必须带冒号（`"固件版本:"` 而非 `"固件版本"`），否则照样命中不了。已有 `"目标设备:"` 与 `"目标设备"` 两条并存即此约定。
 
 参考：`src/core/i18n_service.py` `JsonTranslator.translate`、`src/ui/rtt_monitor_page.py` `_info_rows`。
+
+---
+
+## zh_CN 也必须安装 JsonTranslator — 否则第三方英文源控件（ColorDialog 等）在中文界面全程英文
+
+**现象**：中文界面（zh_CN）下打开「选择主题色 / 选择标记颜色」颜色对话框，OK / Cancel / Edit Color / Red / Green / Blue / Opacity 全程显示英文按钮。切到日 / 法 / 韩都正常，唯独简体中文不翻。
+
+**原因**：qfluentwidgets `ColorDialog` 内部用**英文源文本**调 `self.tr('OK' / 'Cancel' / 'Edit Color' / 'Red' / 'Green' / 'Blue' / 'Opacity')`。历史上 `zh_CN` 是默认语言，`init_translator` 走 `if lang != _DEFAULT_LANG: installTranslator(...)` —— zh_CN 时**不装 translator**，于是 `tr('OK')` 直接返回 source 英文 `'OK'`，没有任何中文译文路径。「自定义 `QTranslator.translate` 未命中返回 source」是必要前提（保证项目自身中文 `tr()` 不被改），但它解决不了第三方英文 source 这一类。
+
+**处理**：**所有语言（含 zh_CN 默认）都安装 JsonTranslator**。新增 `src/i18n/zh_CN.json`，**只**收「英文 source → 中文」映射（当前 ColorDialog 那 7 项）；项目自身 `self.tr('中文源')` 不出现在 zh_CN.json 里，未命中返回 source（即该中文原文），行为与不装 translator 完全一致。`init_translator` / `switch_language` 删除 `if lang != _DEFAULT_LANG` 守卫，无条件装。
+
+判别：凡是「中文界面下还冒英文」的第三方控件，多半是它内部 `tr('EnglishSource')` 而我们 zh_CN 没装 translator —— 给 zh_CN.json 加一条 `"EnglishSource": "中文"` 即可，不需要改那个第三方控件。
+
+参考：`src/core/i18n_service.py` `init_translator` / `switch_language`、`src/i18n/zh_CN.json`、`tests/test_i18n.py`。
+
+---
+
+## QSS `font:` 锁定的控件（RadioButton 等）setFont 完全无效，必须 setStyleSheet 追加规则覆盖
+
+**现象**：全局界面字体热更新（遍历 `allWidgets` + `setFont`）后，固件烧录页 SWD/JTAG 两个 RadioButton 的 family 和字号都不变，其他控件正常。
+
+**原因**：qfluentwidgets `BUTTON.qss` 里有 `RadioButton { font: 14px --FontFamilies; }`——**控件自身 QSS 的 `font:` 规则优先级高于 `setFont()`**，全局遍历 setFont 对它无效。实测（scratch/probe_rb2.py）：`setFont(Consolas 20pt)` 后 RadioButton 仍 14px/Segoe UI，只有 `setStyleSheet` 追加 font 规则才生效。全量扫描 qss 后同类锁定控件还有：`MenuActionListWidget`（右键菜单 14px）、`InfoBar`（14px）、对话框按钮（15px）、`SwitchButton>QLabel`、`QHeaderView::section`、`TeachingTipView`（14px）、`ColorDialog QLabel`、`TimePicker` 系列等。
+
+**处理**：
+1. 统一走 `core/_ui_font.py` `sync_qss_font_locked_widgets(root, family, pt)`：对名单内控件（`_QSS_FONT_LOCKED_CLASS_NAMES`）往其 styleSheet **追加**一条 `font-family + font-size` 规则，用 `/* UI_FONT_OVERRIDE_BEGIN/END */` 哨兵注释包裹，重复调用先 strip 旧哨兵段再追加，保证幂等。发现新的锁定控件就加进名单。
+2. `--FontFamilies` 模板变量只在**构造/应用样式时**解析一次——已存在控件改 `qconfig.fontFamilies` 不会刷新 family（probe_rb_family.py 实证），所以覆盖规则里 family 也要显式写。
+3. ToolTip / TeachingTip / Flyout 气泡的 family 靠 `_sync_fluent_font_families(family)` 设 `qconfig.fontFamilies = [ui_family, CJK兜底...]`：气泡每次悬停/点击**重新构造**，自动读新 fontFamilies；气泡字号由 qss 锁死（ToolTip 12px / TeachingTip 14px）——这正是「气泡字号固定但 family 跟随」的实现方式，不要去解锁它。
+4. 「跟随系统」不能用 `setFamily("")`（Qt 沿用上一次的 family，回不去）——启动时在 `main.py` 任何 `setFont` 之前 `capture_system_ui_family()` 冻结 QApplication 初始 family，空偏好时 `resolve_ui_family("")` 返回它。
+5. 内存页 hex 显示区 family 跟随 `ui_font_family`（信号 `ui_font_family_changed`）、size 独立 `memory_font_size`；`_custom_font` 标记只挡全局 setFont，family 变更经信号单独刷新。
+6. **名单收窄到项目实际用到的控件**（当前仅 RadioButton）。右键菜单/TimePicker/InfoBar 等虽也有 qss font 锁定，但项目没用到，不纳入；`_apply_ui_font` 遍历 `allWidgets()` 已能覆盖烧录页 RadioButton（构造于 MainWindow init，构造末尾必跑一次 apply）。曾尝试给「动态创建的锁定控件」装 app 级 show eventFilter 补调——**失败**：QApplication.installEventFilter 只拦截发给 app 自己的事件，监听不到子控件的 Show。若将来用到动态创建的锁定控件，要在它创建处显式补调 `sync_qss_font_locked_widgets`，不要用 app 级 filter。
+
+参考：`src/core/_ui_font.py`、`src/ui/main_window.py` `_apply_ui_font`、`src/ui/memory_viewer_page.py` `_apply_font`、`tests/test_ui_font.py`。
+
+---
+
+## 动态内容 hover 提示：复用 Fluent ToolTip 而不是 QToolTip.showText
+
+**现象**：内存查看页 hex 区 hover 显示逐字节解析（地址/u32 LE/BE/u16），用的是原生 `QToolTip.showText`——灰色原生样式，与全应用 Fluent 圆角气泡不统一。
+
+**原因**：`qfluentwidgets.ToolTipFilter` 只支持「相对固定 widget、静态文本」的 tooltip；hover 提示需要**内容随鼠标位置动态计算 + 位置跟随鼠标**，ToolTipFilter 不覆盖这个场景。
+
+**处理**：`ui/widgets/fluent_hover_tip.py` `FluentHoverTip`——复用 qfluentwidgets `ToolTip`（自带圆角气泡/阴影/12px 字号/`--FontFamilies` family），单例式持有一个实例，调用方 `show_at(global_pos, text)` 内部 `setText` + `move(globalPos + offset)` + `show()`，`duration=0` 不自动消失、Leave 时 `hide()`。同文本重复调用不重建，避免闪烁。family 自动跟随 `_sync_fluent_font_families`。
+
+参考：`src/ui/widgets/fluent_hover_tip.py`、`src/ui/memory_viewer_page.py` `_show_hover_tooltip`、`tests/test_memory_viewer_page.py` `test_display_uses_fluent_hover_tip`。
 
 ---
 

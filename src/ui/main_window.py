@@ -10,6 +10,11 @@ from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, NavigationItemPosition
 
 from core.config_service import ConfigService
+from core._ui_font import (
+    _sync_fluent_font_families,
+    resolve_ui_family,
+    sync_qss_font_locked_widgets,
+)
 from core.i18n_service import switch_language as _switch_language
 from core.jlink_worker import JLinkWorker
 from core.logger import get_logger
@@ -56,6 +61,7 @@ class MainWindow(FluentWindow):
         self._cfg.rtt_encoding_changed.connect(self.worker.set_encoding_requested)
         self._cfg.language_changed.connect(_switch_language)
         self._cfg.ui_font_size_changed.connect(self._apply_ui_font_size)
+        self._cfg.ui_font_family_changed.connect(self._apply_ui_font_family)
 
         # 5. 全局快捷键
         QShortcut(QKeySequence("F2"), self, self.rtt_page.on_shortcut_connect)
@@ -72,10 +78,10 @@ class MainWindow(FluentWindow):
             self.setWindowIcon(QIcon(str(icon_path)))
         self.setMinimumSize(480, 540)
         self._restore_geometry()
-        # 首次刷新全局界面字号：qfluentwidgets 控件用自己的默认字号（pixelSize），
+        # 首次刷新全局界面字体：qfluentwidgets 控件用自己的默认字号（pixelSize），
         # 不继承 QApplication.setFont，故构造后遍历 setFont 强制覆盖（否则首次显示
         # 用控件默认字号，改字号才生效）。改默认 10pt 时正因此 bug 才被发现。
-        self._apply_ui_font_size(int(cfg.get("ui_font_size") or 9))
+        self._apply_ui_font(cfg.get("ui_font_family") or "", int(cfg.get("ui_font_size") or 9))
 
     def _add_nav(self, widget, icon, text_key, position=NavigationItemPosition.TOP) -> None:
         """添加导航项并记录 route_key → tr_key 映射。"""
@@ -99,20 +105,46 @@ class MainWindow(FluentWindow):
                     pass  # 某些导航 widget 可能没有 setText
 
     def _apply_ui_font_size(self, size: int) -> None:
-        """运行时改全局界面字号：QApplication.setFont 设新默认字号，遍历已存在
+        """size 运行时变更入口（ConfigService.ui_font_size_changed 触发）。
+
+        以当前 cfg 的 family + 新 size 合成字体后应用，保证改字号不会
+        把 family 丢回系统默认。"""
+        self._apply_ui_font(self._cfg.get("ui_font_family") or "", size)
+
+    def _apply_ui_font_family(self, family: str) -> None:
+        """family 运行时变更入口（ConfigService.ui_font_family_changed 触发）。"""
+        self._apply_ui_font(family or "", int(self._cfg.get("ui_font_size") or 9))
+
+    def _apply_ui_font(self, family: str, size: int) -> None:
+        """运行时改全局界面字体：QApplication.setFont 设新默认 family+字号，遍历已存在
         widget 刷新（跳过有专属字体的 RTT/内存显示区，它们各自 _apply_font 覆盖）。
 
         QApplication.setFont 只影响新建 widget，已存在的不会自动刷新，故遍历。
         用动态属性 _custom_font 标记专属字体 widget（RTT display / 内存 display），
-        避免全局字号覆盖它们的等宽专用字号。
+        避免全局字体覆盖它们的等宽专用字号。family 空串表示「跟随系统」：
+        显式解析成系统 UI family 后再 setFamily——否则 Qt 沿用上一次的 family，
+        永远切不回系统字体（CLAUDE.md 经验条目）。
+
+        同步设 qfluentwidgets 的 fontFamilies（qconfig）为 [ui_family, 中文/日文兜底]：
+        qfluentwidgets 的 ToolTip / TeachingTip / Flyout 等气泡用原生 QLabel + 自己的
+        QSS `font: 12px --FontFamilies`，fontFamilies 决定 --FontFamilies 的取值。气泡
+        字号被 QSS 锁在 12px（用户要求气泡字号不变），但 family 要跟随 UI 字体，故这里
+        把 fontFamilies 设成 UI family（每次悬停/点击重新构造气泡时自动应用新值）。
         """
+        resolved = resolve_ui_family(family)
         f = QApplication.font()
+        f.setFamily(resolved)
         f.setPointSize(size)
         QApplication.setFont(f)
         for w in QApplication.allWidgets():
             if w.property("_custom_font"):
                 continue
             w.setFont(f)
+        _sync_fluent_font_families(resolved)
+        # QSS `font:` 锁定的控件（RadioButton/右键菜单等）setFont 无效，
+        # 单独用 setStyleSheet 追加 font 规则覆盖（见 core._ui_font 注释）。
+        # 用 QApplication 全量 widget（右键菜单/对话框是独立顶级窗口，不在主窗口子树）。
+        sync_qss_font_locked_widgets(QApplication.instance(), resolved, size)
 
     def _restore_geometry(self) -> None:
         geom_b64 = self._cfg.get("window_geometry")

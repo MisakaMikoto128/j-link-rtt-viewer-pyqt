@@ -29,6 +29,11 @@ def main() -> int:
     )
     app = QApplication(sys.argv)
 
+    # 冻结系统 UI 字体 family（必须在 setFont 之前）：用于「跟随系统」时还原。
+    # 一旦 setFont 了具体 family，QApplication.font() 就回不去系统默认了，得靠这里捕获。
+    from core._ui_font import capture_system_ui_family
+    capture_system_ui_family()
+
     # 应用级 icon：影响任务栏 / Alt+Tab。MainWindow 自己也会 setWindowIcon
     # 触发 FluentTitleBar 更新，两者互不依赖（不存在调用顺序问题）。
     from core._paths import find_app_icon
@@ -72,11 +77,20 @@ def main() -> int:
         setTheme(Theme.AUTO)
     setThemeColor(cfg.get("theme_color"))
 
-    # 全局界面字号：QApplication.setFont 设默认字号，所有 widget 继承。
-    # RTT 显示区 / 内存页 hex dump 有各自字号覆盖（_apply_font 单独 setFont）。
+    # 全局界面字体 / 字号：QApplication.setFont 设默认字体，所有 widget 继承。
+    # RTT 显示区 / 内存页 hex dump 有各自字体覆盖（_apply_font 单独 setFont）。
+    from core._ui_font import resolve_ui_family
     _app_font = app.font()
+    _ui_family = resolve_ui_family(cfg.get("ui_font_family") or "")
+    if _ui_family:
+        _app_font.setFamily(_ui_family)
     _app_font.setPointSize(int(cfg.get("ui_font_size") or 9))
     app.setFont(_app_font)
+
+    # 同步 qfluentwidgets 的 fontFamilies（气泡 ToolTip/TeachingTip 的 family 来源）。
+    # 在 MainWindow 构造前设，首次悬停气泡就用对 family。
+    from core._ui_font import _sync_fluent_font_families
+    _sync_fluent_font_families(_ui_family)
 
     from ui.main_window import MainWindow
     win = MainWindow(cfg)

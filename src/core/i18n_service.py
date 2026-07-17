@@ -94,7 +94,15 @@ _current_lang: str = _DEFAULT_LANG
 
 
 def init_translator(lang: str | None = None) -> str:
-    """初始化翻译器并安装到 QApplication。返回实际使用的 lang。"""
+    """初始化翻译器并安装到 QApplication。返回实际使用的 lang。
+
+    所有语言（含 zh_CN 默认）都安装 JsonTranslator：
+    - 非中文语言：把 UI 里的中文源文本翻成对应本地语言；
+    - zh_CN：唯一作用是把 qfluentwidgets 内部用英文源文本调
+      self.tr('OK'/'Cancel'/'Edit Color'/...) 的第三方控件（如 ColorDialog）
+      翻成中文。项目自身的 self.tr('中文') 调用在 zh_CN.json 里不存在，
+      未命中返回 source（中文本身），行为与不装翻译器一致。
+    """
     global _current_lang, _current_translator
     if lang is None or lang not in _SUPPORTED_LANGS:
         lang = detect_system_language()
@@ -107,14 +115,16 @@ def init_translator(lang: str | None = None) -> str:
         if _current_translator is not None:
             app.removeTranslator(_current_translator)
             _current_translator = None
-        if lang != _DEFAULT_LANG:
-            _current_translator = JsonTranslator(lang)
-            app.installTranslator(_current_translator)
+        _current_translator = JsonTranslator(lang)
+        app.installTranslator(_current_translator)
     return lang
 
 
 def switch_language(lang: str) -> None:
-    """切换语言：替换 translator + 发送 LanguageChange 事件自动刷新所有控件。"""
+    """切换语言：替换 translator + 发送 LanguageChange 事件自动刷新所有控件。
+
+    所有语言都安装 JsonTranslator（见 init_translator 注释：zh_CN 也装，
+    仅为翻译 ColorDialog 等第三方英文源控件）。"""
     global _current_lang, _current_translator
     if lang not in _SUPPORTED_LANGS:
         return
@@ -127,9 +137,8 @@ def switch_language(lang: str) -> None:
         if _current_translator is not None:
             app.removeTranslator(_current_translator)
             _current_translator = None
-        if lang != _DEFAULT_LANG:
-            _current_translator = JsonTranslator(lang)
-            app.installTranslator(_current_translator)
+        _current_translator = JsonTranslator(lang)
+        app.installTranslator(_current_translator)
 
     # 发送 LanguageChange 事件到所有 widget，触发 changeEvent → _retranslate_ui
     if app is not None:

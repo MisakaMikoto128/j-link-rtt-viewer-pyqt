@@ -99,3 +99,48 @@ def test_font_size_spinbox_persists_and_emits(settings_page, qtbot):
     qtbot.wait(20)
     assert cfg.get("font_size") == 16
     assert any(sz == 16 for _, sz in received)
+
+
+def test_ui_font_family_default_is_auto(settings_page):
+    """默认界面字体 family 为空串（=跟随系统），下拉当前项的 userData 为空。"""
+    page, _ = settings_page
+    idx = page.cb_ui_font.currentIndex()
+    assert page.cb_ui_font.itemData(idx) == ""
+    assert page._cfg.get("ui_font_family") == ""
+
+
+def _populate_ui_font_combo(page) -> int:
+    """在 offscreen 平台 QFontDatabase 可能返回空字体列表，combo 只剩「跟随系统」。
+    补一个测试用 family 项，返回其 index。"""
+    page.cb_ui_font.addItem("TestFontFamily", icon=None, userData="TestFontFamily")
+    return page.cb_ui_font.count() - 1
+
+
+def test_ui_font_family_persists_and_emits(settings_page, qtbot):
+    """下拉选中具体 family → cfg.ui_font_family 落值并 emit 信号。"""
+    page, cfg = settings_page
+    target_idx = _populate_ui_font_combo(page)
+    received: list[str] = []
+    cfg.ui_font_family_changed.connect(lambda fam: received.append(fam))
+    page.cb_ui_font.setCurrentIndex(target_idx)
+    qtbot.wait(20)
+    assert cfg.get("ui_font_family") == "TestFontFamily"
+    assert "TestFontFamily" in received
+
+
+def test_ui_font_family_auto_emits_empty(settings_page, qtbot):
+    """选「跟随系统」项（userData="") → cfg 置空串并 emit 空。
+
+    先设非空使 currentIndex != 0，再 setCurrentIndex(0) 才会真正触发
+    currentIndexChanged（Qt 同值不发信号）。"""
+    page, cfg = settings_page
+    target_idx = _populate_ui_font_combo(page)
+    page.cb_ui_font.setCurrentIndex(target_idx)
+    qtbot.wait(20)
+    assert cfg.get("ui_font_family") == "TestFontFamily"
+    received: list[str] = []
+    cfg.ui_font_family_changed.connect(lambda fam: received.append(fam))
+    page.cb_ui_font.setCurrentIndex(0)
+    qtbot.wait(20)
+    assert cfg.get("ui_font_family") == ""
+    assert "" in received

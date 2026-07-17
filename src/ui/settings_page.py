@@ -158,13 +158,39 @@ class SettingsPage(QWidget):
         # RTT 显示区 / 内存页 hex dump 有各自字号覆盖，不受此项影响。
         self.sp_ui_font_size = SpinBox(self)
         self.sp_ui_font_size.setRange(8, 32)
-        self.sp_ui_font_size.setValue(max(8, int(self._cfg.get("ui_font_size") or 14)))
+        self.sp_ui_font_size.setValue(max(8, int(self._cfg.get("ui_font_size") or 9)))
         self.sp_ui_font_size.setSuffix(" pt")
         self.sp_ui_font_size.valueChanged.connect(
             lambda v: self._cfg.set("ui_font_size", v))
         row_ui_font = _SettingRow("界面字号", self.sp_ui_font_size)
         self._setting_rows.append(row_ui_font)
         app_lay.addWidget(row_ui_font)
+
+        # 全局界面字体 family（同 ui_font_size 覆盖范围）：空 = 跟随系统默认 UI 字体。
+        # 与 RTT 显示字体（font_family）独立：UI 控件用比例字体，显示区用等宽字体。
+        ui_families = self._build_font_family_list()
+        self.cb_ui_font = EditableComboBox(self)
+        # 顶部占位「(跟随系统)」：用户数据 = ""（config 存空串）。底层用 Qt.ItemDataRole
+        # 的 UserRole 存储真实值，避免对显示文本 reverse-mapping（参考 CLAUDE.md 信号参数规则）。
+        self._ui_font_auto_key = self.tr("(跟随系统)")
+        self.cb_ui_font.addItem(self._ui_font_auto_key, userData="")
+        for fam in ui_families:
+            self.cb_ui_font.addItem(fam, userData=fam)
+        self.cb_ui_font.setMinimumWidth(220)
+        cur_ui_family = (self._cfg.get("ui_font_family") or "").strip()
+        cur_ui_idx = self.cb_ui_font.findData(cur_ui_family)
+        if cur_ui_idx < 0 and cur_ui_family:  # 历史值已不在系统中：补一项保留用户选择
+            self.cb_ui_font.addItem(cur_ui_family, userData=cur_ui_family)
+            cur_ui_idx = self.cb_ui_font.count() - 1
+        self.cb_ui_font.setCurrentIndex(cur_ui_idx if cur_ui_idx >= 0 else 0)
+        completer_ui = QCompleter(ui_families, self)
+        completer_ui.setCaseSensitivity(Qt.CaseInsensitive)
+        completer_ui.setFilterMode(Qt.MatchContains)
+        self.cb_ui_font.setCompleter(completer_ui)
+        self.cb_ui_font.currentIndexChanged.connect(self._on_ui_family_index_changed)
+        row_ui_font_family = _SettingRow("界面字体", self.cb_ui_font)
+        self._setting_rows.append(row_ui_font_family)
+        app_lay.addWidget(row_ui_font_family)
 
         # 系统字体列表（推荐字体置顶）
         families = self._build_font_family_list()
@@ -362,6 +388,16 @@ class SettingsPage(QWidget):
         self.chk_auto_mark_connect.setText(self.tr("连接时自动插入标记"))
         self.chk_auto_mark_disconnect.setText(self.tr("断开时自动插入标记"))
 
+        # 界面字体下拉「(跟随系统)」占位项：仅刷新显示文本，保持索引/userData 不变。
+        # blockSignals 避免 setItemText 触发 currentTextChanged/currentIndexChanged。
+        if hasattr(self, "cb_ui_font"):
+            self._ui_font_auto_key = self.tr("(跟随系统)")
+            self.cb_ui_font.blockSignals(True)
+            try:
+                self.cb_ui_font.setItemText(0, self._ui_font_auto_key)
+            finally:
+                self.cb_ui_font.blockSignals(False)
+
         # 主题模式 ComboBox：保持选中索引不变，仅刷新文字
         idx = self.cb_theme.currentIndex()
         self._theme_labels = [self.tr("跟随系统"), self.tr("浅色"), self.tr("深色")]
@@ -453,6 +489,17 @@ class SettingsPage(QWidget):
         if not family:
             return
         self._cfg.set("font_family", family)
+
+    def _on_ui_family_index_changed(self, idx: int) -> None:
+        """界面字体下拉选中：用 itemData（UserRole 存储的真实 family，空串＝跟随系统）。
+
+        不对 currentText() 反向映射（避免依赖可本地化的显示文本判断语义），
+        参考 CLAUDE.md「信号参数不要靠呈现文本判断」规则。
+        """
+        if idx < 0:
+            return
+        family = self.cb_ui_font.itemData(idx) or ""
+        self._cfg.set("ui_font_family", family)
 
     def _on_font_size_changed(self, v: int) -> None:
         if v <= 0:
