@@ -686,7 +686,7 @@ class RTTMonitorPage(QWidget):
         pl.addWidget(scroll)
 
         v = QVBoxLayout(inner)
-        v.setContentsMargins(10, 10, 10, 10)
+        v.setContentsMargins(10, 10, 14, 10)
         v.setSpacing(6)
 
         # ════════════════════════════════════════════════════════════
@@ -1457,6 +1457,11 @@ class RTTMonitorPage(QWidget):
             if serials:
                 idx = self.cb_jlink.findText(prev)
                 self.cb_jlink.setCurrentIndex(idx if idx >= 0 else 0)
+            else:
+                # 无设备时 combo 已空，但 currentText 可能还残留上次的 serial
+                # （clear() 后 currentText 不主动复位）——显式重置，避免
+                # 「combo 空但 currentText 还有值」的假选中
+                self.cb_jlink.setCurrentText("")
         finally:
             self.cb_jlink.blockSignals(False)
 

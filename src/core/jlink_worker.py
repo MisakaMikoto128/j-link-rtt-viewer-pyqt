@@ -433,10 +433,17 @@ class JLinkWorker(QObject):
         #    但 drain timer(50ms) 还没来得及转。这里先把它 drain 掉——否则 buffer 数据
         #    会先 emit 给 UI，而 state(False) 在 was_active=False 下不 emit，UI 卡死。
         #    （bug：多通道读循环高频触发 rtt_read 异常时此竞态概率显著升高）
+        #    注意：本方法入口已把 _state 置为 DISCONNECTING，所以 _on_unexpected_disconnect
+        #    内的「state != CONNECTED 直接 return」守卫在这里**不会**命中——这正是想要的：
+        #    走这里说明 drain timer 还没闭环，我们必须替它把红字提示发出去 + 清理。
         with self._unexpected_disconnect_lock:
             pending_unexpected = self._unexpected_disconnect_pending
             self._unexpected_disconnect_pending = False
-        if pending_unexpected and self._state == _STATE_CONNECTED:
+        if pending_unexpected:
+            # 临时恢复 CONNECTED 让 _on_unexpected_disconnect 的守卫通过（它会再走
+            # 一遍 _do_disconnect 做清理，那时 pending 已清，走正常分支到 IDLE）。
+            # auto_reconnect 路径的 _start_reconnect 也在 _on_unexpected_disconnect 里。
+            self._state = _STATE_CONNECTED
             self._on_unexpected_disconnect()
             return  # _on_unexpected_disconnect 内部已走完整断开流程
 
