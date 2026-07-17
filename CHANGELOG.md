@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-07-17
+
+### Features
+
+- **全局界面字体设置** — 设置页新增「界面字体」下拉：family 可选系统已装任意字体或「(跟随系统)」，字号独立调节；遍历全部控件热更新，RTT/内存显示区保持各自等宽专属字体。界面字号默认调整为 9pt。
+- **多语言界面** — 接入 i18n，支持简体中文 / 繁體中文 / 日本語 / 한국어 / English / Français 六种语言即时切换；主题色、标记颜色等 ColorDialog 在所有语言下正确本地化（含第三方英文源控件的回退翻译）。
+- **多通道 RTT** — 通道选择支持 -1=全部通道；按通道独立历史 / 统计 / 解码；实际通道数按 buf descriptor 的 SizeOfBuffer 探测，不再误信固件声明数。
+- **连接健壮性** — 连接前预查 J-Link 是否在线；物理掉线自动检测并在显示区红字提示、自动重连；发送失败提示改写为可操作文案。
+- **发送体验** — 换行符模式可选 CRLF/LF/CR/无；发送回显染色（色块按钮 + 网格色盘）；收发统计精简为字节数并即时刷新。
+- **保持屏幕常亮** — 长会话监控时防止系统息屏。
+
+### Fixes
+
+- **RTT 通道数误判** — `rtt_get_num_up_buffers()` 返回的是固件声明数（含空槽），改用 buf descriptor 的 `SizeOfBuffer>0` 计数实际已分配通道，修复选超出范围通道后显示区空白、通道上限脱节。
+- **内存页 hex 显示区字体** — 固定跟随 RTT 等宽字体（`font_family`），不随全局 UI 字体变，避免非等宽 UI 字体导致 hex 列错位；字号仍独立。
+- **QSS `font:` 锁定控件** — RadioButton 等控件 setFont 无效（QSS 优先级更高），改用 styleSheet 追加哨兵规则覆盖，字号/family 均生效。
+- **语言切换残留** — 左侧 panel 多语言内容溢出根治；RTT 通道 tooltip 切语言后不重译修复；静态按钮文字在语言切换后统一重设。
+- **左侧面板布局** — 连接后变窄与英文溢出导致控件被裁；接口/速度/RTT 通道控件等分布局对齐；标记/保存按钮行右对齐。
+
+### Engineering
+
+- 新增发版一键脚本 `scripts/release.ps1`：版本 bump → 提交 → tag → 双版本编译 → 打包 → push → gh release。
+- 翻译键缺失永不空白（translator 未命中返回 source）；zh_CN 也装 translator 以覆盖第三方英文源控件。
+
 ## [0.5.0] — 2026-07-11
 
 ### Features
@@ -162,7 +186,9 @@
 - 配置写盘 200ms 节流，关窗 flush，避免拖窗/调字号每帧刷盘
 - 详细工程踩坑笔记见 [CLAUDE.md](CLAUDE.md)
 
-[Unreleased]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.3.0...v0.5.0
 [0.3.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.2.1...v0.2.2

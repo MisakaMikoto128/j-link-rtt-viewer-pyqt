@@ -1,6 +1,6 @@
 [project]
 name = "jlink-rtt-viewer"
-version = "0.5.0"
+version = "0.6.0"
 description = "基于 PySide6 + QFluentWidgets 的 J-Link RTT 查看与内存导出工具"
 requires-python = ">=3.10"
 

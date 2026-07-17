@@ -714,7 +714,7 @@ def translate(self, context, source, disambiguation=None, n=-1):
 2. `--FontFamilies` 模板变量只在**构造/应用样式时**解析一次——已存在控件改 `qconfig.fontFamilies` 不会刷新 family（probe_rb_family.py 实证），所以覆盖规则里 family 也要显式写。
 3. ToolTip / TeachingTip / Flyout 气泡的 family 靠 `_sync_fluent_font_families(family)` 设 `qconfig.fontFamilies = [ui_family, CJK兜底...]`：气泡每次悬停/点击**重新构造**，自动读新 fontFamilies；气泡字号由 qss 锁死（ToolTip 12px / TeachingTip 14px）——这正是「气泡字号固定但 family 跟随」的实现方式，不要去解锁它。
 4. 「跟随系统」不能用 `setFamily("")`（Qt 沿用上一次的 family，回不去）——启动时在 `main.py` 任何 `setFont` 之前 `capture_system_ui_family()` 冻结 QApplication 初始 family，空偏好时 `resolve_ui_family("")` 返回它。
-5. 内存页 hex 显示区 family 跟随 `ui_font_family`（信号 `ui_font_family_changed`）、size 独立 `memory_font_size`；`_custom_font` 标记只挡全局 setFont，family 变更经信号单独刷新。
+5. 内存页 hex 显示区 family 固定跟随 RTT 的 `font_family`（等宽）、size 独立 `memory_font_size`，二者都不跟随全局 UI 字体——hex dump 列对齐依赖等宽，UI 字体切成非等宽会让列错位（用户实测后拍板）；`_custom_font` 标记挡住全局 setFont。
 6. **名单收窄到项目实际用到的控件**（当前仅 RadioButton）。右键菜单/TimePicker/InfoBar 等虽也有 qss font 锁定，但项目没用到，不纳入；`_apply_ui_font` 遍历 `allWidgets()` 已能覆盖烧录页 RadioButton（构造于 MainWindow init，构造末尾必跑一次 apply）。曾尝试给「动态创建的锁定控件」装 app 级 show eventFilter 补调——**失败**：QApplication.installEventFilter 只拦截发给 app 自己的事件，监听不到子控件的 Show。若将来用到动态创建的锁定控件，要在它创建处显式补调 `sync_qss_font_locked_widgets`，不要用 app 级 filter。
 
 参考：`src/core/_ui_font.py`、`src/ui/main_window.py` `_apply_ui_font`、`src/ui/memory_viewer_page.py` `_apply_font`、`tests/test_ui_font.py`。

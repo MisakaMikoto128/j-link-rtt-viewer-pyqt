@@ -106,8 +106,8 @@ class MemoryViewerPage(QWidget):
 
         self._build_ui()
         self._wire_signals()
-        # 应用初始字体（family 跟随全局界面字体 ui_font_family，size 独立 memory_font_size）
-        self._apply_font(self._cfg.get("ui_font_family") or "", int(self._cfg.get("memory_font_size")))
+        # 应用初始字体（family 固定用 RTT 等宽字体 font_family，size 独立 memory_font_size）
+        self._apply_font(self._cfg.get("font_family"), int(self._cfg.get("memory_font_size")))
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -485,9 +485,9 @@ class MemoryViewerPage(QWidget):
         # 字号 ± 按钮：走 cfg → memory_font_size_changed → _apply_font
         self.btn_font_minus.clicked.connect(lambda: self._adjust_font_size(-1))
         self.btn_font_plus.clicked.connect(lambda: self._adjust_font_size(+1))
-        # cfg 信号：family 跟随「全局界面字体」（ui_font_family）而非 RTT 的 font_family；
-        # size 走 memory_font_size（独立）。故 listen ui_font_family_changed 而非 font_changed。
-        self._cfg.ui_font_family_changed.connect(lambda fam: self._apply_font(fam, None))
+        # cfg 信号：family 固定跟随 RTT 的 font_family（等宽）——hex dump 必须等宽对齐，
+        # 不跟随全局界面字体（切到非等宽 UI 字体会让列错位）；size 走 memory_font_size（独立）。
+        self._cfg.font_changed.connect(lambda fam, _sz: self._apply_font(fam or None, None))
         self._cfg.memory_font_size_changed.connect(lambda sz: self._apply_font(None, sz))
 
         self.display.cursorPositionChanged.connect(self._refresh_types)
@@ -933,20 +933,17 @@ class MemoryViewerPage(QWidget):
     def _apply_font(self, family: str | None, size: int | None) -> None:
         """family/size 任意一者传 None 表示沿用 cfg 当前值。
 
-        family：跟随「全局界面字体」（ui_font_family）——与内存页 history 一致；
-            空串展开成系统 UI family（core._ui_font.resolve_ui_family）。
+        family：固定用 RTT 的等宽字体（font_family，默认 Consolas）——hex dump 列对齐
+            依赖等宽，不跟随全局界面字体（ui_font_family 可设成非等宽，跟了会错位）。
         size：内存页独立字号（memory_font_size），不随全局界面字号变。
         """
         if family is None:
-            family = self._cfg.get("ui_font_family") or ""
-        from core._ui_font import resolve_ui_family
-        resolved = resolve_ui_family(family)
+            family = self._cfg.get("font_family") or "Consolas"
         if size is None or size <= 0:
             size = int(self._cfg.get("memory_font_size") or 12)
-        font = QFont(resolved, size)
+        font = QFont(family, size)
         self.display.setFont(font)
-        # 标记专属字体：全局界面字号热更新时跳过（保持内存页专用字号）；
-        # 但全局界面 *family* 变更会经 ui_font_family_changed 走回来刷新这个 family。
+        # 标记专属字体：全局界面字号/字体热更新时跳过（hex 区 family+字号都独立自控）。
         self.display.setProperty("_custom_font", True)
         if hasattr(self, "lbl_font_size"):
             self.lbl_font_size.setText(str(size))

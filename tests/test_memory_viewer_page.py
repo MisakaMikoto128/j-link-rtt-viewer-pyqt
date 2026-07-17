@@ -82,32 +82,33 @@ def test_read_bad_address_does_not_emit(mem_page, qtbot):
     assert worker._reads == []
 
 
-def test_display_font_family_follows_ui_font(mem_page, qtbot):
-    """内存 hex 显示区 family 跟随「全局界面字体」（ui_font_family），size 用 memory_font_size。
+def test_display_font_family_fixed_monospace(mem_page, qtbot):
+    """内存 hex 显示区 family 固定跟随 RTT 的 font_family（等宽），不随 UI 字体变。
 
-    用户要求（v0.5.x）：内存查看框字体跟 UI 字体走，但字号保持内存页独立设置。
-    所以 _apply_font 的 family 来源从 font_family（RTT 等宽）改为 ui_font_family。
+    用户要求：hex dump 列对齐依赖等宽，全局 UI 字体若切成非等宽会让内存页错位，
+    因此该显示区 family 与字号都独立（family 跟 RTT 等宽，size 用 memory_font_size）。
     """
-    from core._ui_font import resolve_ui_family
     page, _, cfg = mem_page
-    # 改 ui_font_family → ui_font_family_changed → _apply_font 刷新 display
-    cfg.set("ui_font_family", "Consolas")
+    # 改 RTT 的 font_family → font_changed → _apply_font 刷新 display
+    cfg.set("font_family", "Courier New")
+    qtbot.wait(20)
+    assert page.display.font().family() == "Courier New"
+    assert page.display.font().pointSize() == int(cfg.get("memory_font_size"))
+    # font_family 为空时回退 Consolas 默认等宽
+    cfg.set("font_family", "")
     qtbot.wait(20)
     assert page.display.font().family() == "Consolas"
-    assert page.display.font().pointSize() == int(cfg.get("memory_font_size"))
-    # 切回跟随系统 → display family 还原成系统 UI family
-    cfg.set("ui_font_family", "")
-    qtbot.wait(20)
-    assert page.display.font().family() == resolve_ui_family("")
 
 
-def test_display_font_size_independent_of_ui_font(mem_page, qtbot):
-    """改 ui_font_family 时 display 字号不变（仍 memory_font_size）。"""
+def test_display_font_family_ignores_ui_font(mem_page, qtbot):
+    """改 ui_font_family 时 display family 不变（仍 RTT 等宽），字号也不变。"""
     page, _, cfg = mem_page
-    mem_size = int(cfg.get("memory_font_size"))
-    cfg.set("ui_font_family", "Consolas")
+    before_family = page.display.font().family()
+    before_size = page.display.font().pointSize()
+    cfg.set("ui_font_family", "Segoe UI")
     qtbot.wait(20)
-    assert page.display.font().pointSize() == mem_size
+    assert page.display.font().family() == before_family
+    assert page.display.font().pointSize() == before_size
 
 
 def test_display_uses_fluent_hover_tip(mem_page):
