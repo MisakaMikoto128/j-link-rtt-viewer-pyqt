@@ -17,7 +17,14 @@ _LOGGER_NAME = "jlink_rtt_viewer"
 _FORMAT = "%(asctime)s %(levelname)-5s %(name)s | %(message)s"
 
 _logger: logging.Logger | None = None
-_log_dir_override: Path | None = None  # 测试注入用
+_log_dir_override: Path | None = None  # 测试注入 / log_dir 用户偏好
+
+
+def set_log_dir(path: Path | str) -> None:
+    """设置应用日志目录偏好（cfg 的 log_dir 键非空时由 main 在 get_logger 前调用）。
+    与 _log_dir_override 共用同一通道；main 设置后不要再反复调用。"""
+    global _log_dir_override
+    _log_dir_override = Path(path)
 
 
 def get_log_dir() -> Path:
@@ -30,7 +37,11 @@ def get_log_dir() -> Path:
         base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
     else:
         xdg_state = os.environ.get("XDG_STATE_HOME")
-        base = Path(xdg_state) if xdg_state else Path.home() / ".local" / "state"
+        if xdg_state:
+            base = Path(xdg_state)
+        else:
+            home = os.environ.get("HOME")  # Windows 上 Path.home() 忽略 HOME，测试用
+            base = (Path(home) if home else Path.home()) / ".local" / "state"
     return base / "JLinkRTTViewer" / "logs"
 
 

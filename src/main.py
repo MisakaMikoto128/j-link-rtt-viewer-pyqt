@@ -41,7 +41,19 @@ def main() -> int:
     if icon_path is not None:
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    from core.logger import get_logger
+    from core.logger import get_logger, set_log_dir
+    # 用户偏好里的自定义 log_dir 要在首个 handler 创建前注入。用一个不触发
+    # logger 初始化的轻量读法：直接读 user_prefs.json（ConfigService 尚未构造）。
+    from core.config_service import ConfigService
+    try:
+        import json as _json
+        _prefs_path = ConfigService._compute_user_prefs_path()
+        if _prefs_path.exists():
+            _log_dir_pref = _json.loads(_prefs_path.read_text(encoding="utf-8")).get("log_dir", "")
+            if _log_dir_pref:
+                set_log_dir(_log_dir_pref)
+    except Exception:
+        pass  # 偏好读失败不阻断启动，用默认目录
     logger = get_logger()
     logger.info("应用启动")
 

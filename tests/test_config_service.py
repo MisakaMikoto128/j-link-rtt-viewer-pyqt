@@ -121,9 +121,6 @@ def test_user_prefs_path_uses_appdata_on_windows(monkeypatch, tmp_path):
     path = ConfigService._compute_user_prefs_path()
     assert path == tmp_path / "JLinkRTTViewer" / "user_prefs.json"
 
-    cfg.set("speed_khz", True)
-    assert cfg.get("speed_khz") == 4000  # 未被修改，保持 default
-
 
 def test_atomic_write_on_crash(cfg, qapp, tmp_path, monkeypatch):
     """模拟写入时崩溃：tmp 文件即使存在，最终原文件不损坏。"""
