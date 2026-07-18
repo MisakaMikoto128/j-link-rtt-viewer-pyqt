@@ -36,7 +36,6 @@ python -m nuitka ^
     --python-flag=no_warnings ^
     --python-flag=no_site ^
     --jobs=8 ^
-    --show-progress ^
     --assume-yes-for-downloads ^
     --company-name="%COMPANY_NAME%" ^
     --product-name="%PRODUCT_NAME%" ^
