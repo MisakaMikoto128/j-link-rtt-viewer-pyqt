@@ -1,13 +1,14 @@
 # scripts/ 说明
 
-## package_release.ps1 / package_release.sh — 一键打包（日常用）
+## package_release.ps1 / package_release.sh — 一键打包 / 发布
 
-Nuitka 构建 + 按 git 版本号打包，产物放在 `build/dist/`。
+Nuitka 构建 + 按 git 版本号打包 + 可选 GitHub 发布，产物放在 `build/dist/`。
 
 **无参数运行 = 交互菜单**（上下键选择，记住上次选择，回车直接重复）：
 1. Build + package (full) — 构建并打包（默认）
 2. Package only — 已有 build/ 产物时只打包，不跑 Nuitka
-3. Exit
+3. Release to GitHub... — 输入版本号，自动完成 bump → tag → build → package → push → gh release
+4. Exit
 
 **带参数运行 = 无交互**（agent / CI 用）：
 
@@ -36,17 +37,7 @@ Nuitka 构建 + 按 git 版本号打包，产物放在 `build/dist/`。
 版本号自动取自 `git describe --tags`：tag 上为 `0.6.0-release`，tag 后为 `0.6.0-dev.N.g<hash>`。
 重跑不覆盖：产物缺失或 build 源更新才重新生成；其余情况秒级 keep。
 
-## release.ps1 — 发布到 GitHub（发版用）
-
-独立脚本，不做交互菜单。只做 GitHub 发布相关：
-
-```powershell
-./scripts/release.ps1 -Version 0.7.0                 # 全流程
-./scripts/release.ps1 -Version 0.7.0 -SkipBuild      # 已构建好
-./scripts/release.ps1 -Version 0.7.0 -DryRun         # 只打印步骤
-```
-
-流程：版本号 bump（pyproject.toml / about_page.py / build_nuitka_onefile.bat）→ commit + tag → Nuitka 构建 → 调用 package_release.ps1 组织产物 → push → gh release。内部第 4 步带 `-SkipBuild`，所以不会弹菜单。
+Release to GitHub 会先问版本号，再问是否 Dry run（dry run 只打印步骤，不改仓库/不发 release）。
 
 ## measure_launch.py — 启动耗时测量
 

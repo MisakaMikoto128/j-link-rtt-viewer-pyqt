@@ -1,7 +1,8 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#
 .SYNOPSIS
-  Nuitka build + package, one command. Artifacts land in build/dist/<version>/.
+  Nuitka build + package + optional GitHub release, one command.
+  Artifacts land in build/dist/<version>/.
 
 .DESCRIPTION
   Run with NO arguments for an interactive menu (arrow keys, remembers your
@@ -36,7 +37,8 @@ param(
     [string]$Detail = "",
     [switch]$SkipBuild,
     [switch]$SkipStandalone,
-    [switch]$SkipOnefile
+    [switch]$SkipOnefile,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,7 +48,7 @@ Set-Location $repoRoot
 $prefsFile = Join-Path $PSScriptRoot ".package_release.prefs"
 
 # ---- Interactive menu (only when no action flags given) ----------------------
-$noActionFlags = -not ($SkipBuild -or $SkipStandalone -or $SkipOnefile -or $Version -or $Detail)
+$noActionFlags = -not ($SkipBuild -or $SkipStandalone -or $SkipOnefile -or $Version -or $Detail -or $DryRun)
 
 function Read-MenuChoice([string[]]$options, [string[]]$descriptions, [int]$initial = 0) {
     $pos = [Math]::Max(0, [Math]::Min($initial, $options.Count - 1))
@@ -67,15 +69,81 @@ function Read-MenuChoice([string[]]$options, [string[]]$descriptions, [int]$init
     }
 }
 
+function Invoke-Release {
+    param([string]$relVersion)
+    $tag = "v$relVersion"
+
+    # pre-checks
+    if (git status --porcelain) { throw "工作区有未提交修改，先提交或 stash" }
+    git fetch origin --quiet 2>$null
+    if (git tag -l $tag) { throw "tag $tag 已存在（本地）" }
+    $remoteTags = git ls-remote --tags origin $tag 2>$null
+    if ($remoteTags) { throw "tag $tag 已存在（远端）" }
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "未安装 gh CLI" }
+
+    # bump version in three files
+    Write-Host "[release] bump version to $relVersion" -ForegroundColor Cyan
+    if (-not $DryRun) {
+        (Get-Content pyproject.toml -Raw) -replace 'version\s*=\s*"[^"]+"', "version = `"$relVersion`"" |
+            Set-Content pyproject.toml -Encoding utf8 -NoNewline
+        (Get-Content src/ui/about_page.py -Raw) -replace 'APP_VERSION\s*=\s*"[^"]+"', "APP_VERSION = `"$relVersion`"" |
+            Set-Content src/ui/about_page.py -Encoding utf8 -NoNewline
+        (Get-Content build_nuitka_onefile.bat -Raw) -replace 'set PRODUCT_VERSION=.*', "set PRODUCT_VERSION=$relVersion" |
+            Set-Content build_nuitka_onefile.bat -Encoding ascii -NoNewline
+    }
+
+    # commit + tag
+    Write-Host "[release] commit + tag $tag" -ForegroundColor Cyan
+    if (-not $DryRun) {
+        git add pyproject.toml src/ui/about_page.py build_nuitka_onefile.bat | Out-Null
+        git commit -m "chore: bump version to $relVersion" | Out-Null
+        git tag $tag | Out-Null
+    }
+
+    # build + package via this script in agent mode (no menu)
+    Write-Host "[release] build + package" -ForegroundColor Cyan
+    $cmd = "powershell -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Version $relVersion -Detail release"
+    if ($DryRun) {
+        Write-Host "  > $cmd" -ForegroundColor DarkGray
+    } else {
+        Invoke-Expression $cmd
+        if ($LASTEXITCODE -ne 0) { throw "build/package failed" }
+    }
+
+    $baseName = "JLinkRTTViewer-$tag-win64"
+    $zip = "build/dist/$baseName/$baseName.zip"
+    $exe = "build/dist/$baseName/$baseName.exe"
+
+    # push
+    Write-Host "[release] push main + tag" -ForegroundColor Cyan
+    if ($DryRun) {
+        Write-Host "  > git push origin main --follow-tags" -ForegroundColor DarkGray
+    } else {
+        git push origin main --follow-tags
+    }
+
+    # gh release
+    Write-Host "[release] create GitHub release $tag" -ForegroundColor Cyan
+    $notes = "$tag`n`nTODO: 从 CHANGELOG.md 的 [$relVersion] 小节拷贝 release 说明。"
+    if ($DryRun) {
+        Write-Host "  > gh release create $tag `"$zip`" `"$exe`" --title `"$tag`" --notes `"$notes`"" -ForegroundColor DarkGray
+        Write-Host "`nDryRun complete. No files were changed." -ForegroundColor Yellow
+    } else {
+        gh release create $tag "$zip" "$exe" --title "$tag" --notes "$notes"
+    }
+}
+
 if ($noActionFlags) {
     $options = @(
         "Build + package (full)",
         "Package only (skip Nuitka build)",
+        "Release to GitHub...",
         "Exit"
     )
     $descriptions = @(
         "run both Nuitka builds, then refresh build/dist artifacts (~15-25 min)",
         "zip/copy whatever is already in build/main.dist and build/onefile (~1 min)",
+        "bump version, tag, build, package, push and create GitHub release",
         "do nothing"
     )
     $saved = 0
@@ -86,12 +154,20 @@ if ($noActionFlags) {
     Write-Host "package_release - choose action (up/down + Enter):" -ForegroundColor Cyan
     if (Test-Path $prefsFile) { Write-Host "  (last choice preselected; Enter to repeat)" -ForegroundColor DarkGray }
     $choice = Read-MenuChoice $options $descriptions $saved
-    [Console]::SetCursorPosition(0, [Console]::CursorTop)  # move past menu
+    [Console]::SetCursorPosition(0, [Console]::CursorTop)
     Set-Content $prefsFile "$choice" -Encoding ascii -NoNewline
     switch ($choice) {
         0 { }                                   # full: build + package
         1 { $SkipBuild = $true }                # package only
-        2 { Write-Host "bye."; exit 0 }
+        2 {
+            $relVersion = Read-Host "Release version (e.g. 0.7.0)"
+            if (-not ($relVersion -match '^\d+\.\d+\.\d+$')) { throw "invalid version: $relVersion" }
+            $confirm = Read-Host "Dry run? [y/N]"
+            if ($confirm -match '^[Yy]') { $DryRun = $true }
+            Invoke-Release -relVersion $relVersion
+            exit 0
+        }
+        3 { Write-Host "bye."; exit 0 }
     }
     Write-Host "-> $($options[$choice])" -ForegroundColor Cyan
 }
@@ -146,8 +222,6 @@ if ($SkipBuild) {
 }
 
 # ---- Prepare output dir ------------------------------------------------------
-# Overwrite policy: an artifact is (re)generated when missing OR when its build
-# source is newer (fresh build => refresh dist). Rerun without rebuild = no-op.
 Write-Host "[2/4] prepare $outDir" -ForegroundColor Cyan
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Force $outDir | Out-Null }
 

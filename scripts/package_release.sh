@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# One-command packaging for Linux: Nuitka build (standalone + onefile) ->
-# organize artifacts into a per-version folder under build/dist/.
+# One-command packaging / release for Linux.
+# Nuitka build (standalone + onefile) -> organize artifacts into build/dist/.
 #
 # Run with NO options for an interactive menu (arrow keys, remembers your
 # last choice in scripts/.package_release.prefs). Run WITH options for
@@ -27,6 +27,7 @@ cd "$(dirname "$0")/.."
 SKIP_BUILD=0
 SKIP_STANDALONE=0
 SKIP_ONEFILE=0
+DRY_RUN=0
 VERSION=""
 DETAIL=""
 
@@ -35,6 +36,7 @@ while [ $# -gt 0 ]; do
         --skip-build)      SKIP_BUILD=1 ;;
         --skip-standalone) SKIP_STANDALONE=1 ;;
         --skip-onefile)    SKIP_ONEFILE=1 ;;
+        --dry-run)         DRY_RUN=1 ;;
         --version)         VERSION="$2"; shift ;;
         --detail)          DETAIL="$2"; shift ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -44,17 +46,83 @@ done
 
 PREFS_FILE="$(dirname "$0")/.package_release.prefs"
 
+release() {
+    local rel_version="$1"
+    local tag="v${rel_version}"
+
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "工作区有未提交修改，先提交或 stash" >&2; exit 1
+    fi
+    git fetch origin --quiet 2>/dev/null || true
+    if git tag -l "$tag" | grep -q .; then
+        echo "tag $tag 已存在（本地）" >&2; exit 1
+    fi
+    if git ls-remote --tags origin "$tag" 2>/dev/null | grep -q .; then
+        echo "tag $tag 已存在（远端）" >&2; exit 1
+    fi
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "未安装 gh CLI" >&2; exit 1
+    fi
+
+    echo "[release] bump version to $rel_version"
+    if [ "$DRY_RUN" -eq 0 ]; then
+        sed -i "s/^version *= *\"[^\"]*\"/version = \"$rel_version\"/" pyproject.toml
+        sed -i "s/APP_VERSION\s*=\s*\"[^\"]*\"/APP_VERSION = \"$rel_version\"/" src/ui/about_page.py
+        sed -i "s/set PRODUCT_VERSION=.*/set PRODUCT_VERSION=$rel_version/" build_nuitka_onefile.bat
+    fi
+
+    echo "[release] commit + tag $tag"
+    if [ "$DRY_RUN" -eq 0 ]; then
+        git add pyproject.toml src/ui/about_page.py build_nuitka_onefile.bat
+        git commit -m "chore: bump version to $rel_version"
+        git tag "$tag"
+    fi
+
+    echo "[release] build + package"
+    local cmd="$0 --version $rel_version --detail release"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "  > $cmd"
+    else
+        bash -c "$cmd"
+    fi
+
+    local basename="JLinkRTTViewer-${tag}-linux-x86_64"
+    local tarball="build/dist/$basename/$basename.tar.gz"
+    local exe="build/dist/$basename/$basename"
+
+    echo "[release] push main + tag"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "  > git push origin main --follow-tags"
+    else
+        git push origin main --follow-tags
+    fi
+
+    echo "[release] create GitHub release $tag"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "  > gh release create $tag \"$tarball\" \"$exe\" --title \"$tag\" --notes \"$tag...\""
+        echo "DryRun complete. No files were changed."
+    else
+        gh release create "$tag" "$tarball" "$exe" --title "$tag" \
+            --notes "$tag
+
+TODO: 从 CHANGELOG.md 的 [$rel_version] 小节拷贝 release 说明。"
+    fi
+}
+
 # ---- Interactive menu (only when no action flags given) -----------------------
 if [ "$SKIP_BUILD" -eq 0 ] && [ "$SKIP_STANDALONE" -eq 0 ] && \
-   [ "$SKIP_ONEFILE" -eq 0 ] && [ -z "$VERSION" ] && [ -z "$DETAIL" ]; then
+   [ "$SKIP_ONEFILE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ] && \
+   [ -z "$VERSION" ] && [ -z "$DETAIL" ]; then
     options=(
         "Build + package (full)"
         "Package only (skip Nuitka build)"
+        "Release to GitHub..."
         "Exit"
     )
     descriptions=(
         "run both Nuitka builds, then refresh build/dist artifacts (~15-25 min)"
         "tarball/copy whatever is already in build/main.dist and build/onefile (~1 min)"
+        "bump version, tag, build, package, push and create GitHub release"
         "do nothing"
     )
     saved=0
@@ -84,7 +152,17 @@ if [ "$SKIP_BUILD" -eq 0 ] && [ "$SKIP_STANDALONE" -eq 0 ] && \
     case "$pos" in
         0) ;;
         1) SKIP_BUILD=1 ;;
-        2) echo "bye."; exit 0 ;;
+        2)
+            read -rp "Release version (e.g. 0.7.0): " rel_version
+            if [[ ! "$rel_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "invalid version: $rel_version" >&2; exit 1
+            fi
+            read -rp "Dry run? [y/N]: " confirm
+            if [[ "$confirm" =~ ^[Yy]$ ]]; then DRY_RUN=1; fi
+            release "$rel_version"
+            exit 0
+            ;;
+        3) echo "bye."; exit 0 ;;
     esac
     echo "-> ${options[$pos]}"
 fi
@@ -166,7 +244,6 @@ if [ "$SKIP_STANDALONE" -eq 0 ]; then
     else
         [ -f "$tarball" ] && { echo "   rebuild (source newer): $tarball"; rm -f "$tarball"; }
         if command -v xz >/dev/null 2>&1; then
-            # xz -9e is the practical max for distribution tarballs
             tar -C "$OUT_DIR" -cf - "$BASENAME" | xz -9e -T0 > "$tarball"
         else
             tar -C "$OUT_DIR" -czf "$tarball" "$BASENAME"
