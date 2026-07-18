@@ -43,7 +43,8 @@ class MainWindow(FluentWindow):
         # 2. 各页面
         self.rtt_page = RTTMonitorPage(self.worker, cfg, self)
         self.memory_page = MemoryViewerPage(self.worker, cfg, self)
-        self.flash_page = FlashPage(cfg, self)
+        self.flash_page = FlashPage(cfg, rtt_worker=self.worker, parent=self)
+        self.flash_page._rtt_page_ref = self.rtt_page
         self.settings_page = SettingsPage(cfg, self)
         self.about_page = AboutPage(self)
 

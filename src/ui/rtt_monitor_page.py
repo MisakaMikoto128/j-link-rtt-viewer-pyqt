@@ -433,6 +433,9 @@ class RTTMonitorPage(QWidget):
         # 由 _on_state_changed 维护。
         self._is_connected = False
 
+        # 烧录期间锁定连接按钮：flash_page 通过 set_flash_busy 控制
+        self._flash_busy = False
+
         # 发送字节统计缓存（跨连接累计；_update_stats 从 worker 同步）
         self._send_total_bytes = 0
         self._send_last_bytes = 0
@@ -1398,16 +1401,9 @@ class RTTMonitorPage(QWidget):
         self._worker.command_result.connect(self._on_command_result, Qt.QueuedConnection)
         self._worker.log_message.connect(self._on_log_message, Qt.QueuedConnection)
 
-        # J-Link 设备下拉：自动刷新 200ms（worker 枚举），结果 QueuedConnection 回来填充。
-        # worker 不做可用性裁决——UI 自己判断上次选中 serial 在不在线、控制红点显隐。
-        self._jlink_refresh_timer = QTimer(self)
-        self._jlink_refresh_timer.setInterval(200)
-        self._jlink_refresh_timer.timeout.connect(self._worker.enumerate_devices_requested.emit)
-        self._jlink_refresh_timer.start()
-        # 启动时立即触发一次（不能等 200ms 后），这样首次打开 combo 就有数据；
-        # 放到 singleShot(0) 是为了让 worker.initialize() 和信号接线都就绪。
+        # J-Link 设备下拉：worker 内建 200ms 自动枚举广播 devices_enumerated，
+        # 本页只连接信号消费并维护下拉列表/红点（全局唯一轮询源，不各自起 timer）。
         self._worker.devices_enumerated.connect(self._on_devices_enumerated, Qt.QueuedConnection)
-        QTimer.singleShot(0, self._worker.enumerate_devices_requested.emit)
 
         # 用户手动选设备 → 持久化 + 红点同步。currentIndexChanged 只在用户
         # 真的选了 items 里某一项时触发；用户点开但没选（或列表空）不会改值。
@@ -1931,6 +1927,21 @@ class RTTMonitorPage(QWidget):
             return
         self._append_styled_line(f"{ts} -> {line}\n", _RECONNECT_COLORS.get(kind, "#888888"), bold=True)
 
+    def set_flash_busy(self, busy: bool) -> None:
+        """FlashPage 在烧录期间锁定/解锁连接按钮。"""
+        self._flash_busy = busy
+        if busy:
+            self.btn_connect.setEnabled(False)
+            self.btn_connect.setText(self.tr("烧录中…"))
+        else:
+            # 按当前真实状态恢复
+            if self._is_connected:
+                self.btn_connect.setEnabled(True)
+                self.btn_connect.setText(self.tr("断开"))
+            else:
+                self.btn_connect.setEnabled(True)
+                self.btn_connect.setText(self.tr("连接"))
+
     def _set_connected_ui(self, info: dict) -> None:
         self._is_connected = True
         self.btn_connect.setEnabled(True)
@@ -1954,6 +1965,9 @@ class RTTMonitorPage(QWidget):
 
         self.btn_toolbar_connect.setChecked(True)
         self.btn_toolbar_connect.setIcon(FluentIcon.PAUSE)
+        # 烧录期间保持锁定（烧录页已断开的场景）
+        if self._flash_busy:
+            self.btn_connect.setEnabled(False)
 
     def     _set_disconnected_ui(self) -> None:
         self._is_connected = False
@@ -1979,6 +1993,9 @@ class RTTMonitorPage(QWidget):
         self._update_channel_tooltip()
         # 断开时刷新一次红点（避免当前值已离线但红点没同步）
         self._sync_jlink_status_dot()
+        # 烧录期间保持锁定
+        if self._flash_busy:
+            self.btn_connect.setEnabled(False)
 
 
     def _update_stats(self) -> None:
@@ -2478,7 +2495,10 @@ class RTTMonitorPage(QWidget):
         self._update_send_ch_hint()
         # btn_connect 文字随连接状态变化：按当前状态刷新文字。
         # 连接中（disabled）态保留"连接中…"，由后续状态回调覆盖。
-        if self.btn_connect.isEnabled():
+        if self._flash_busy:
+            self.btn_connect.setEnabled(False)
+            self.btn_connect.setText(self.tr("烧录中…"))
+        elif self.btn_connect.isEnabled():
             self.btn_connect.setText(
                 self.tr("断开") if self._is_connected else self.tr("连接"))
         _tip(self.btn_connect, self.tr("F2 连接 / F3 断开"))

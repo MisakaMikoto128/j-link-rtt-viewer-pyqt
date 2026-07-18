@@ -13,6 +13,10 @@ Qt 官方反复强调："不要继承 QThread 把业务逻辑放进去"。正确
 - 用 `threading.Thread + time.sleep(0.1)` 独立于 Qt 事件循环，emit 信号只是 post 到主线程队列。
 - disconnect 时先 `_stop_read = True` + `read_thread.join(timeout=2.0)`，确保读线程退出后才 rtt_stop/close。
 
+设备枚举：
+- worker 内建 200ms 自动枚举广播 `devices_enumerated`，UI 各页面纯消费，不各自起轮询（全局唯一轮询源）。
+- 保留 `enumerate_devices_requested` 信号，方便页面/测试手动触发一次，worker 自己的 timer 也复用同一槽。
+
 退出流程：
 - 主线程 emit stop_requested → worker._on_stop 在 worker 线程跑 →
   清理 pylink → `self.thread().quit()` 让外部 thread 的 exec() 返回。
@@ -169,6 +173,10 @@ class JLinkWorker(QObject):
         self._reconnect_target_serial: str | None = None
         self._reconnect_attempt: int = 0
 
+        # 设备枚举：worker 内建 200ms 轮询 timer，自动广播 devices_enumerated。
+        # UI 各页面只连接信号消费，不各自起轮询（全局唯一轮询源）。
+        self._enum_timer: QTimer | None = None
+
         # 数据吞吐统计（按通道）：read_thread 写入，UI 1s 一次同步读取（GIL + lock 保护）
         self._stats_lock = threading.Lock()
         self._channel_stats: dict[int, tuple[int, int]] = {}  # ch -> (bytes, lines)
@@ -227,6 +235,13 @@ class JLinkWorker(QObject):
         self._reconnect_timer = QTimer()
         self._reconnect_timer.setInterval(3000)
         self._reconnect_timer.timeout.connect(self._reconnect_tick)
+
+        # J-Link 设备枚举 timer：200ms 一次，worker 线程内自动广播 devices_enumerated。
+        # UI 各页面只消费该信号，不各自起轮询（全局唯一轮询源）。
+        self._enum_timer = QTimer()
+        self._enum_timer.setInterval(200)
+        self._enum_timer.timeout.connect(self._on_enumerate_devices)
+        self._enum_timer.start()
 
         self._ready = True
         self._logger.info("JLinkWorker initialized in worker thread")
@@ -1007,6 +1022,10 @@ class JLinkWorker(QObject):
             self._reconnect_timer.stop()
             self._reconnect_timer.deleteLater()
             self._reconnect_timer = None
+        if self._enum_timer is not None:
+            self._enum_timer.stop()
+            self._enum_timer.deleteLater()
+            self._enum_timer = None
         t = self.thread()
         if t is not None:
             t.quit()

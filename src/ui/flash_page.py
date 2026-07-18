@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QProgressBar,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -29,7 +30,9 @@ from qfluentwidgets import (
     CardWidget,
     CheckBox,
     ComboBox,
+    DotInfoBadge,
     EditableComboBox,
+    InfoLevel,
     LineEdit,
     PlainTextEdit,
     PrimaryPushButton,
@@ -68,13 +71,20 @@ _POST_LABELS = [
 
 
 class FlashPage(QWidget):
-    def __init__(self, cfg: ConfigService, parent: QWidget | None = None):
+    def __init__(self, cfg: ConfigService, rtt_worker=None, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("flashPage")
         self._cfg = cfg
+        self._rtt_worker = rtt_worker
+        self._rtt_page_ref: QWidget | None = None
         self._is_running = False
         self._stage_key = "idle"  # 用于 _retranslate_ui 重置 lbl_stage
         self._parse_state = "empty"  # "empty" | "error" | "ok"
+
+        # 与 RTT 页协调：烧录前先断同一台 J-Link 的 RTT，烧完回连
+        self._resume_rtt_after_flash = False
+        self._rtt_pending_disconnect = False
+        self._rtt_disconnect_timeout_timer: QTimer | None = None
 
         # 独立 worker + 独立 QThread（和 JLinkWorker 完全无关）
         self._thread = QThread(self)
@@ -113,6 +123,28 @@ class FlashPage(QWidget):
         layout = QVBoxLayout(card)
         self.lbl_conn_title = StrongBodyLabel(self.tr("连接参数"))
         layout.addWidget(self.lbl_conn_title)
+
+        # ---- 烧录器选择（多 J-Link 接入时选哪台）----
+        row_jlink = QHBoxLayout()
+        row_jlink.setSpacing(6)
+        row_jlink.setContentsMargins(0, 0, 0, 0)
+        self._lbl_burner = BodyLabel(self.tr("烧录器:"))
+        self._lbl_burner.setFixedHeight(33)
+        row_jlink.addWidget(self._lbl_burner)
+
+        self._burner_status_dot = DotInfoBadge(card)
+        self._burner_status_dot.setLevel(InfoLevel.ERROR)
+        self._burner_status_dot.setFixedSize(8, 8)
+        self._burner_status_dot.hide()
+        row_jlink.addWidget(self._burner_status_dot, alignment=Qt.AlignVCenter)
+
+        self.cmb_burner = EditableComboBox(card)
+        self.cmb_burner.setFixedHeight(33)
+        self.cmb_burner.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.cmb_burner.setMinimumWidth(50)
+        row_jlink.addWidget(self.cmb_burner, 1)
+        layout.addLayout(row_jlink)
+
         row = QHBoxLayout()
         self.lbl_device = BodyLabel(self.tr("目标设备:"))
         row.addWidget(self.lbl_device)
@@ -323,12 +355,20 @@ class FlashPage(QWidget):
         # 用户从下拉选择 / 手动输入路径回车 → 仅解析显示
         self.cmb_file.currentTextChanged.connect(self._on_file_text_changed)
 
+        # 烧录器下拉
+        _Qt = Qt
+        self.cmb_burner.currentIndexChanged.connect(self._on_burner_selection_changed)
+        if self._rtt_worker is not None:
+            self._rtt_worker.devices_enumerated.connect(
+                self._on_burners_enumerated, _Qt.QueuedConnection)
+            self._rtt_worker.connection_state_changed.connect(
+                self._on_rtt_state_for_flash, _Qt.QueuedConnection)
+
         # 详情折叠
         self.btn_toggle_log.clicked.connect(self._toggle_log)
         self.btn_copy_log.clicked.connect(self._copy_log)
 
         # worker → ui（QueuedConnection 显式声明：CLAUDE.md 跨线程信号约定）
-        from PySide6.QtCore import Qt as _Qt
         self.btn_flash.clicked.connect(self._on_start_flash)
         self._worker.flash_started.connect(
             self._on_flash_started, _Qt.QueuedConnection)
@@ -340,6 +380,21 @@ class FlashPage(QWidget):
             self._on_log, _Qt.QueuedConnection)
         self._worker.flash_finished.connect(
             self._on_flash_finished, _Qt.QueuedConnection)
+
+        # RTT 断开等待兜底 timer（单次 5s）
+        self._rtt_disconnect_timeout_timer = QTimer(self)
+        self._rtt_disconnect_timeout_timer.setSingleShot(True)
+        self._rtt_disconnect_timeout_timer.setInterval(5000)
+        self._rtt_disconnect_timeout_timer.timeout.connect(
+            self._on_rtt_disconnect_timeout)
+
+    def _on_rtt_disconnect_timeout(self) -> None:
+        """5s 内 RTT 没断干净也继续烧。"""
+        if self._rtt_pending_disconnect:
+            self._rtt_pending_disconnect = False
+            self._worker.flash_requested.emit()
+            _infobar.warn(self, self.tr("提示"),
+                          self.tr("等待 RTT 断开超时，直接烧录"))
 
     def _on_bin_addr_changed(self) -> None:
         txt = self.edit_bin_addr.text().strip()
@@ -353,6 +408,67 @@ class FlashPage(QWidget):
         cur = self.cmb_file.currentText().strip()
         if cur:
             self._parse_and_show(cur, silent=True)
+
+    # ------------------------------------------------------------------
+    # 烧录器选择（与 RTT 页同形态：下拉 + 红点 + 离线占位）
+    # ------------------------------------------------------------------
+    def _on_burners_enumerated(self, data: str) -> None:
+        """worker 枚举结果回来：重建下拉项 + 同步红点。
+
+        data 格式同 RTT 页：分号分隔 "serial|product"。
+        烧录页不裁决连接状态——只点亮红点提示当前值不在线。
+        """
+        serials: list[str] = []
+        if data:
+            for chunk in data.split(";"):
+                if not chunk:
+                    continue
+                serial, _, _product = chunk.partition("|")
+                serial = serial.strip()
+                if serial and serial.isdigit():
+                    serials.append(serial)
+
+        prev = self.cmb_burner.currentText().strip()
+        if not prev and not hasattr(self, "_burner_initialized"):
+            prev = str(self._cfg.get("flash_jlink_serial") or "").strip()
+            self._burner_initialized = True
+
+        self.cmb_burner.blockSignals(True)
+        self.cmb_burner.setReadOnly(False)
+        try:
+            self.cmb_burner.clear()
+            for s in serials:
+                self.cmb_burner.addItem(s)
+            if prev and prev in serials:
+                self.cmb_burner.setCurrentText(prev)
+            elif prev:
+                self.cmb_burner.setText(prev)
+                self.cmb_burner.setReadOnly(True)
+            elif serials:
+                self.cmb_burner.setCurrentIndex(0)
+            else:
+                self.cmb_burner.setText("")
+        finally:
+            self.cmb_burner.blockSignals(False)
+
+        self._sync_burner_status_dot()
+
+    def _sync_burner_status_dot(self) -> None:
+        """当前值不在可用设备列表里 → 显示红点并只读。"""
+        serial = self.cmb_burner.currentText().strip()
+        if not serial:
+            self._burner_status_dot.hide()
+            return
+        online = self.cmb_burner.findText(serial) >= 0
+        self._burner_status_dot.setVisible(not online)
+        self.cmb_burner.setReadOnly(not online)
+
+    def _on_burner_selection_changed(self) -> None:
+        """用户选了真实设备 → 持久化 + 同步红点。"""
+        serial = self.cmb_burner.currentText().strip()
+        if serial:
+            self._cfg.set("flash_jlink_serial", serial)
+        self._sync_burner_status_dot()
 
     def _on_browse(self) -> None:
         cur = self.cmb_file.currentText().strip()
@@ -547,6 +663,12 @@ class FlashPage(QWidget):
         except (ValueError, TypeError):
             bin_addr = 0
 
+        burner_serial = self.cmb_burner.currentText().strip()
+        if not burner_serial or self.cmb_burner.findText(burner_serial) < 0:
+            _infobar.warn(self, self.tr("提示"),
+                          self.tr("未检测到 J-Link 设备，请检查 USB 连接"))
+            return
+
         device = self.cmb_device.currentText().strip()
         if not device:
             _infobar.warn(self, self.tr("未填 Device"), self.tr("请填写目标设备名（如 STM32H750VB）"))
@@ -562,14 +684,29 @@ class FlashPage(QWidget):
             file_path=path, file_format=fmt, bin_start_addr=bin_addr,
             device_name=device, interface=iface, speed_khz=speed,
             erase_mode=erase_mode, post_action=post_action,
-            extra_verify=verify,
+            extra_verify=verify, jlink_serial=burner_serial,
         )
         self._worker.set_pending_params(params)
+
+        # 与 RTT 协调：同一台 J-Link 且 RTT 已连接时，先断开 RTT 再烧录
+        self._set_rtt_busy(True)
+        if self._rtt_worker is not None:
+            rtt_state = self._rtt_worker.state_name()
+            rtt_serial = str(self._rtt_worker.get_device_info().get("jlink_serial", "") or "")
+            if rtt_state == "CONNECTED" and rtt_serial == burner_serial and burner_serial:
+                self._resume_rtt_after_flash = True
+                self._rtt_pending_disconnect = True
+                self._rtt_worker.disconnect_requested.emit()
+                self._rtt_disconnect_timeout_timer.start()
+                return
+
+        self._resume_rtt_after_flash = False
         self._worker.flash_requested.emit()
 
     def _on_flash_started(self) -> None:
         self._is_running = True
         self._stage_key = "preparing"
+        self._set_rtt_busy(True)
         self._set_inputs_enabled(False)
         self.btn_flash.setText(self.tr("烧录中…"))
         self.txt_log.clear()
@@ -605,6 +742,18 @@ class FlashPage(QWidget):
         self._stage_key = "done" if ok else "failed"
         self._set_inputs_enabled(True)
         self.btn_flash.setText(self.tr("开始烧录"))
+        self._set_rtt_busy(False)
+
+        if self._resume_rtt_after_flash:
+            self._resume_rtt_after_flash = False
+            target = self._cfg.get("target_mcu")
+            iface = self._cfg.get("interface")
+            speed = int(self._cfg.get("speed_khz") or 0)
+            channel = int(self._cfg.get("rtt_channel") or 0)
+            burner_serial = self.cmb_burner.currentText().strip()
+            if target and burner_serial:
+                self._rtt_worker.connect_requested.emit(
+                    target, iface, speed, channel, burner_serial)
         if ok:
             self.lbl_stage.setText(self.tr("完成 ✓"))
             self.progress.setValue(100)
@@ -635,6 +784,7 @@ class FlashPage(QWidget):
     def _retranslate_ui(self) -> None:
         # 静态标题 / 标签
         self.lbl_conn_title.setText(self.tr("连接参数"))
+        self._lbl_burner.setText(self.tr("烧录器:"))
         self.lbl_device.setText(self.tr("目标设备:"))
         self.lbl_file_title.setText(self.tr("固件文件"))
         self.lbl_bin_addr.setText(self.tr("Bin 起始地址:"))
@@ -710,6 +860,18 @@ class FlashPage(QWidget):
         if path.lower().endswith((".axf", ".elf", ".hex", ".bin")):
             self._select_file(path)
             e.acceptProposedAction()
+
+    def _on_rtt_state_for_flash(self, connected: bool) -> None:
+        """RTT 断开后确认真正切到断开态，再启动烧录。"""
+        if self._rtt_pending_disconnect and not connected:
+            self._rtt_pending_disconnect = False
+            self._rtt_disconnect_timeout_timer.stop()
+            self._worker.flash_requested.emit()
+
+    def _set_rtt_busy(self, busy: bool) -> None:
+        """烧录期间锁定/解锁 RTT 页的连接按钮。"""
+        if self._rtt_page_ref is not None:
+            self._rtt_page_ref.set_flash_busy(busy)
 
     def shutdown(self) -> None:
         """主窗口 closeEvent 调；干净关掉 worker 线程。"""

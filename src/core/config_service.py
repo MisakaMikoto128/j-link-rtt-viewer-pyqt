@@ -113,6 +113,8 @@ class ConfigService(QObject):
         "flash_verify": False,                  # extra byte-by-byte verify
         "flash_recent_files": [],               # 最多 10 个，时间倒序
         "flash_recent_files_mtime": {},         # path → mtime（float），用于变更提示
+        # 烧录页选定的 J-Link serial（离线时红点占位）
+        "flash_jlink_serial": "",
     }
 
     SEND_HISTORY_MAX = 50
