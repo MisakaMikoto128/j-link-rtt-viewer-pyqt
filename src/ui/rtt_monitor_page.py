@@ -1728,13 +1728,21 @@ class RTTMonitorPage(QWidget):
     def _request_disconnect(self, *, pending_reconnect: bool = False) -> None:
         """请求 worker 断开。pending_reconnect=True 表示这是自动检测到的断开
         （USB 枚举消失 / 远程不可达 / 读线程异常），自动重连开启时应进入等待恢复态。"""
-        self._set_disconnected_ui()  # 幂等
-        self._worker.disconnect_requested.emit()
+        already_pending = self._pending_reconnect
         if pending_reconnect and self._cfg.get("auto_reconnect"):
-            self._pending_reconnect = True
-            self._append_styled_line(
-                self.tr("设备连接丢失，等待恢复后自动重连…") + "\n",
-                _PENDING_RECONNECT_COLOR, bold=True)
+            # 已经在等待自动重连时，避免重复打提示行（枚举和读线程异常可能同时触发）
+            if not already_pending:
+                self._set_disconnected_ui()  # 幂等
+                self._worker.disconnect_requested.emit()
+                self._pending_reconnect = True
+                self._append_styled_line(
+                    self.tr("设备连接丢失，等待恢复后自动重连…") + "\n",
+                    _PENDING_RECONNECT_COLOR, bold=True)
+            else:
+                self._pending_reconnect = True  # 保持等待态
+        else:
+            self._set_disconnected_ui()
+            self._worker.disconnect_requested.emit()
 
     def _on_connect_clicked(self) -> None:
         if not self._is_connected:
