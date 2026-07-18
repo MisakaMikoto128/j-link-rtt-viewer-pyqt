@@ -68,7 +68,7 @@ def test_burner_combo_rebuilt_on_enumeration(flash_coord):
     assert page.cmb_burner.count() == 3
     assert page.cmb_burner.itemText(0) == "111"
     assert page.cmb_burner.itemText(1) == "222"
-    assert page.cmb_burner.itemText(2) == "远程连接…"
+    assert page.cmb_burner.itemText(2) == "远程连接"
     assert page.cmb_burner.currentText() == "111"
 
 
@@ -217,7 +217,7 @@ def test_remote_same_addr_disconnects_rtt_before_flash(flash_coord, qtbot):
     worker.devices_enumerated.emit("111|A")
     _process()
 
-    assert page.cmb_burner.currentText() == "远程连接…"
+    assert page.cmb_burner.currentText() == "远程连接"
     assert not page.remote_row.isHidden()
 
     page._select_file(str(fixtures_dir / "blink.bin"))

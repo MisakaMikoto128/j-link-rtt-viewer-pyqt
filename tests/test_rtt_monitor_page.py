@@ -741,7 +741,8 @@ def test_remote_dot_reflects_reachability(rtt_page, qtbot):
 
 
 def test_set_connected_ui_shows_remote_mark(rtt_page, qtbot):
-    """_set_connected_ui 收到 remote_addr 时，显示区应追加远程连接提示行。"""
+    """_set_connected_ui 收到 remote_addr 时，显示区应追加蓝色远程连接提示行。"""
+    import ui.rtt_monitor_page as rtt_mod
     page, worker, _ = rtt_page
     info = worker.get_device_info()
     info["remote_addr"] = "192.168.79.1:19020"
@@ -752,6 +753,7 @@ def test_set_connected_ui_shows_remote_mark(rtt_page, qtbot):
     assert "已连接远程 J-Link" in text
     assert "192.168.79.1:19020" in text
     assert "602717758" in text
+    assert rtt_mod._REMOTE_MARK_COLOR == "#5599ff"
 
 
 def test_startup_restore_remote_mode(isolated_appdata, qtbot):
@@ -772,3 +774,62 @@ def test_startup_restore_remote_mode(isolated_appdata, qtbot):
     assert page.le_remote_host.text() == "jlink.local"
     assert page.le_remote_port.text() == "19021"
     assert cfg.get("jlink_mode") == "remote"
+
+
+def test_manual_disconnect_mark_includes_remote_addr(rtt_page, qtbot):
+    """auto_mark_on_disconnect=True 时，远程会话断开标记应包含 ip:port。"""
+    page, worker, cfg = rtt_page
+    cfg.set("auto_mark_on_disconnect", True)
+    info = worker.get_device_info()
+    info["remote_addr"] = "192.168.79.1:19020"
+    page._set_connected_ui(info)
+    qtbot.wait(20)
+    # get_device_info() 在 else 分支被读取，保留 remote_addr 才能生成带地址的标记
+    worker._device_info["remote_addr"] = "192.168.79.1:19020"
+    worker.connection_state_changed.emit(False)
+    qtbot.wait(30)
+    text = page.display.toPlainText()
+    assert "已断开远程 J-Link 192.168.79.1:19020 @" in text
+
+
+def test_devices_enumerated_skips_rebuild_when_unchanged(rtt_page, qtbot):
+    """连续两次相同枚举内容：第二次不应重建 combo（避免闪烁）。"""
+    page, worker, _ = rtt_page
+    worker.devices_enumerated.emit("111|A")
+    qtbot.wait(50)
+    first_text = page.cb_jlink.currentText()
+
+    original_clear = page.cb_jlink.clear
+    clear_calls = []
+
+    def tracking_clear(*args, **kwargs):
+        clear_calls.append(1)
+        return original_clear(*args, **kwargs)
+
+    page.cb_jlink.clear = tracking_clear
+    try:
+        worker.devices_enumerated.emit("111|A")
+        qtbot.wait(50)
+        assert len(clear_calls) == 0, "内容未变时不应 clear"
+        assert page.cb_jlink.currentText() == first_text
+
+        worker.devices_enumerated.emit("111|A;222|B")
+        qtbot.wait(50)
+        assert len(clear_calls) == 1, "内容变了必须 clear 重建"
+    finally:
+        page.cb_jlink.clear = original_clear
+
+
+def test_probe_remote_reachability_throttled(rtt_page, qtbot):
+    """400ms 内重复调用 _probe_remote_reachability 应被节流。"""
+    import time
+    page, worker, _ = rtt_page
+    page.le_remote_host.setText("127.0.0.1")
+    page.le_remote_port.setText("19020")
+    page._last_remote_probe_ts = time.monotonic()
+    page._probe_remote_reachability()
+    assert page._remote_probe_in_flight is False, "400ms 内应直接返回，不启动探测"
+
+    page._last_remote_probe_ts = 0.0
+    page._probe_remote_reachability()
+    assert page._remote_probe_in_flight is True, "超过间隔后应启动探测"

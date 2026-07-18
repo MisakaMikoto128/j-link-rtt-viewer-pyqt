@@ -5,7 +5,7 @@ import ipaddress
 import re
 import socket
 
-REMOTE_ITEM_TEXT = "远程连接…"
+REMOTE_ITEM_TEXT = "远程连接"
 
 _HOSTNAME_RE = re.compile(
     r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$"

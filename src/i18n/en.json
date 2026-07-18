@@ -323,12 +323,14 @@
   "仅烧录": "Flash Only",
   "烧录 + 复位": "Flash + Reset",
   "烧录 + 复位 + 运行（推荐）": "Flash + Reset + Run (recommended)",
-  "远程连接…": "Remote connection…",
   "远程主机:": "Remote host:",
   "端口:": "Port:",
   "IP 或域名，如 192.168.79.1": "IP or hostname, e.g. 192.168.79.1",
   "无法解析主机名 \"{host}\"，请检查输入": "Cannot resolve hostname \"{host}\", please check input",
   "端口无效（1-65535）": "Invalid port (1-65535)",
   "无法连接远程 J-Link（{addr}），请检查 Remote Server 是否运行、IP/端口是否正确": "Cannot connect to remote J-Link ({addr}), please check Remote Server is running and IP/port are correct",
-  "已连接远程 J-Link {addr} (S/N: {sn})": "Connected to remote J-Link {addr} (S/N: {sn})"
+  "已连接远程 J-Link {addr} (S/N: {sn})": "Connected to remote J-Link {addr} (S/N: {sn})",
+  "远程连接": "Remote connection",
+  "已断开远程 J-Link {addr} @ {ts}": "Disconnected from remote J-Link {addr} @ {ts}",
+  "远程 J-Link": "Remote J-Link"
 }

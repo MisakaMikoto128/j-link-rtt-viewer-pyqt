@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import time
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -131,6 +132,7 @@ _DEFAULT_FG_QCOLOR = QColor("#dddddd")
 _DEFAULT_BG_QCOLOR = QColor("#222222")
 
 _DEFAULT_SEND_ECHO_COLOR = "#FFA500"  # 发送回显默认色（橙色）
+_REMOTE_MARK_COLOR = "#5599ff"  # 远程连接标记色（蓝）
 _DISCONNECT_ALERT_COLOR = "#cc0000"  # 意外断开红字提示色（与 ANSI red 一致）
 
 # 自动重连各阶段提示色：disconnect=橙红（告警）、attempt=琥珀（进行中）、
@@ -471,6 +473,9 @@ class RTTMonitorPage(QWidget):
         self._remote_item_text = self.tr(REMOTE_ITEM_TEXT)
         self._remote_reachable: bool | None = None
         self._remote_probe_in_flight = False
+        self._last_remote_probe_ts: float = 0.0
+        self._last_remote_addr = ""
+        self._last_enum_state = None
         self._remote_probe_helper = _RemoteProbeHelper()
         self._remote_probe_helper.probe_done.connect(
             self._on_remote_probe_done)
@@ -770,29 +775,39 @@ class RTTMonitorPage(QWidget):
         row_jlink.addWidget(self.cb_jlink, 1)
         v.addLayout(row_jlink)
 
-        # ---- 远程主机行（选中「远程连接…」时显示）----
+        # ---- 远程主机行（选中「远程连接」时显示）----
         self.remote_row = QWidget(inner)
-        remote_layout = QHBoxLayout(self.remote_row)
+        remote_layout = QVBoxLayout(self.remote_row)
         remote_layout.setSpacing(6)
         remote_layout.setContentsMargins(0, 0, 0, 0)
+        row_remote_host = QHBoxLayout()
+        row_remote_host.setSpacing(6)
+        row_remote_host.setContentsMargins(0, 0, 0, 0)
         self._lbl_remote_host = BodyLabel(self.tr("远程主机:"))
         self._lbl_remote_host.setFixedHeight(_CTRL_H)
-        remote_layout.addWidget(self._lbl_remote_host)
+        row_remote_host.addWidget(self._lbl_remote_host)
         self.le_remote_host = LineEdit(inner)
         self.le_remote_host.setPlaceholderText(
             self.tr("IP 或域名，如 192.168.79.1"))
         self.le_remote_host.setFixedHeight(_CTRL_H)
         self.le_remote_host.setSizePolicy(
             QSizePolicy.Expanding, QSizePolicy.Preferred)
-        remote_layout.addWidget(self.le_remote_host, 1)
+        row_remote_host.addWidget(self.le_remote_host, 1)
+        remote_layout.addLayout(row_remote_host)
+
+        row_remote_port = QHBoxLayout()
+        row_remote_port.setSpacing(6)
+        row_remote_port.setContentsMargins(0, 0, 0, 0)
         self._lbl_remote_port = BodyLabel(self.tr("端口:"))
         self._lbl_remote_port.setFixedHeight(_CTRL_H)
-        remote_layout.addWidget(self._lbl_remote_port)
+        row_remote_port.addWidget(self._lbl_remote_port)
         self.le_remote_port = LineEdit(inner)
         self.le_remote_port.setPlaceholderText("19020")
-        self.le_remote_port.setFixedWidth(80)
         self.le_remote_port.setFixedHeight(_CTRL_H)
-        remote_layout.addWidget(self.le_remote_port)
+        self.le_remote_port.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred)
+        row_remote_port.addWidget(self.le_remote_port, 1)
+        remote_layout.addLayout(row_remote_port)
         v.addWidget(self.remote_row)
         self.remote_row.setVisible(False)
 
@@ -1527,6 +1542,10 @@ class RTTMonitorPage(QWidget):
 
     def _probe_remote_reachability(self) -> None:
         """在后台线程探测远程 J-Link TCP 端口，绝不阻塞 GUI。"""
+        now = time.monotonic()
+        if now - self._last_remote_probe_ts < 0.4:
+            return
+        self._last_remote_probe_ts = now
         if self._remote_probe_in_flight:
             return
         host = self.le_remote_host.text().strip()
@@ -1590,7 +1609,7 @@ class RTTMonitorPage(QWidget):
         - 当前选中的 serial 不在这批里 → 视为设备被拔掉，若正处于连接态立即
           触发断开（不等 read_thread 检出 rtt_read 异常，可能滞后几秒）。
         - 下拉列表只显示当前电脑可用设备；currentText 可以是历史选择（离线占位）。
-        - 最后一项固定为「远程连接…」，不属于 USB 设备，不参与拔掉检测。
+        - 最后一项固定为「远程连接」，不属于 USB 设备，不参与拔掉检测。
         """
         serials: list[str] = []
         if data:
@@ -1604,6 +1623,11 @@ class RTTMonitorPage(QWidget):
 
         remote_text = self.tr(REMOTE_ITEM_TEXT)
         self._remote_item_text = remote_text
+
+        new_state = (tuple(serials), remote_text)
+        if getattr(self, "_last_enum_state", None) == new_state and hasattr(self, "_jlink_initialized"):
+            return   # 内容没变：不动 combo（避免 200ms 无谓重建/闪烁）
+        self._last_enum_state = new_state
 
         # 当前值：可能是用户已选设备，也可能是历史离线占位。
         # qfluentwidgets ComboBox 不允许显示非 items 的文本，所以用 EditableComboBox：
@@ -2046,10 +2070,16 @@ class RTTMonitorPage(QWidget):
                 ts = datetime.now().strftime("%H:%M:%S")
                 self._insert_mark_text(self.tr("已连接 {target} @ {ts}").format(target=target, ts=ts))
         else:
+            prev_info = self._worker.get_device_info()
             self._set_disconnected_ui()
             if self._cfg.get("auto_mark_on_disconnect"):
                 ts = datetime.now().strftime("%H:%M:%S")
-                self._insert_mark_text(self.tr("已断开 @ {ts}").format(ts=ts))
+                remote_addr = prev_info.get("remote_addr", "")
+                if remote_addr:
+                    self._insert_mark_text(
+                        self.tr("已断开远程 J-Link {addr} @ {ts}").format(addr=remote_addr, ts=ts))
+                else:
+                    self._insert_mark_text(self.tr("已断开 @ {ts}").format(ts=ts))
 
     def _update_channel_range_from_worker(self) -> None:
         """连接成功后按 MCU 上报的上行通道数收紧 SpinBox 上限（下限恒 -1=全部）。
@@ -2086,7 +2116,10 @@ class RTTMonitorPage(QWidget):
         from datetime import datetime
         now = datetime.now()
         ts = f"{now.year}/{now.month}/{now.day} {now.hour:02d}:{now.minute:02d}:{now.second:02d}"
-        msg = f"{ts} -> {device} {self.tr('连接意外断开')}\n"
+        if self._last_remote_addr:
+            msg = f"{ts} -> {self.tr('远程 J-Link')} {self._last_remote_addr} {self.tr('连接意外断开')}\n"
+        else:
+            msg = f"{ts} -> {device} {self.tr('连接意外断开')}\n"
         self._append_styled_line(msg, _DISCONNECT_ALERT_COLOR, bold=True)
 
     def _on_auto_reconnect_toggled(self, checked: bool) -> None:
@@ -2158,10 +2191,11 @@ class RTTMonitorPage(QWidget):
 
         # 远程连接：在显示区追加一行提示（无论 auto_mark_on_connect 是否开启）
         remote_addr = info.get("remote_addr", "")
+        self._last_remote_addr = remote_addr
         if remote_addr:
-            self._insert_mark_text(
-                self.tr("已连接远程 J-Link {addr} (S/N: {sn})").format(
-                    addr=remote_addr, sn=info.get("jlink_serial", "-")))
+            self._append_styled_line(
+                f"──── {self.tr('已连接远程 J-Link {addr} (S/N: {sn})').format(addr=remote_addr, sn=info.get('jlink_serial', '-'))} ────\n",
+                _REMOTE_MARK_COLOR, bold=True, force_scroll=True)
 
         # 烧录期间保持锁定（烧录页已断开的场景）
         if self._flash_busy:
@@ -2185,6 +2219,8 @@ class RTTMonitorPage(QWidget):
 
         self.btn_toolbar_connect.setChecked(False)
         self.btn_toolbar_connect.setIcon(FluentIcon.PLAY)
+        # 断开后清空最后一次已知的远程地址
+        self._last_remote_addr = ""
         # 断开时停止定时发送
         self._timed_send_timer.stop()
         # 断开后 tooltip 从「MCU 实际上报 N」回到通用说明
@@ -2692,7 +2728,7 @@ class RTTMonitorPage(QWidget):
         self._lbl_remote_port.setText(self.tr("端口:"))
         self.le_remote_host.setPlaceholderText(
             self.tr("IP 或域名，如 192.168.79.1"))
-        # 更新下拉中「远程连接…」项的文本
+        # 更新下拉中「远程连接」项的文本
         new_remote_text = self.tr(REMOTE_ITEM_TEXT)
         for i in range(self.cb_jlink.count()):
             if self.cb_jlink.itemText(i) == self._remote_item_text:
