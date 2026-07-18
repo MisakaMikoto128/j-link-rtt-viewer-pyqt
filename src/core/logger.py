@@ -1,13 +1,15 @@
 """统一日志模块。
 
 模块级单例：首次 get_logger() 时初始化 console + RotatingFileHandler，
-后续调用返回同一 Logger。日志目录默认 %APPDATA%/JLinkRTTViewer/logs，
+后续调用返回同一 Logger。日志目录 Windows 下为 %APPDATA%/JLinkRTTViewer/logs，
+Linux/macOS 下为 XDG_STATE_HOME（默认 ~/.local/state）/JLinkRTTViewer/logs，
 测试时可通过 _log_dir_override 注入。
 """
 from __future__ import annotations
 
 import logging
 import os
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -19,11 +21,16 @@ _log_dir_override: Path | None = None  # 测试注入用
 
 
 def get_log_dir() -> Path:
-    """日志目录：%APPDATA%/JLinkRTTViewer/logs，缺失则 ~/AppData/Roaming/...。"""
+    """日志目录：Windows → %APPDATA%/JLinkRTTViewer/logs；
+    Linux/macOS → XDG_STATE_HOME（默认 ~/.local/state）/JLinkRTTViewer/logs。"""
     if _log_dir_override is not None:
         return Path(_log_dir_override)
-    appdata = os.environ.get("APPDATA")
-    base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+    else:
+        xdg_state = os.environ.get("XDG_STATE_HOME")
+        base = Path(xdg_state) if xdg_state else Path.home() / ".local" / "state"
     return base / "JLinkRTTViewer" / "logs"
 
 

@@ -39,6 +39,34 @@ def test_log_dir_default_under_appdata(monkeypatch):
     assert path.name == "logs"
 
 
+def test_log_dir_uses_xdg_state_home_on_linux(monkeypatch, tmp_path):
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg_state"))
+    monkeypatch.setattr(logger_mod, "_log_dir_override", None)
+
+    path = logger_mod.get_log_dir()
+    assert path == tmp_path / "xdg_state" / "JLinkRTTViewer" / "logs"
+
+
+def test_log_dir_falls_back_to_dot_local_state_on_linux(monkeypatch, tmp_path):
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(logger_mod, "_log_dir_override", None)
+
+    path = logger_mod.get_log_dir()
+    assert path == tmp_path / ".local" / "state" / "JLinkRTTViewer" / "logs"
+
+
+def test_log_dir_uses_appdata_on_windows(monkeypatch, tmp_path):
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setattr(logger_mod, "_log_dir_override", None)
+
+    path = logger_mod.get_log_dir()
+    assert path == tmp_path / "JLinkRTTViewer" / "logs"
+
+
 def test_logger_falls_back_to_console_when_file_handler_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(logger_mod, "_logger", None)
     # 用一个非法路径让 RotatingFileHandler 构造失败

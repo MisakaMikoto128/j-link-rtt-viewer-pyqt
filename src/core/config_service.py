@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -145,8 +146,14 @@ class ConfigService(QObject):
 
     @staticmethod
     def _compute_user_prefs_path() -> Path:
-        appdata = os.environ.get("APPDATA")
-        base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+        """用户偏好路径：Windows → %APPDATA%/JLinkRTTViewer/user_prefs.json；
+        Linux/macOS → XDG_CONFIG_HOME（默认 ~/.config）/JLinkRTTViewer/user_prefs.json。"""
+        if sys.platform == "win32":
+            appdata = os.environ.get("APPDATA")
+            base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+        else:
+            xdg_config = os.environ.get("XDG_CONFIG_HOME")
+            base = Path(xdg_config) if xdg_config else Path.home() / ".config"
         return base / "JLinkRTTViewer" / "user_prefs.json"
 
     def _seed_user_config_if_missing(self) -> None:

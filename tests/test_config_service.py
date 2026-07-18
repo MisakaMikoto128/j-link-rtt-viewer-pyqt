@@ -97,7 +97,30 @@ def test_reload_from_disk(cfg, qapp, tmp_path):
     assert cfg2.get("target_mcu") == "STM32H750VB"
 
 
-def test_bool_not_accepted_as_int(cfg, qapp):
+def test_user_prefs_path_uses_xdg_config_home_on_linux(monkeypatch, tmp_path):
+    """Linux 下优先使用 XDG_CONFIG_HOME。"""
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg_config"))
+    path = ConfigService._compute_user_prefs_path()
+    assert path == tmp_path / "xdg_config" / "JLinkRTTViewer" / "user_prefs.json"
+
+
+def test_user_prefs_path_falls_back_to_dot_config_on_linux(monkeypatch, tmp_path):
+    """Linux 下 XDG_CONFIG_HOME 未设置时回退到 ~/.config。"""
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = ConfigService._compute_user_prefs_path()
+    assert path == tmp_path / ".config" / "JLinkRTTViewer" / "user_prefs.json"
+
+
+def test_user_prefs_path_uses_appdata_on_windows(monkeypatch, tmp_path):
+    """Windows 下使用 APPDATA。"""
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    path = ConfigService._compute_user_prefs_path()
+    assert path == tmp_path / "JLinkRTTViewer" / "user_prefs.json"
+
     cfg.set("speed_khz", True)
     assert cfg.get("speed_khz") == 4000  # 未被修改，保持 default
 
