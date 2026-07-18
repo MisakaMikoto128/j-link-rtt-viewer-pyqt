@@ -79,8 +79,8 @@ class AboutPage(QWidget):
         outer.addWidget(scroll)
 
         root = QVBoxLayout(inner)
-        root.setContentsMargins(36, 28, 36, 28)
-        root.setSpacing(18)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(12)
 
         root.addWidget(self._build_hero())
         root.addWidget(self._build_feature_grid())

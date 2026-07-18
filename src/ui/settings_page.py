@@ -104,8 +104,8 @@ class SettingsPage(QWidget):
         outer.addWidget(self._scroll)
 
         root = QVBoxLayout(inner)
-        root.setContentsMargins(20, 20, 20, 20)
-        root.setSpacing(16)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(12)
 
         # ---- 外观 ----
         self._appearance_card = CardWidget(self)

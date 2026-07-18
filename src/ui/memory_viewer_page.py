@@ -120,7 +120,7 @@ class MemoryViewerPage(QWidget):
         self._scroll, inner = make_transparent_scroll(self, "mem")
         outer.addWidget(self._scroll)
         root = QVBoxLayout(inner)
-        root.setContentsMargins(16, 16, 16, 16)
+        root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(12)
 
         # ---- 读取卡片 ----
