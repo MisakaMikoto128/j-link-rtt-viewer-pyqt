@@ -875,6 +875,7 @@ def test_conn_panel_controls_aligned_fixed_width(rtt_page, qtbot):
         page.le_remote_host,
         page.le_remote_port,
         page.sp_channel,
+        page.cb_crc_algo,
     ]
     for w in controls:
         assert w.width() == 200, f"{w.objectName()} width={w.width()} != 200"
@@ -882,4 +883,16 @@ def test_conn_panel_controls_aligned_fixed_width(rtt_page, qtbot):
         assert w.maximumWidth() == 200, f"{w.objectName()} maxWidth != 200"
 
     assert page._lbl_target.text() == page.tr("目标设备:")
-    assert page._jlink_status_dot.parentWidget() is page.cb_jlink
+    assert page._jlink_status_dot.parentWidget() is not page.cb_jlink
+    assert page._jlink_status_dot.parentWidget() is page._lbl_jlink_device.parentWidget()
+    # 红点在 row_jlink 布局中（label 与 stretch 之间）
+    row_layout = page._row_jlink
+    dot_index = row_layout.indexOf(page._jlink_status_dot)
+    label_index = row_layout.indexOf(page._lbl_jlink_device)
+    stretch_index = -1
+    for i in range(row_layout.count()):
+        if row_layout.itemAt(i) is not None and row_layout.itemAt(i).spacerItem() is not None:
+            stretch_index = i
+            break
+    assert dot_index > label_index
+    assert stretch_index > dot_index

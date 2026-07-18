@@ -649,7 +649,10 @@ class JLinkWorker(QObject):
             except Exception as e:
                 # 不 emit log_message——避免 native thread 跨线程 emit。
                 # 错误从 logger 文件看，足够诊断。
-                self._logger.error(f"RTT 读异常：{e}")
+                self._logger.error(
+                    f"RTT 读异常：{type(e).__name__}: {e}"
+                    f"（state={self._state}, auto_reconnect={self._auto_reconnect_enabled}）"
+                )
                 # 仅在仍处于连接态时标记意外断开：正常 _do_disconnect 会先把
                 # _state 置为 DISCONNECTING，此时异常属于 teardown 副作用，不算意外。
                 if self._state == _STATE_CONNECTED:
@@ -701,11 +704,15 @@ class JLinkWorker(QObject):
         identifier = f"J-Link {serial}" if serial else "-"
         self._logger.error(f"检测到意外断开：{identifier}")
         params = self._last_connect_params
+        remote = params[5] if params and len(params) >= 6 else ""
+        self._logger.info(
+            f"自动重连判定：enabled={self._auto_reconnect_enabled}, "
+            f"params={'有' if params else '无'}, serial={serial}, remote={remote!r}"
+        )
         if self._auto_reconnect_enabled and params and serial:
             # 自动重连：发"正在尝试自动重连"提示 -> 干净断开 -> 启动轮询定时器。
             # 用 reconnect_status 而非 unexpected_disconnect：UI 显示橙色"正在重连"行。
             # 远程连接的 remote_addr 从 6 元组第 6 元素（索引 5）取；本地为 ""。
-            remote = params[5] if len(params) >= 6 else ""
             self.reconnect_status.emit("disconnect_reconnecting", identifier)
             self._do_disconnect()
             self._start_reconnect(str(serial), remote)
@@ -728,6 +735,11 @@ class JLinkWorker(QObject):
         self._reconnect_target_serial = serial
         self._reconnect_remote_addr = remote_addr
         self._reconnect_attempt = 0
+        timer_active = self._reconnect_timer.isActive() if self._reconnect_timer else "N/A"
+        self._logger.info(
+            f"启动自动重连轮询：serial={serial}, remote={remote_addr!r}, "
+            f"timer_active={timer_active}"
+        )
         if self._reconnect_timer is not None and not self._reconnect_timer.isActive():
             self._reconnect_timer.start()
 
@@ -777,6 +789,10 @@ class JLinkWorker(QObject):
                        for e in emus):
                 return   # 设备还没插回，静默等
 
+        self._logger.info(
+            f"重连轮询 tick：target_serial={self._reconnect_target_serial}, "
+            f"remote={self._reconnect_remote_addr!r}, attempt={self._reconnect_attempt + 1}"
+        )
         self._reconnect_attempt += 1
         n = self._reconnect_attempt
         self.reconnect_status.emit("attempt", str(n))

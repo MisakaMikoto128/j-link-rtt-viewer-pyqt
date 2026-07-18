@@ -747,13 +747,21 @@ class RTTMonitorPage(QWidget):
         _INPUT_W = 120
         _CTRL_H = 33
         # ---- J-Link 设备选择行（多 J-Link 接入时选哪台；串口助手的串口选择同款）----
-        row_jlink = QHBoxLayout()
-        row_jlink.setSpacing(6)
-        row_jlink.setContentsMargins(0, 0, 0, 0)
+        self._row_jlink = QHBoxLayout()
+        self._row_jlink.setSpacing(6)
+        self._row_jlink.setContentsMargins(0, 0, 0, 0)
         self._lbl_jlink_device = BodyLabel(self.tr("J-Link"))
         self._lbl_jlink_device.setFixedHeight(_CTRL_H)
-        row_jlink.addWidget(self._lbl_jlink_device)
-        row_jlink.addStretch(1)
+        self._row_jlink.addWidget(self._lbl_jlink_device)
+
+        # 在线状态小红点：放在 J-Link 标签右侧。目标 J-Link 当前在接入列表里 → 隐藏；
+        # 不在线（历史占位）→ 显示。用 DotInfoBadge.setLevel(ERROR) 保持 Fluent 风格。
+        self._jlink_status_dot = DotInfoBadge(inner)
+        self._jlink_status_dot.setLevel(InfoLevel.ERROR)
+        self._jlink_status_dot.setFixedSize(8, 8)
+        self._jlink_status_dot.hide()
+        self._row_jlink.addWidget(self._jlink_status_dot, alignment=Qt.AlignVCenter)
+        self._row_jlink.addStretch(1)
 
         # 显示文本即 serial 号（这台 J-Link 的唯一识别），不额外存 userData。
         # 当前值可能是历史选择（不在 combo items 里）的离线占位，也可能是当前
@@ -764,17 +772,8 @@ class RTTMonitorPage(QWidget):
         self.cb_jlink = EditableComboBox(inner)
         self.cb_jlink.setFixedHeight(_CTRL_H)
         self.cb_jlink.setFixedWidth(200)
-        row_jlink.addWidget(self.cb_jlink)
-        v.addLayout(row_jlink)
-
-        # 在线状态小红点：叠加在 ComboBox 左边缘。目标 J-Link 当前在接入列表里 → 隐藏；
-        # 不在线（历史占位）→ 显示。用 DotInfoBadge.setLevel(ERROR) 保持 Fluent 风格。
-        self._jlink_status_dot = DotInfoBadge(self.cb_jlink)
-        self._jlink_status_dot.setLevel(InfoLevel.ERROR)
-        self._jlink_status_dot.setFixedSize(8, 8)
-        self._jlink_status_dot.hide()
-        self._position_jlink_status_dot()
-        self._jlink_status_dot.raise_()
+        self._row_jlink.addWidget(self.cb_jlink)
+        v.addLayout(self._row_jlink)
 
         # ---- 远程主机行（选中「远程连接」时显示）----
         self.remote_row = QWidget(inner)
@@ -1133,14 +1132,15 @@ class RTTMonitorPage(QWidget):
         v.addLayout(row_echo)
 
         # 脚本：右对齐，与上方「定时发送 / 显示发送字符串」同行控件右边缘对齐。
-        # spacing 用 4（非 6）：组合框内容 226 + 复选框 29 + spacing 需 ≤ 260 才不撑大
-        # 280px 面板，6 会让行最小宽度到 261（+20=281 超 1px）。4px 间距视觉无差。
+        # spacing 用 4（非 6）：组合框内容固定 200 + 复选框 29 + spacing 需 ≤ 260 才不撑大
+        # 280px 面板，200 宽度与其他控件统一。4px 间距视觉无差。
         row_crc = QHBoxLayout()
         row_crc.setSpacing(4)
         self.chk_crc_script = CheckBox(self.tr("脚本"))
         self.chk_crc_script.setFixedHeight(_CTRL_H)
         self.cb_crc_algo = ComboBox(inner)
         self.cb_crc_algo.setFixedHeight(_CTRL_H)
+        self.cb_crc_algo.setFixedWidth(200)
         for display_name, _ in CRC_ALGORITHMS:
             self.cb_crc_algo.addItem(display_name)
         self.cb_crc_algo.addItem(self.tr("自动换行"))
@@ -1525,18 +1525,12 @@ class RTTMonitorPage(QWidget):
             self._cfg.set("last_jlink_serial", current)
         self._sync_jlink_status_dot()
 
-    def _position_jlink_status_dot(self) -> None:
-        """把红点定位到 cb_jlink 左边缘内侧（覆盖在 combo 上）。"""
-        self._jlink_status_dot.move(6, (self.cb_jlink.height() - 8) // 2)
-        self._jlink_status_dot.raise_()
-
     def _sync_jlink_status_dot(self) -> None:
         """按当前 currentText 是否可用，显示/隐藏红点。
 
         本地模式：currentText 在 items 里 → 隐藏（在线）；不在 → 显示（离线占位）。
         远程模式：TCP 可达 → 隐藏；解析失败/不可达/未探测 → 显示。
         """
-        self._position_jlink_status_dot()
         current = self.cb_jlink.currentText().strip()
         if not current:
             self._jlink_status_dot.hide()
