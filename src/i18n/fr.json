@@ -333,5 +333,17 @@
   "已连接远程 J-Link {addr} (S/N: {sn})": "Connecté au J-Link distant {addr} (S/N: {sn})",
   "远程连接": "Connexion distante",
   "已断开远程 J-Link {addr} @ {ts}": "Déconnecté du J-Link distant {addr} @ {ts}",
-  "远程 J-Link": "J-Link distant"
+  "远程 J-Link": "J-Link distant",
+  "背景图片": "Image d'arrière-plan",
+  "浏览…": "Parcourir…",
+  "清除": "Effacer",
+  "透明度": "Opacité",
+  "填充方式": "Mode de remplissage",
+  "拉伸": "Étirer",
+  "覆盖": "Couvrir",
+  "居中": "Centrer",
+  "平铺": "Mosaïque",
+  "选择背景图片": "Sélectionner l'image d'arrière-plan",
+  "未选择": "Non sélectionné",
+  "图片 (*.png *.jpg *.jpeg *.bmp *.webp)": "Images (*.png *.jpg *.jpeg *.bmp *.webp)"
 }

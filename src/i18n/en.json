@@ -333,5 +333,17 @@
   "已连接远程 J-Link {addr} (S/N: {sn})": "Connected to remote J-Link {addr} (S/N: {sn})",
   "远程连接": "Remote connection",
   "已断开远程 J-Link {addr} @ {ts}": "Disconnected from remote J-Link {addr} @ {ts}",
-  "远程 J-Link": "Remote J-Link"
+  "远程 J-Link": "Remote J-Link",
+  "背景图片": "Background image",
+  "浏览…": "Browse…",
+  "清除": "Clear",
+  "透明度": "Opacity",
+  "填充方式": "Fill mode",
+  "拉伸": "Stretch",
+  "覆盖": "Cover",
+  "居中": "Center",
+  "平铺": "Tile",
+  "选择背景图片": "Select background image",
+  "未选择": "Not selected",
+  "图片 (*.png *.jpg *.jpeg *.bmp *.webp)": "Images (*.png *.jpg *.jpeg *.bmp *.webp)"
 }
