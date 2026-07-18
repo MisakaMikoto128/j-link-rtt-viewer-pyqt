@@ -73,8 +73,8 @@ if ($SkipBuild) {
 Write-Host "[4/6] 打包 Release 资产" -ForegroundColor Cyan
 Run "powershell -ExecutionPolicy Bypass -File scripts/package_release.ps1 -Version $Version -Detail release -SkipBuild"
 $baseName = "JLinkRTTViewer-$tag-win64"
-$zip = "dist/$baseName/$baseName.zip"
-$exe = "dist/$baseName/$baseName.exe"
+$zip = "build/dist/$baseName/$baseName.zip"
+$exe = "build/dist/$baseName/$baseName.exe"
 
 # ---- 5. 推送 ----
 if ($SkipPush) {

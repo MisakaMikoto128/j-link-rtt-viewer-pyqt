@@ -70,3 +70,4 @@ scratch/
 # qfluentwidgets 运行时写到 CWD 的配置副产物（setThemeColor 默认 save=True，
 # 相对路径 config/config.json；与项目自身 src/config.json 无关）
 config/
+scripts/.package_release.prefs

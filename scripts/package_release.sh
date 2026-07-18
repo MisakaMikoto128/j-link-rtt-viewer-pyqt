@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # One-command packaging for Linux: Nuitka build (standalone + onefile) ->
-# organize artifacts into a per-version folder under dist/.
+# organize artifacts into a per-version folder under build/dist/.
+#
+# Run with NO options for an interactive menu (arrow keys, remembers your
+# last choice in scripts/.package_release.prefs). Run WITH options for
+# scripted/agent use - the menu is skipped entirely.
 #
 # Output layout:
-#   dist/<basename>/
+#   build/dist/<basename>/
 #     <basename>          onefile binary
-#     <basename>.tar.gz   standalone, xz-max-compressed (tar.gz name kept for
-#                         familiarity; uses gzip -9 unless xz is available)
+#     <basename>.tar.gz   standalone, xz-max-compressed (falls back to gzip -9)
 #     <basename>/         standalone, uncompressed (for testing)
 #
 # Version is auto-detected from git describe (same rules as the Windows
@@ -14,6 +17,7 @@
 #
 # Options:
 #   --skip-build        package existing build output (no Nuitka run)
+#   --build-only        build only, no packaging
 #   --skip-standalone   only onefile
 #   --skip-onefile      only standalone
 #   --version X.Y.Z     override auto-detected version
@@ -22,6 +26,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SKIP_BUILD=0
+BUILD_ONLY=0
 SKIP_STANDALONE=0
 SKIP_ONEFILE=0
 VERSION=""
@@ -30,6 +35,7 @@ DETAIL=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --skip-build)      SKIP_BUILD=1 ;;
+        --build-only)      BUILD_ONLY=1 ;;
         --skip-standalone) SKIP_STANDALONE=1 ;;
         --skip-onefile)    SKIP_ONEFILE=1 ;;
         --version)         VERSION="$2"; shift ;;
@@ -38,6 +44,56 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+PREFS_FILE="$(dirname "$0")/.package_release.prefs"
+
+# ---- Interactive menu (only when no action flags given) -----------------------
+if [ "$SKIP_BUILD" -eq 0 ] && [ "$BUILD_ONLY" -eq 0 ] && [ "$SKIP_STANDALONE" -eq 0 ] && \
+   [ "$SKIP_ONEFILE" -eq 0 ] && [ -z "$VERSION" ] && [ -z "$DETAIL" ]; then
+    options=(
+        "Build + package (full)"
+        "Package only (use existing build output)"
+        "Build only (no packaging)"
+        "Exit"
+    )
+    descriptions=(
+        "run both Nuitka builds, then refresh build/dist artifacts (~15-25 min)"
+        "skip Nuitka; tarball/copy whatever is already in build/ (~1 min)"
+        "run both Nuitka builds; do not touch build/dist"
+        "do nothing"
+    )
+    saved=0
+    [ -f "$PREFS_FILE" ] && { read -r saved < "$PREFS_FILE" || saved=0; }
+    [[ "$saved" =~ ^[0-9]+$ ]] || saved=0
+
+    echo "package_release - choose action (up/down + Enter):"
+    [ -f "$PREFS_FILE" ] && echo "  (last choice preselected; Enter to repeat)"
+    pos=$saved
+    while true; do
+        for i in "${!options[@]}"; do
+            marker=" "; [ "$i" -eq "$pos" ] && marker=">"
+            printf " %s %s - %s\n" "$marker" "${options[$i]}" "${descriptions[$i]}"
+        done
+        IFS= read -rsn1 key
+        if [ "$key" = "" ]; then break; fi                    # Enter
+        if [ "$key" = $'\x1b' ]; then
+            read -rsn2 -t 0.1 seq || true
+            case "$seq" in
+                "[A") pos=$(( (pos - 1 + ${#options[@]}) % ${#options[@]} )) ;;
+                "[B") pos=$(( (pos + 1) % ${#options[@]} )) ;;
+            esac
+        fi
+        printf "\033[%dA" "${#options[@]}"                    # move cursor up to redraw
+    done
+    echo "$pos" > "$PREFS_FILE"
+    case "$pos" in
+        0) ;;
+        1) SKIP_BUILD=1 ;;
+        2) BUILD_ONLY=1 ;;
+        3) echo "bye."; exit 0 ;;
+    esac
+    echo "-> ${options[$pos]}"
+fi
 
 # ---- Version / detail detection from git ------------------------------------
 if [ -z "$VERSION" ]; then
@@ -59,7 +115,7 @@ fi
 [ -n "$DETAIL" ] || DETAIL="release"
 
 BASENAME="JLinkRTTViewer-v${VERSION}-${DETAIL}-linux-x86_64"
-OUT_DIR="dist/${BASENAME}"
+OUT_DIR="build/dist/${BASENAME}"
 
 echo "== package_release: ${BASENAME}"
 
@@ -70,6 +126,11 @@ else
     echo "[1/4] Nuitka build (standalone + onefile)"
     [ "$SKIP_STANDALONE" -eq 1 ] || ./build_nuitka.sh
     [ "$SKIP_ONEFILE" -eq 1 ]    || ./build_nuitka_onefile.sh
+fi
+if [ "$BUILD_ONLY" -eq 1 ]; then
+    echo
+    echo "Done (build only). Output under build/"
+    exit 0
 fi
 
 # ---- Prepare output dir --------------------------------------------------------

@@ -1,39 +1,38 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  One-command packaging: Nuitka build (standalone + onefile) -> organize
-  artifacts into a per-version folder.
+  Nuitka build + package, one command. Artifacts land in build/dist/<version>/.
 
 .DESCRIPTION
-  Output layout (dist/):
-    dist/<version>-<detail>-win64/
-      JLinkRTTViewer-v<ver>-<detail>-win64.exe   onefile binary
-      JLinkRTTViewer-v<ver>-<detail>-win64.zip   standalone, max-compressed
-      JLinkRTTViewer-v<ver>-<detail>-win64/      standalone, uncompressed (for testing)
+  Run with NO arguments for an interactive menu (arrow keys, remembers your
+  last choice in scripts/.package_release.prefs). Run WITH arguments for
+  scripted/agent use - the menu is skipped entirely.
 
-  Version is auto-detected from git:
-    - On a tag:              v0.6.0          -> version 0.6.0, detail "release"
-    - After a tag (dev):     v0.6.0-16-g3c4c568 -> version 0.6.0, detail "dev.16.g3c4c568"
-  Override with -Version / -Detail.
+  Output layout (build/dist/):
+    build/dist/<basename>/
+      <basename>.exe    onefile binary
+      <basename>.zip    standalone, max-compressed (7-Zip if available)
+      <basename>/       standalone, uncompressed (for testing)
 
-  7-Zip (tools/7z.exe or PATH or C:\Program Files\7-Zip) is used for max
-  compression when available; otherwise falls back to Compress-Archive.
+  Version is auto-detected from git describe:
+    on a tag   v0.6.0            -> 0.6.0 + "release"
+    after tag  v0.6.0-16-g3c4c56 -> 0.6.0 + "dev.16.g3c4c56"
 
-  Overwrite policy: an artifact is regenerated when it is missing OR when its
-  build source (build/main.dist resp. build/onefile exe) is newer - so a rerun
-  after a fresh build refreshes dist, while a rerun without rebuilding is a
-  cheap no-op. Manually delete dist/ subfolders to force regeneration.
+  Overwrite policy: an artifact is regenerated when missing OR when its build
+  source is newer - rerun after a fresh build refreshes dist; rerun without
+  rebuilding is a cheap no-op.
 
 .EXAMPLE
-  ./scripts/package_release.ps1                 # build + package both
+  ./scripts/package_release.ps1                 # interactive menu
   ./scripts/package_release.ps1 -SkipBuild      # package existing build output
-  ./scripts/package_release.ps1 -SkipStandalone # only onefile
+  ./scripts/package_release.ps1 -BuildOnly      # build only, no packaging
   ./scripts/package_release.ps1 -Version 0.6.0 -Detail test1
 #>
 param(
     [string]$Version = "",
     [string]$Detail = "",
     [switch]$SkipBuild,
+    [switch]$BuildOnly,
     [switch]$SkipStandalone,
     [switch]$SkipOnefile
 )
@@ -42,11 +41,66 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
+$prefsFile = Join-Path $PSScriptRoot ".package_release.prefs"
+
+# ---- Interactive menu (only when no action flags given) ----------------------
+$noActionFlags = -not ($SkipBuild -or $BuildOnly -or $SkipStandalone -or $SkipOnefile -or $Version -or $Detail)
+
+function Read-MenuChoice([string[]]$options, [string[]]$descriptions, [int]$initial = 0) {
+    $pos = [Math]::Max(0, [Math]::Min($initial, $options.Count - 1))
+    $top = [Console]::CursorTop
+    while ($true) {
+        [Console]::SetCursorPosition(0, $top)
+        for ($i = 0; $i -lt $options.Count; $i++) {
+            $marker = if ($i -eq $pos) { ">" } else { " " }
+            $line = " $marker $($options[$i]) - $($descriptions[$i])"
+            Write-Host ($line.PadRight([Console]::WindowWidth - 1))
+        }
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            "UpArrow"   { $pos = ($pos - 1 + $options.Count) % $options.Count }
+            "DownArrow" { $pos = ($pos + 1) % $options.Count }
+            "Enter"     { return $pos }
+        }
+    }
+}
+
+if ($noActionFlags) {
+    $options = @(
+        "Build + package (full)",
+        "Package only (use existing build output)",
+        "Build only (no packaging)",
+        "Exit"
+    )
+    $descriptions = @(
+        "run both Nuitka builds, then refresh build/dist artifacts (~15-25 min)",
+        "skip Nuitka; zip/copy whatever is already in build/ (~1 min)",
+        "run both Nuitka builds; do not touch build/dist",
+        "do nothing"
+    )
+    $saved = 0
+    if (Test-Path $prefsFile) {
+        $raw = (Get-Content $prefsFile -Raw).Trim()
+        if ($raw -match '^\d+$') { $saved = [int]$raw }
+    }
+    Write-Host "package_release - choose action (up/down + Enter):" -ForegroundColor Cyan
+    if (Test-Path $prefsFile) { Write-Host "  (last choice preselected; Enter to repeat)" -ForegroundColor DarkGray }
+    $choice = Read-MenuChoice $options $descriptions $saved
+    [Console]::SetCursorPosition(0, [Console]::CursorTop)  # move past menu
+    Set-Content $prefsFile "$choice" -Encoding ascii -NoNewline
+    switch ($choice) {
+        0 { }                                   # full: no flags
+        1 { $SkipBuild = $true }
+        2 { $BuildOnly = $true }
+        3 { Write-Host "bye."; exit 0 }
+    }
+    Write-Host "-> $($options[$choice])" -ForegroundColor Cyan
+}
+
 # ---- Version / detail detection from git -----------------------------------
 if (-not $Version) {
     $desc = (git describe --tags 2>$null)
     if (-not $desc) {
-        # No tags at all: fall back to pyproject.toml
         $pyproject = Get-Content "pyproject.toml" -Raw
         if ($pyproject -match 'version\s*=\s*"([^"]+)"') {
             $Version = $Matches[1]
@@ -67,7 +121,7 @@ if (-not $Version) {
 if (-not $Detail) { $Detail = "release" }
 
 $baseName = "JLinkRTTViewer-v$Version-$Detail-win64"
-$outDir   = "dist/$baseName"
+$outDir   = "build/dist/$baseName"
 
 # ---- 7-Zip detection --------------------------------------------------------
 $sevenZip = $null
@@ -90,6 +144,10 @@ if ($SkipBuild) {
     Write-Host "[1/4] Nuitka build (standalone + onefile)" -ForegroundColor Cyan
     if (-not $SkipStandalone) { cmd /c .\build_nuitka.bat;         if ($LASTEXITCODE -ne 0) { throw "build_nuitka.bat failed" } }
     if (-not $SkipOnefile)    { cmd /c .\build_nuitka_onefile.bat; if ($LASTEXITCODE -ne 0) { throw "build_nuitka_onefile.bat failed" } }
+}
+if ($BuildOnly) {
+    Write-Host "`nDone (build only). Output under build/" -ForegroundColor Green
+    exit 0
 }
 
 # ---- Prepare output dir ------------------------------------------------------
@@ -133,7 +191,6 @@ if (-not $SkipStandalone) {
     $srcMarker = "$distDir/JLinkRTTViewer.exe"
 
     if (Test-Stale "$stageDir/JLinkRTTViewer.exe" $srcMarker) {
-        # dir judged by its inner exe timestamp vs build source
         if (Test-Path $stageDir) {
             Write-Host "   rebuild dir (source newer): $stageDir" -ForegroundColor Yellow
             Remove-Item -Recurse -Force $stageDir
