@@ -91,8 +91,8 @@ def format_hex_dump(data: bytes, base_addr: int = 0, bytes_per_row: int = 16) ->
         hex_col = "  ".join(hex_col_parts)
 
         ascii_col = "".join(chr(b) if 32 <= b <= 126 else "." for b in chunk)
-        # 地址前缀按 4 位 hex 分组，与 hex 数据区节奏一致（每 4 字节一组，组间 2 空格）
-        lines.append(f"0x{addr >> 16:04X} {addr & 0xFFFF:04X}:  {hex_col} |{ascii_col}|")
+        # 地址前缀连续 8 位 hex（0x08000000:），不在中间分组
+        lines.append(f"0x{addr:08X}:  {hex_col} |{ascii_col}|")
     return "\n".join(lines)
 
 

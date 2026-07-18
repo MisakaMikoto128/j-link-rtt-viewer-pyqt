@@ -317,5 +317,10 @@
   "界面字体": "Police UI",
   "(跟随系统)": "(Valeur système)",
   "烧录器:": "Programmateur:",
-  "等待 RTT 断开超时，直接烧录": "Délai d'attente de déconnexion RTT dépassé, programmation directe"
+  "等待 RTT 断开超时，直接烧录": "Délai d'attente de déconnexion RTT dépassé, programmation directe",
+  "扇区擦除（推荐，快）": "Effacement par secteur (recommandé, rapide)",
+  "整片擦除（慢，更干净）": "Effacement complet de la puce (plus lent, plus propre)",
+  "仅烧录": "Programmation seule",
+  "烧录 + 复位": "Programmation + Réinitialisation",
+  "烧录 + 复位 + 运行（推荐）": "Programmation + Réinitialisation + Exécution (recommandé)"
 }

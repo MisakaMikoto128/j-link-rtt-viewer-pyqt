@@ -158,7 +158,7 @@ def test_memory_read_renders_hex_dump(mem_page, qtbot):
     worker.memory_read_finished.emit(0x20000000, data)
     qtbot.wait(50)
     text = page.display.toPlainText()
-    assert "0x2000 0000" in text         # 地址前缀
+    assert "0x20000000" in text          # 地址前缀
     assert "00 01 02 03" in text              # 起始字节
 
 

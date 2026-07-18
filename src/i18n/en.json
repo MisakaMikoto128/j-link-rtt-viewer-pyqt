@@ -317,5 +317,10 @@
   "界面字体": "UI Font Family",
   "(跟随系统)": "(System Default)",
   "烧录器:": "Programmer:",
-  "等待 RTT 断开超时，直接烧录": "RTT disconnect wait timed out, flashing directly"
+  "等待 RTT 断开超时，直接烧录": "RTT disconnect wait timed out, flashing directly",
+  "扇区擦除（推荐，快）": "Sector Erase (recommended, fast)",
+  "整片擦除（慢，更干净）": "Chip Erase (slower, cleaner)",
+  "仅烧录": "Flash Only",
+  "烧录 + 复位": "Flash + Reset",
+  "烧录 + 复位 + 运行（推荐）": "Flash + Reset + Run (recommended)"
 }

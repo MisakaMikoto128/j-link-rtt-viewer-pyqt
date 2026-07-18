@@ -57,9 +57,9 @@ _SIZE_PRESETS = [
 
 _BYTES_PER_ROW_OPTIONS = [8, 16, 32]
 _DTYPES = ["u8", "i8", "u16", "i16", "u32", "i32", "float", "double"]
-# format_hex_dump 每行 hex 区起始列：0xXXXX XXXX: + "  " = 12 + 2 = 14
+# format_hex_dump 每行 hex 区起始列：0xXXXXXXXX: + "  " = 11 + 2 = 13
 # 测试 test_format_hex_dump_row_layout_contract 保护此契约
-_HEX_START_COL = 14
+_HEX_START_COL = 13
 # Diff highlight 阈值——超过这个大小不算 diff（python 字节比较 O(n) + setExtraSelections
 # 大量选区会让 UI 主线程冻结 1-3s）。256 KB 在 STM32 系列上够看一片 RAM 或一两段 flash。
 _DIFF_MAX_SIZE = 256 * 1024
@@ -696,8 +696,8 @@ class MemoryViewerPage(QWidget):
     def _byte_offset_at(self, block_num: int, col: int) -> int:
         """根据 (block行号, 列位置) 反推 buffer 字节偏移；-1 表示越界。
 
-        format_hex_dump 每行：``0xXXXX XXXX:  HH HH HH HH  HH HH HH HH ...``
-        硬契约：hex 区起始 col 16，每字节 ``HH `` 3 字符，每 4 字节末加 1 个分组空格。
+        format_hex_dump 每行：``0xXXXXXXXX:  HH HH HH HH  HH HH HH HH ...``
+        硬契约：hex 区起始 col 13，每字节 ``HH `` 3 字符，每 4 字节末加 1 个分组空格。
         被 _cursor_byte_offset（点击）+ _hover_byte_offset（悬停）共用。
         契约由 test_format_hex_dump_row_layout_contract 保护。
         """
