@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 
-from PySide6.QtCore import QByteArray, QEvent, Qt, QThread, Slot
+from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QThread, Slot
 from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QPainter, QPixmap, QShortcut, QShowEvent
 from PySide6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF
@@ -169,8 +169,15 @@ class MainWindow(FluentWindow):
                 self._logger.warning(f"背景图片加载失败：{path}")
             else:
                 self._bg_pixmap = pixmap
+        self._invalidate_bg_cache()
         if apply_mica:
             self._sync_mica_state()
+
+    def _invalidate_bg_cache(self) -> None:
+        """源图/填充方式/窗口尺寸变化时清掉缓存的缩放结果，下次 paintEvent 重算。"""
+        self._bg_cache_pixmap: QPixmap | None = None
+        self._bg_cache_mode: str = ""
+        self._bg_cache_size: QSize | None = None
 
     def _sync_mica_state(self) -> None:
         """有背景图时关 Mica（让基类打底为不透明 Fluent 色）；无背景图时恢复 Mica。"""
@@ -187,12 +194,19 @@ class MainWindow(FluentWindow):
     @Slot(float)
     def _on_background_opacity_changed(self, opacity: float) -> None:
         self._bg_opacity = max(0.0, min(1.0, float(opacity)))
+        # 透明度变化只影响 setOpacity，不重算缩放缓存——省一次整图缩放。
         self.update()
 
     @Slot(str)
     def _on_background_fill_mode_changed(self, mode: str) -> None:
         self._bg_fill_mode = str(mode)
+        self._invalidate_bg_cache()
         self.update()
+
+    def resizeEvent(self, event) -> None:
+        """窗口尺寸变化 → 缩放缓存失效（下次 paintEvent 重算）。"""
+        super().resizeEvent(event)
+        self._invalidate_bg_cache()
 
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
@@ -205,28 +219,42 @@ class MainWindow(FluentWindow):
         painter.setOpacity(self._bg_opacity)
         rect = self.rect()
         mode = self._bg_fill_mode
-        if mode == "stretch":
-            scaled = pixmap.scaled(rect.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-            painter.drawPixmap(rect, scaled)
-        elif mode == "cover":
-            scaled = pixmap.scaled(rect.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            x = (rect.width() - scaled.width()) // 2
-            y = (rect.height() - scaled.height()) // 2
-            painter.drawPixmap(x, y, scaled)
-        elif mode == "center":
-            x = (rect.width() - pixmap.width()) // 2
-            y = (rect.height() - pixmap.height()) // 2
-            painter.drawPixmap(x, y, pixmap)
-        elif mode == "tile":
-            for x in range(0, rect.width(), pixmap.width()):
-                for y in range(0, rect.height(), pixmap.height()):
-                    painter.drawPixmap(x, y, pixmap)
+        if mode == "center" or mode == "tile":
+            # 原图直接绘（不缩放），无需缓存。
+            if mode == "center":
+                x = (rect.width() - pixmap.width()) // 2
+                y = (rect.height() - pixmap.height()) // 2
+                painter.drawPixmap(x, y, pixmap)
+            else:
+                for x in range(0, rect.width(), pixmap.width()):
+                    for y in range(0, rect.height(), pixmap.height()):
+                        painter.drawPixmap(x, y, pixmap)
         else:
-            scaled = pixmap.scaled(rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            # stretch / cover / else 快照：对缩放结果做尺寸缓存，resize 时失效。
+            # 避免每帧 paintEvent 都重算整图高质量缩放（流畅度下降根因）。
+            scaled = self._cached_scaled_bg(pixmap, rect.size(), mode)
             x = (rect.width() - scaled.width()) // 2
             y = (rect.height() - scaled.height()) // 2
             painter.drawPixmap(x, y, scaled)
         painter.end()
+
+    def _cached_scaled_bg(self, pixmap: QPixmap, size: QSize, mode: str) -> QPixmap:
+        """只当（源图指针/模式/尺寸）任一变化才重算缩放，否则返回缓存。"""
+        if (self._bg_cache_pixmap is not None
+                and not self._bg_cache_pixmap.isNull()
+                and self._bg_cache_mode == mode
+                and self._bg_cache_size == size):
+            return self._bg_cache_pixmap
+        if mode == "stretch":
+            scaled = pixmap.scaled(size, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        elif mode == "cover":
+            scaled = pixmap.scaled(size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        else:
+            scaled = pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self._bg_cache_pixmap = scaled
+        self._bg_cache_mode = mode
+        self._bg_cache_size = QSize(size)
+        return scaled
 
     def _restore_geometry(self) -> None:
         geom_b64 = self._cfg.get("window_geometry")
