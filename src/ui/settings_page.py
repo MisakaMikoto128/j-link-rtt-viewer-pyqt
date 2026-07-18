@@ -21,7 +21,9 @@ from qfluentwidgets import (
     CheckBox,
     ComboBox,
     EditableComboBox,
+    LineEdit,
     PushButton,
+    Slider,
     SpinBox,
     SubtitleLabel,
     Theme,
@@ -191,6 +193,46 @@ class SettingsPage(QWidget):
         row_ui_font_family = _SettingRow("界面字体", self.cb_ui_font)
         self._setting_rows.append(row_ui_font_family)
         app_lay.addWidget(row_ui_font_family)
+
+        # 背景图片（v0.3.0 新增）：路径 + 浏览 + 清除
+        self._lbl_bg_image = BodyLabel(self.tr("背景图片"))
+        self.le_bg_image = LineEdit(self)
+        self.le_bg_image.setReadOnly(True)
+        self.le_bg_image.setPlaceholderText(self.tr("未选择"))
+        self.le_bg_image.setText(self._cfg.get("background_image_path") or "")
+        self.btn_bg_browse = PushButton(self.tr("浏览…"), self)
+        self.btn_bg_clear = PushButton(self.tr("清除"), self)
+        row_bg_image = QHBoxLayout()
+        row_bg_image.addWidget(self._lbl_bg_image)
+        row_bg_image.addWidget(self.le_bg_image, 1)
+        row_bg_image.addWidget(self.btn_bg_browse)
+        row_bg_image.addWidget(self.btn_bg_clear)
+        app_lay.addLayout(row_bg_image)
+        self.btn_bg_browse.clicked.connect(self._on_bg_browse)
+        self.btn_bg_clear.clicked.connect(self._on_bg_clear)
+
+        # 背景透明度（0-100%）
+        self._lbl_bg_opacity = BodyLabel(self.tr("透明度"))
+        self.slider_bg_opacity = Slider(Qt.Horizontal, self)
+        self.slider_bg_opacity.setRange(0, 100)
+        self.slider_bg_opacity.setValue(int(round(float(self._cfg.get("background_opacity")) * 100)))
+        self.slider_bg_opacity.valueChanged.connect(self._on_bg_opacity)
+        row_bg_opacity = QHBoxLayout()
+        row_bg_opacity.addWidget(self._lbl_bg_opacity)
+        row_bg_opacity.addWidget(self.slider_bg_opacity, 1)
+        app_lay.addLayout(row_bg_opacity)
+
+        # 填充方式
+        self._bg_fill_modes = ["stretch", "cover", "center", "tile"]
+        self._lbl_bg_fill = BodyLabel(self.tr("填充方式"))
+        self.cmb_bg_fill = ComboBox(self)
+        self._rebuild_bg_fill_combo()
+        self.cmb_bg_fill.currentIndexChanged.connect(self._on_bg_fill_changed)
+        row_bg_fill = QHBoxLayout()
+        row_bg_fill.addWidget(self._lbl_bg_fill)
+        row_bg_fill.addWidget(self.cmb_bg_fill)
+        row_bg_fill.addStretch(1)
+        app_lay.addLayout(row_bg_fill)
 
         # 系统字体列表（推荐字体置顶）
         families = self._build_font_family_list()
@@ -363,6 +405,41 @@ class SettingsPage(QWidget):
         root.addStretch(1)
 
     # ------------------------------------------------------------------
+    # 背景图片设置
+    # ------------------------------------------------------------------
+    def _rebuild_bg_fill_combo(self) -> None:
+        """重填填充方式下拉，保持当前选中项。语言切换时调用。"""
+        cur_mode = str(self._cfg.get("background_fill_mode"))
+        cur_idx = self._bg_fill_modes.index(cur_mode) if cur_mode in self._bg_fill_modes else 1
+        self.cmb_bg_fill.blockSignals(True)
+        self.cmb_bg_fill.clear()
+        self.cmb_bg_fill.addItems([
+            self.tr("拉伸"), self.tr("覆盖"), self.tr("居中"), self.tr("平铺"),
+        ])
+        self.cmb_bg_fill.setCurrentIndex(cur_idx)
+        self.cmb_bg_fill.blockSignals(False)
+
+    def _on_bg_browse(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, self.tr("选择背景图片"), "",
+            self.tr("图片 (*.png *.jpg *.jpeg *.bmp *.webp)"),
+        )
+        if path:
+            self.le_bg_image.setText(path)
+            self._cfg.set("background_image_path", path)
+
+    def _on_bg_clear(self) -> None:
+        self.le_bg_image.clear()
+        self._cfg.set("background_image_path", "")
+
+    def _on_bg_opacity(self, value: int) -> None:
+        self._cfg.set("background_opacity", value / 100.0)
+
+    def _on_bg_fill_changed(self, index: int) -> None:
+        if 0 <= index < len(self._bg_fill_modes):
+            self._cfg.set("background_fill_mode", self._bg_fill_modes[index])
+
+    # ------------------------------------------------------------------
     # i18n 重翻译
     # ------------------------------------------------------------------
     def changeEvent(self, event: QEvent) -> None:
@@ -415,6 +492,15 @@ class SettingsPage(QWidget):
             self.cb_reset_mode.addItem(self.tr(label[1]))
         self.cb_reset_mode.setCurrentIndex(ridx)
         self.cb_reset_mode.blockSignals(False)
+
+        # 背景图片控件文字
+        self._lbl_bg_image.setText(self.tr("背景图片"))
+        self.btn_bg_browse.setText(self.tr("浏览…"))
+        self.btn_bg_clear.setText(self.tr("清除"))
+        self.le_bg_image.setPlaceholderText(self.tr("未选择"))
+        self._lbl_bg_opacity.setText(self.tr("透明度"))
+        self._lbl_bg_fill.setText(self.tr("填充方式"))
+        self._rebuild_bg_fill_combo()
 
         # 所有 _SettingRow 标题
         for row in self._setting_rows:
