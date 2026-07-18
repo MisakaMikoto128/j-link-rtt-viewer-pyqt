@@ -256,6 +256,7 @@
   "警告": "Avertissement",
   "设备信息": "Infos appareil",
   "设备被物理拔出后自动尝试重连同一台 J-Link": "Reconnecter automatiquement le même J-Link après débranchement physique",
+  "设备连接丢失，等待恢复后自动重连…": "Connexion au périphérique perdue, en attente de reconnexion automatique après restauration…",
   "该地址不在已读取的缓冲区内": "L'adresse n'est pas dans le tampon lu",
   "语言": "Langue",
   "请先到 RTT 监控页连接 J-Link": "Veuillez d'abord connecter J-Link sur la page de surveillance RTT",

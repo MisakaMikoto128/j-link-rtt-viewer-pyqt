@@ -573,82 +573,37 @@ def test_enumerate_devices_skips_invalid_serial(worker):
     assert got[-1] == "555|Real"
 
 
-def test_auto_reconnect_after_unexpected_disconnect(worker):
-    """物理掉线 + 自动重连使能：emit reconnect_status(disconnect_reconnecting)，
-    串行匹配 serial 后重连成功 -> emit success；只认上次那台 J-Link。"""
-    from types import SimpleNamespace
-    from PySide6.QtCore import QMetaObject
+def test_unexpected_disconnect_does_not_start_reconnect_timer(worker):
+    """本轮重构：worker 不再拥有 reconnect timer；意外断开后只 emit 标识并回到 IDLE。"""
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
     jl.serial_number = 12345678
     jl.rtt_read.return_value = []
-    # 枚举返回目标 serial（同一台 J-Link 还在）
-    jl.connected_emulators.return_value = [SimpleNamespace(SerialNumber=12345678)]
-
     w.set_auto_reconnect_requested.emit(True)
     _drain_events(0.2)
-    assert w._auto_reconnect_enabled is True
 
-    status = []
-    w.reconnect_status.connect(lambda k, d: status.append((k, d)))
     w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.5)
     assert w.state_name() == "CONNECTED"
 
-    # 模拟物理掉线：rtt_read 抛异常 -> drain 检出 -> 走自动重连路径
+    unexpected = []
+    states = []
+    w.unexpected_disconnect.connect(lambda d: unexpected.append(d))
+    w.connection_state_changed.connect(lambda c: states.append(c))
+
     jl.rtt_read.side_effect = RuntimeError("device gone")
     deadline = time.time() + 2.0
-    while not any(k == "disconnect_reconnecting" for k, _ in status) and time.time() < deadline:
+    while not unexpected and time.time() < deadline:
         QCoreApplication.processEvents()
         time.sleep(0.02)
-    assert any(k == "disconnect_reconnecting" for k, _ in status), f"应 emit disconnect_reconnecting，got {status}"
+
+    assert unexpected, "应 emit unexpected_disconnect"
+    assert "12345678" in unexpected[0]
     assert w.state_name() == "IDLE"
-    assert w._reconnect_timer is not None and w._reconnect_timer.isActive(), "重连 timer 应已启动"
-
-    # 恢复 rtt_read（重连后的新读线程不应再立即抛异常），手动驱动一拍重连（worker 线程）
-    jl.rtt_read.side_effect = None
-    jl.rtt_read.return_value = []
-    QMetaObject.invokeMethod(w, "_reconnect_tick", Qt.ConnectionType.QueuedConnection)
-    deadline = time.time() + 2.0
-    while not any(k == "success" for k, _ in status) and time.time() < deadline:
-        QCoreApplication.processEvents()
-        time.sleep(0.02)
-    assert any(k == "success" for k, _ in status), f"应 emit success，got {status}"
-    assert w.state_name() == "CONNECTED"
-
-
-def test_auto_reconnect_only_matches_same_serial(worker):
-    """串行匹配：枚举里没有目标 serial 时不重连（避免误连另一台 J-Link）。"""
-    from types import SimpleNamespace
-    w, jl = worker
-    jl.opened.return_value = False
-    jl.connected.return_value = True
-    jl.serial_number = 12345678
-    jl.rtt_read.return_value = []
-    w.set_auto_reconnect_requested.emit(True)
-    _drain_events(0.2)
-    status = []
-    w.reconnect_status.connect(lambda k, d: status.append((k, d)))
-    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
-    _drain_events(0.5)
-
-    # 掉线
-    jl.rtt_read.side_effect = RuntimeError("gone")
-    deadline = time.time() + 2.0
-    while not any(k == "disconnect_reconnecting" for k, _ in status) and time.time() < deadline:
-        QCoreApplication.processEvents()
-        time.sleep(0.02)
-
-    # 枚举返回的是【另一台】J-Link（serial 不同）-> 不应 attempt
-    jl.connected_emulators.return_value = [SimpleNamespace(SerialNumber=99999999)]
-    jl.rtt_read.side_effect = None
-    from PySide6.QtCore import QMetaObject
-    QMetaObject.invokeMethod(w, "_reconnect_tick", Qt.ConnectionType.QueuedConnection)
-    _drain_events(0.4)
-    assert not any(k == "attempt" for k, _ in status), "serial 不匹配不应发起重连"
-    assert not any(k == "success" for k, _ in status), "另一台 J-Link 不应被误连"
-    assert w.state_name() == "IDLE"
+    assert False in states
+    # 关键：worker 不再创建 _reconnect_timer
+    assert not hasattr(w, "_reconnect_timer") or w._reconnect_timer is None
 
 
 # ============================================================
@@ -942,38 +897,6 @@ def test_remote_connect_failure_logs_friendly_error(worker):
     assert errors
     assert "无法连接远程 J-Link" in errors[0][1]
     assert "192.168.79.1:19020" in errors[0][1]
-
-
-def test_remote_reconnect_skips_usb_enumeration(worker):
-    """远程掉线后自动重连：connected_emulators 返回空也应尝试 _do_connect(remote_addr)。"""
-    from PySide6.QtCore import QMetaObject
-    w, jl = worker
-    jl.opened.return_value = False
-    jl.connected.return_value = True
-    jl.serial_number = 602717758
-    _set_allocated_channels(jl, 1)
-    jl.rtt_read.return_value = []
-    # 如果 _reconnect_tick 错误地调用 USB 枚举，这个返回值会让它静默返回；
-    # 但远程分支应跳过枚举，仍然发起重连。
-    jl.connected_emulators.return_value = []
-
-    # 伪造上次连接参数（远程）
-    w._last_connect_params = ("STM32F030F4", "SWD", 4000, 0, "602717758", "192.168.79.1:19020")
-    w._reconnect_target_serial = "602717758"
-    w._reconnect_remote_addr = "192.168.79.1:19020"
-    w._auto_reconnect_enabled = True
-
-    status = []
-    w.reconnect_status.connect(lambda k, d: status.append((k, d)))
-
-    # 通过 QueuedConnection 让 _reconnect_tick 在 worker 线程执行，贴近真实调度
-    QMetaObject.invokeMethod(w, "_reconnect_tick", Qt.ConnectionType.QueuedConnection)
-    _drain_events(1.0)
-
-    assert any(k == "attempt" for k, _ in status), f"应 emit attempt，got {status}"
-    # 远程分支应直接尝试连接，而不是因枚举为空就静默返回
-    assert jl.open.called, "远程重连应跳过 USB 枚举并尝试 _do_connect"
-    assert jl.open.call_args.kwargs.get("ip_addr") == "192.168.79.1:19020"
 
 
 def test_local_connect_stores_six_tuple_with_empty_remote_addr(worker):

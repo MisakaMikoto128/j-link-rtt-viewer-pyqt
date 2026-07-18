@@ -134,6 +134,7 @@ _DEFAULT_BG_QCOLOR = QColor("#222222")
 _DEFAULT_SEND_ECHO_COLOR = "#FFA500"  # 发送回显默认色（橙色）
 _REMOTE_MARK_COLOR = "#5599ff"  # 远程连接标记色（蓝）
 _DISCONNECT_ALERT_COLOR = "#cc0000"  # 意外断开红字提示色（与 ANSI red 一致）
+_PENDING_RECONNECT_COLOR = "#ff8c00"  # 等待自动重连提示色（橙）
 
 # 自动重连各阶段提示色：disconnect=橙红（告警）、attempt=琥珀（进行中）、
 # success=绿、failed=红、cancelled=灰。
@@ -465,6 +466,7 @@ class RTTMonitorPage(QWidget):
         # 真状态（worker 端的连接状态镜像）。按钮文字是呈现，不能当状态判断；
         # 由 _on_state_changed 维护。
         self._is_connected = False
+        self._pending_reconnect: bool = False  # 非用户主动断开后等待重连
 
         # 烧录期间锁定连接按钮：flash_page 通过 set_flash_busy 控制
         self._flash_busy = False
@@ -1576,10 +1578,23 @@ class RTTMonitorPage(QWidget):
         QThreadPool.globalInstance().start(runnable)
 
     def _on_remote_probe_done(self, ok: bool) -> None:
-        """后台探测完成 → 更新红点状态。"""
+        """后台探测完成 → 更新红点状态 + 远程模式重连边沿检测。"""
+        previous = self._remote_reachable
         self._remote_reachable = ok
         self._remote_probe_in_flight = False
         self._sync_jlink_status_dot()
+
+        # 边沿检测：避免每次 400ms 探测都触发动作
+        if previous is True and ok is False and self._is_connected:
+            # 远程 J-Link 从可达变不可达 → 断开并进入等待重连态
+            self._request_disconnect(pending_reconnect=True)
+        elif (previous is False and ok is True
+              and self._pending_reconnect and not self._is_connected):
+            # 远程 J-Link 恢复且我们在等待重连 → 自动发起连接
+            host = self.le_remote_host.text().strip()
+            port = self.le_remote_port.text().strip()
+            self._emit_connect_remote_request(host, port)
+        # previous is None（启动首次探测）不触发任何动作
 
     # ------------------------------------------------------------------
     # 槽函数
@@ -1695,17 +1710,36 @@ class RTTMonitorPage(QWidget):
         # 同步红点：currentText 不在 items 里 → 显示红点（离线占位）
         self._sync_jlink_status_dot()
 
-        # 拔掉检测：上次选中的 serial 没了 + 当前已连接 → 立刻断开
+        # 拔掉检测：上次选中的 serial 没了 + 当前已连接 → 立刻断开（pending_reconnect）
         # 远程项不是 USB 设备，跳过。
         if (prev and prev not in serials and prev != remote_text
                 and self._is_connected):
             _infobar.warn(self, self.tr("提示"),
                           self.tr("当前连接的 J-Link（S/N: {sn}）已断开").format(sn=prev))
-            self._set_disconnected_ui()
-            self._worker.disconnect_requested.emit()
+            self._request_disconnect(pending_reconnect=True)
+            return
+
+        # 恢复检测：目标 serial 回来了 + 我们在等待自动重连 + 当前未连接
+        if (prev and prev in serials and prev != remote_text
+                and not self._is_connected and self._pending_reconnect):
+            self._pending_reconnect = False
+            self._emit_connect_request(prev)
+
+    def _request_disconnect(self, *, pending_reconnect: bool = False) -> None:
+        """请求 worker 断开。pending_reconnect=True 表示这是自动检测到的断开
+        （USB 枚举消失 / 远程不可达 / 读线程异常），自动重连开启时应进入等待恢复态。"""
+        self._set_disconnected_ui()  # 幂等
+        self._worker.disconnect_requested.emit()
+        if pending_reconnect and self._cfg.get("auto_reconnect"):
+            self._pending_reconnect = True
+            self._append_styled_line(
+                self.tr("设备连接丢失，等待恢复后自动重连…") + "\n",
+                _PENDING_RECONNECT_COLOR, bold=True)
 
     def _on_connect_clicked(self) -> None:
         if not self._is_connected:
+            # 用户主动发起连接：清除等待重连态（如果有）
+            self._pending_reconnect = False
             target = self.cb_target.currentText().strip()
             if not target:
                 _infobar.warn(self, self.tr("提示"), self.tr("请先选择目标芯片"))
@@ -1772,12 +1806,64 @@ class RTTMonitorPage(QWidget):
             self.btn_connect.setText(self.tr("连接中…"))
             self._worker.connect_requested.emit(target, iface, speed, channel, jlink_serial)
         else:
-            # 先恢复 UI 再 emit：万一 emit 异常或被堵也不影响按钮已经切回"连接"。
-            # worker 内部 _do_disconnect 全部 try/except，不会失败。
-            # 跨线程 connection_state_changed 信号回来时走 _on_state_changed → _set_disconnected_ui()，
-            # 幂等无害。
-            self._set_disconnected_ui()
-            self._worker.disconnect_requested.emit()
+            # 用户主动断开：pending_reconnect=False，不进入自动等待态。
+            self._request_disconnect(pending_reconnect=False)
+
+    def _emit_connect_request(self, jlink_serial: str) -> None:
+        """按当前 UI 参数 emit connect_requested（本地 USB 模式）。"""
+        target = self.cb_target.currentText().strip()
+        if not target:
+            _infobar.warn(self, self.tr("提示"), self.tr("请先选择目标芯片"))
+            return
+        iface = self.cb_iface.currentText()
+        speed = int(self.cb_speed.currentText())
+        channel = self.sp_channel.value()
+        # 持久化用户选择
+        self._cfg.set("target_mcu", target)
+        self._cfg.set("interface", iface)
+        self._cfg.set("speed_khz", speed)
+        self._cfg.set("rtt_channel", channel)
+        self._cfg.set("last_jlink_serial", jlink_serial)
+        self._cfg.set("jlink_mode", "usb")
+        # 立即给 UI 反馈
+        self.btn_connect.setEnabled(False)
+        self.btn_connect.setText(self.tr("连接中…"))
+        self._worker.connect_requested.emit(target, iface, speed, channel, jlink_serial)
+
+    def _emit_connect_remote_request(self, host: str, port: str) -> None:
+        """按当前 UI 参数 emit connect_remote_requested（远程模式）。
+
+        调用方应已确认 host 可解析且 TCP 可达（如 _on_remote_probe_done 的
+        上升沿）。本 helper 做最终校验 + 持久化 + UI 反馈。
+        """
+        target = self.cb_target.currentText().strip()
+        if not target:
+            _infobar.warn(self, self.tr("提示"), self.tr("请先选择目标芯片"))
+            return
+        resolved = resolve_remote_host(host)
+        if resolved is None:
+            _infobar.warn(
+                self, self.tr("提示"),
+                self.tr('无法解析主机名 "{host}"，请检查输入').format(host=host))
+            return
+        if not is_valid_port(port):
+            _infobar.warn(self, self.tr("提示"), self.tr("端口无效（1-65535）"))
+            return
+        iface = self.cb_iface.currentText()
+        speed = int(self.cb_speed.currentText())
+        channel = self.sp_channel.value()
+        self._cfg.set("target_mcu", target)
+        self._cfg.set("interface", iface)
+        self._cfg.set("speed_khz", speed)
+        self._cfg.set("rtt_channel", channel)
+        self._cfg.set("jlink_mode", "remote")
+        self._cfg.set("last_remote_host", host)
+        self._cfg.set("last_remote_port", port)
+        self._pending_reconnect = False
+        self.btn_connect.setEnabled(False)
+        self.btn_connect.setText(self.tr("连接中…"))
+        self._worker.connect_remote_requested.emit(
+            target, iface, speed, channel, f"{resolved}:{port}")
 
     def _apply_reset_mode_to_button(self, mode: str) -> None:
         """按 cfg.reset_mode 刷新 btn_reset 文字 + tooltip。"""
@@ -2073,6 +2159,8 @@ class RTTMonitorPage(QWidget):
     def _on_state_changed(self, connected: bool) -> None:
         from datetime import datetime
         if connected:
+            # 成功连接：取消等待重连态
+            self._pending_reconnect = False
             # 同步从 worker 取 device_info（lock 保护，不走跨线程 dict signal）
             info = self._worker.get_device_info()
             self._set_connected_ui(info)
@@ -2119,11 +2207,11 @@ class RTTMonitorPage(QWidget):
         self._update_channel_tooltip()
 
     def _on_unexpected_disconnect(self, device: str) -> None:
-        """物理掉线：在显示区追加一行红色时间戳提示。
+        """物理掉线：在显示区追加一行红色时间戳提示，然后进入 pending_reconnect 等待态。
 
         worker 检出 rtt_read 异常后 emit 设备标识；此处生成时间戳并染色插入。
-        连接按钮状态由随后的 connection_state_changed(False) -> _set_disconnected_ui
-        切回“连接”。
+        本轮重构：自动重连由 UI 侧轮询驱动，因此这里显式调 _request_disconnect
+        （pending_reconnect=True）进入等待恢复态。
         """
         from datetime import datetime
         now = datetime.now()
@@ -2133,11 +2221,17 @@ class RTTMonitorPage(QWidget):
         else:
             msg = f"{ts} -> {device} {self.tr('连接意外断开')}\n"
         self._append_styled_line(msg, _DISCONNECT_ALERT_COLOR, bold=True)
+        self._request_disconnect(pending_reconnect=True)
 
     def _on_auto_reconnect_toggled(self, checked: bool) -> None:
-        """「自动重连」复选框：持久化 + 通知 worker（worker 取消时会停轮询 timer）。"""
+        """「自动重连」复选框：持久化 + 通知 worker（worker 仅记录标志位）。
+
+        取消勾选时清除 pending_reconnect，避免用户关闭自动重连后仍进入等待态。
+        """
         self._cfg.set("auto_reconnect", checked)
         self._worker.set_auto_reconnect_requested.emit(checked)
+        if not checked:
+            self._pending_reconnect = False
 
     def _on_reconnect_status(self, kind: str, detail: str) -> None:
         """自动重连状态：worker emit (kind, detail) -> UI 生成时间戳 + 染色行插入显示区。

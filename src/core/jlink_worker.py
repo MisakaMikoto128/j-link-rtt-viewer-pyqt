@@ -104,9 +104,9 @@ class JLinkWorker(QObject):
     # 在 worker 线程 emit 设备标识给 UI（红字提示）。不让 read_thread 直接 emit：
     # native threading.Thread emit Qt 跨线程信号在 PySide6 上不可靠（同 _rtt_drain_buffer）。
     unexpected_disconnect = Signal(str)
-    # 自动重连状态：worker -> UI，在显示区追加带时间戳的染色行。
-    # arg1=kind（disconnect_reconnecting/attempt/success/failed/cancelled），
-    # arg2=detail（设备标识 / 重试次数 str）。不传 dict，符合跨线程信号规则。
+    # 自动重连状态：历史信号。本轮重构后 worker 不再拥有重连 timer，
+    # 该信号不再由 worker  emit；自动重连完全由 UI 侧现有轮询驱动。
+    # 保留信号定义以免外部代码引用报错，可视为已废弃。
     reconnect_status = Signal(str, str)
     # 注意：connection_state_changed 不传 dict——PySide6 跨线程 emit dict
     # 会触发 setParent cross-thread 警告并卡 worker 线程。设备信息改用
@@ -160,24 +160,16 @@ class JLinkWorker(QObject):
         self._device_info: dict = {}
         self._info_lock = threading.Lock()
 
-        # 上次成功连接的参数，给 auto_reconnect 模式重连用（worker 自给自足，
-        # UI 不再需要重新 emit connect_requested）。6 元组：
+        # 上次成功连接的参数，6 元组：
         # (target, iface, speed, channel, actual_serial, remote_addr)
         # - serial 是第 5 元素；remote_addr 是第 6 元素，本地连接为 ""，远程连接为 "ip:port"。
-        # - auto_reconnect 重连时必须显式带 serial：本地模式下只有上次那台 J-Link 还在接入
-        #   （serial 出现在 connected_emulators() 里）才允许重连——否则用户换了另一台
-        #   J-Link 会被 open() 空参默认误连（CLAUDE.md 多 J-Link 设计原则）。
-        # - 远程模式则不校验 USB 枚举，直接按 remote_addr 重试。
+        # 历史：该字段原用于 worker 内部的 auto_reconnect 轮询；本轮重构后 worker 不再
+        # 拥有重连 timer，但 UI 仍用它回放上次连接参数，因此继续保留。
         self._last_connect_params: tuple[str, str, int, int, str, str] | None = None
 
-        # 自动重连（物理掉线后）：UI 勾选「自动重连」使能。掉线时若已使能，
-        # 启动 _reconnect_timer 轮询：本地模式只认上次那个 serial，找到后 _do_connect 重连；
-        # 远程模式跳过 USB 枚举，直接按 remote_addr 重试。失败 3s 后重试，直到成功或用户取消。
+        # 自动重连（物理掉线后）：仅作为标志位记录 UI 配置，worker 不再主动轮询重连。
+        # 重连策略完全由 UI 侧的 USB 枚举（200ms）/ 远程 TCP 探测（400ms）驱动。
         self._auto_reconnect_enabled: bool = False
-        self._reconnect_timer: QTimer | None = None
-        self._reconnect_target_serial: str | None = None
-        self._reconnect_remote_addr: str = ""
-        self._reconnect_attempt: int = 0
 
         # 设备枚举：worker 内建 200ms 轮询 timer，自动广播 devices_enumerated。
         # UI 各页面只连接信号消费，不各自起轮询（全局唯一轮询源）。
@@ -235,13 +227,6 @@ class JLinkWorker(QObject):
         self._rtt_drain_timer.setInterval(50)
         self._rtt_drain_timer.timeout.connect(self._drain_rtt_buffer)
         self._rtt_drain_timer.start()
-
-        # 自动重连轮询 timer：3s 一次，worker 线程 affinity。掉线后按需 start；
-        # 成功 / 取消时 stop。timeout 在 worker 线程触发，_reconnect_tick 内 emit
-        # reconnect_status 安全（同 _drain_rtt_buffer 的 worker-thread emit 模式）。
-        self._reconnect_timer = QTimer()
-        self._reconnect_timer.setInterval(3000)
-        self._reconnect_timer.timeout.connect(self._reconnect_tick)
 
         # J-Link 设备枚举 timer：200ms 一次，worker 线程内自动广播 devices_enumerated。
         # UI 各页面只消费该信号，不各自起轮询（全局唯一轮询源）。
@@ -342,15 +327,12 @@ class JLinkWorker(QObject):
                     jlink_serial: str) -> None:
         """connect_requested 信号槽。实现在 _do_connect，方便其他 worker 内部
         路径（如 _reset_with_reconnect）以普通函数方式直接调，不走信号队列。"""
-        # 手动连接取消正在进行的自动重连，避免与定时器的 _do_connect 赛跑
-        self._stop_reconnect()
         self._do_connect(target, iface, speed, channel, jlink_serial)
 
     @Slot(str, str, int, int, str)
     def _on_connect_remote(self, target: str, iface: str, speed: int, channel: int,
                            remote_addr: str) -> None:
         """connect_remote_requested 信号槽：连接远程 J-Link（Remote Server）。"""
-        self._stop_reconnect()
         self._do_connect(target, iface, speed, channel, "", remote_addr)
 
     def _do_connect(self, target: str, iface: str, speed: int, channel: int,
@@ -463,8 +445,6 @@ class JLinkWorker(QObject):
 
     @Slot()
     def _on_disconnect(self) -> None:
-        # 手动断开取消自动重连（用户主动行为，不应再自动重连）
-        self._stop_reconnect()
         self._do_disconnect()
 
     def _do_disconnect(self) -> None:
@@ -488,7 +468,7 @@ class JLinkWorker(QObject):
         if pending_unexpected:
             # 临时恢复 CONNECTED 让 _on_unexpected_disconnect 的守卫通过（它会再走
             # 一遍 _do_disconnect 做清理，那时 pending 已清，走正常分支到 IDLE）。
-            # auto_reconnect 路径的 _start_reconnect 也在 _on_unexpected_disconnect 里。
+            # 本轮重构后 _on_unexpected_disconnect 内不再启动自动重连 timer。
             self._state = _STATE_CONNECTED
             self._on_unexpected_disconnect()
             return  # _on_unexpected_disconnect 内部已走完整断开流程
@@ -696,6 +676,10 @@ class JLinkWorker(QObject):
 
         状态守卫：若已不在 CONNECTED（用户主动断开与掉线竞态），直接返回，
         不重复清理也不误报红字。
+
+        本轮重构：worker 不再拥有重连 timer/policy，自动重连完全由 UI 侧
+        现有轮询（USB 枚举 200ms / 远程 TCP 探测 400ms）驱动。此处只 emit
+        unexpected_disconnect 设备标识，然后 _do_disconnect 收尾。
         """
         if self._state != _STATE_CONNECTED:
             return
@@ -703,111 +687,20 @@ class JLinkWorker(QObject):
             serial = self._device_info.get("jlink_serial")
         identifier = f"J-Link {serial}" if serial else "-"
         self._logger.error(f"检测到意外断开：{identifier}")
-        params = self._last_connect_params
-        remote = params[5] if params and len(params) >= 6 else ""
-        self._logger.info(
-            f"自动重连判定：enabled={self._auto_reconnect_enabled}, "
-            f"params={'有' if params else '无'}, serial={serial}, remote={remote!r}"
-        )
-        if self._auto_reconnect_enabled and params and serial:
-            # 自动重连：发"正在尝试自动重连"提示 -> 干净断开 -> 启动轮询定时器。
-            # 用 reconnect_status 而非 unexpected_disconnect：UI 显示橙色"正在重连"行。
-            # 远程连接的 remote_addr 从 6 元组第 6 元素（索引 5）取；本地为 ""。
-            self.reconnect_status.emit("disconnect_reconnecting", identifier)
-            self._do_disconnect()
-            self._start_reconnect(str(serial), remote)
-        else:
-            self.unexpected_disconnect.emit(identifier)
-            self._do_disconnect()
+        self.unexpected_disconnect.emit(identifier)
+        self._do_disconnect()
 
     # ============================================================
-    # 自动重连（物理掉线后）
+    # 自动重连（物理掉线后）—— 已废弃：worker 不再拥有重连 timer/policy。
+    # 保留 _on_set_auto_reconnect 槽仅记录 UI 配置标志，用于日志/诊断。
     # ============================================================
     @Slot(bool)
     def _on_set_auto_reconnect(self, enabled: bool) -> None:
-        """UI 勾选/取消「自动重连」。取消时若正在重连，停止并提示。"""
+        """UI 勾选/取消「自动重连」。worker 仅记录标志，不再启动/停止重连。"""
         self._auto_reconnect_enabled = enabled
-        if not enabled:
-            self._stop_reconnect(emit_cancelled=True)
 
-    def _start_reconnect(self, serial: str, remote_addr: str = "") -> None:
-        """non-slot helper：记录目标 serial/remote_addr + 复位计数 + 启动 3s 轮询 timer。"""
-        self._reconnect_target_serial = serial
-        self._reconnect_remote_addr = remote_addr
-        self._reconnect_attempt = 0
-        timer_active = self._reconnect_timer.isActive() if self._reconnect_timer else "N/A"
-        self._logger.info(
-            f"启动自动重连轮询：serial={serial}, remote={remote_addr!r}, "
-            f"timer_active={timer_active}"
-        )
-        if self._reconnect_timer is not None and not self._reconnect_timer.isActive():
-            self._reconnect_timer.start()
-
-    def _stop_reconnect(self, *, emit_cancelled: bool = False) -> None:
-        """non-slot helper：停 timer + 清状态。emit_cancelled=True 时发「已取消」提示。"""
-        was_active = (self._reconnect_timer is not None
-                      and self._reconnect_timer.isActive())
-        if self._reconnect_timer is not None:
-            self._reconnect_timer.stop()
-        self._reconnect_target_serial = None
-        self._reconnect_remote_addr = ""
-        self._reconnect_attempt = 0
-        if emit_cancelled and was_active:
-            self.reconnect_status.emit("cancelled", "")
-
-    @Slot()
-    def _reconnect_tick(self) -> None:
-        """worker 线程 3s 一次：轮询目标 J-Link 是否回来，回来就 _do_connect 重连。
-
-        本地模式：只认 _reconnect_target_serial（= 上次连接的 J-Link），避免用户
-        插了另一个 J-Link 被误连。先枚举确认 serial 在接入列表里（不在则静默
-        等下一拍），再让 _do_connect 内部用 6 元组第 5 元素的真实 serial 做最终
-        把关——两层防御。
-
-        远程模式：跳过 USB 枚举（远程设备不会出现在 connected_emulators() 里），
-        直接用 6 元组里的 remote_addr 重试。
-
-        成功 -> 停 timer + emit success；失败 -> emit failed，下一拍（3s）再试。
-        """
-        if self._reconnect_target_serial is None:
-            self._stop_reconnect()
-            return
-        # 已连上（竞态/手动连接成功）-> 收尾
-        if self._state == _STATE_CONNECTED:
-            self._stop_reconnect()
-            return
-
-        # 远程模式：跳过 USB presence check
-        if not self._reconnect_remote_addr:
-            # 目标 J-Link 还没回来 -> 静默等下一拍（不 attempt、不刷屏）
-            try:
-                emus = self.jlink.connected_emulators()
-            except Exception as e:
-                self._logger.warning(f"重连轮询枚举失败：{e}")
-                return   # 枚举本身异常，下一拍再试
-            if not any(str(int(getattr(e, "SerialNumber", 0) or 0)) == self._reconnect_target_serial
-                       for e in emus):
-                return   # 设备还没插回，静默等
-
-        self._logger.info(
-            f"重连轮询 tick：target_serial={self._reconnect_target_serial}, "
-            f"remote={self._reconnect_remote_addr!r}, attempt={self._reconnect_attempt + 1}"
-        )
-        self._reconnect_attempt += 1
-        n = self._reconnect_attempt
-        self.reconnect_status.emit("attempt", str(n))
-        params = self._last_connect_params
-        if params is None:
-            self._stop_reconnect(emit_cancelled=True)
-            return
-        # 6 元组第 5 元素 = 上次连接的 J-Link serial，交给 _do_connect 最终把关
-        self._do_connect(*params)
-        if self._state == _STATE_CONNECTED:
-            self.reconnect_status.emit("success", str(n))
-            self._stop_reconnect()
-        else:
-            self.reconnect_status.emit("failed", str(n))   # 3s 后下一拍再试
-
+    # 历史：worker 内部曾用 _start_reconnect / _stop_reconnect / _reconnect_tick
+    # 实现 3s 轮询自动重连。重构后该职责移交 UI 侧现有轮询，以下方法已删除。
 
     @Slot(str, bool)
     def _on_send_data(self, data: str, is_hex: bool) -> None:
@@ -1082,10 +975,6 @@ class JLinkWorker(QObject):
             self._rtt_drain_timer.stop()
             self._rtt_drain_timer.deleteLater()
             self._rtt_drain_timer = None
-        if self._reconnect_timer is not None:
-            self._reconnect_timer.stop()
-            self._reconnect_timer.deleteLater()
-            self._reconnect_timer = None
         if self._enum_timer is not None:
             self._enum_timer.stop()
             self._enum_timer.deleteLater()

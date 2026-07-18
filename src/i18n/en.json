@@ -256,6 +256,7 @@
   "警告": "Warning",
   "设备信息": "Device Info",
   "设备被物理拔出后自动尝试重连同一台 J-Link": "Automatically reconnect to the same J-Link after it's physically unplugged",
+  "设备连接丢失，等待恢复后自动重连…": "Device connection lost, waiting to auto-reconnect once restored…",
   "该地址不在已读取的缓冲区内": "Address not in the read buffer",
   "语言": "Language",
   "请先到 RTT 监控页连接 J-Link": "Please connect J-Link on the RTT Monitor page first",

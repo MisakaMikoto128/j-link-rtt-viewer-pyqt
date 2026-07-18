@@ -646,6 +646,37 @@ def test_disconnect_when_connected_jlink_removed(rtt_page, qtbot):
     assert disconnects, "应 emit disconnect_requested"
 
 
+def test_usb_unplug_replug_auto_reconnect(rtt_page, qtbot):
+    """自动重连开启时：USB 枚举消失 → pending_reconnect；同一 serial 回来 → 自动连接。"""
+    page, worker, cfg = rtt_page
+    cfg.set("auto_reconnect", True)
+    worker.devices_enumerated.emit("111|A;222|B")
+    qtbot.wait(30)
+    page.cb_jlink.setCurrentIndex(1)   # 选 222
+    qtbot.wait(10)
+    page._set_connected_ui(worker.get_device_info())
+    assert page._is_connected is True
+
+    disconnects = []
+    connects = []
+    worker.disconnect_requested.connect(lambda: disconnects.append(1))
+    worker.connect_requested.connect(lambda *args: connects.append(args))
+
+    # 222 被拔掉
+    worker.devices_enumerated.emit("111|A")
+    qtbot.wait(30)
+    assert page._is_connected is False
+    assert disconnects, "应 emit disconnect_requested"
+    assert page._pending_reconnect is True, "自动重连开启时应进入等待态"
+
+    # 222 重新接入
+    worker.devices_enumerated.emit("111|A;222|B")
+    qtbot.wait(30)
+    assert len(connects) == 1, "同一 serial 回来应自动发起连接"
+    assert connects[0][4] == "222", f"应使用上次选中的 serial 222，got {connects[0]}"
+    assert page._pending_reconnect is False, "发起连接后应清除等待态"
+
+
 # ============================================================
 # 远程连接（Remote Server）
 # ============================================================
@@ -738,6 +769,50 @@ def test_remote_dot_reflects_reachability(rtt_page, qtbot):
     assert not page._jlink_status_dot.isHidden()
     page._on_remote_probe_done(True)
     assert page._jlink_status_dot.isHidden()
+
+
+def test_remote_probe_reconnect_driven_by_ui(rtt_page, qtbot, monkeypatch):
+    """自动重连开启时：远程探测 False→True 边沿触发 connect_remote_requested。"""
+    import ui.rtt_monitor_page as rtt_mod
+    page, worker, cfg = rtt_page
+    cfg.set("auto_reconnect", True)
+    worker.devices_enumerated.emit("111|A")
+    qtbot.wait(30)
+    page.cb_jlink.setCurrentIndex(page.cb_jlink.count() - 1)
+    page.cb_target.setText("STM32H750VB")
+    page.cb_iface.setCurrentText("SWD")
+    page.cb_speed.setCurrentText("4000")
+    page.sp_channel.setValue(0)
+    page.le_remote_host.setText("127.0.0.1")
+    page.le_remote_port.setText("19020")
+
+    # 模拟已连接远程 J-Link
+    info = worker.get_device_info()
+    info["remote_addr"] = "127.0.0.1:19020"
+    info["jlink_serial"] = "602717758"
+    page._set_connected_ui(info)
+    assert page._is_connected is True
+
+    emitted: list[tuple] = []
+    disconnects = []
+    worker.connect_remote_requested.connect(lambda *args: emitted.append(args))
+    worker.disconnect_requested.connect(lambda: disconnects.append(1))
+
+    # 先建立可达基线，再模拟掉线（False→True→False 边沿）
+    page._on_remote_probe_done(True)
+    qtbot.wait(20)
+    # 探测由可达变不可达 → 断开 + pending_reconnect
+    page._on_remote_probe_done(False)
+    qtbot.wait(20)
+    assert disconnects, "远程不可达时应 emit disconnect_requested"
+    assert page._pending_reconnect is True
+
+    # 探测恢复 → 自动发起远程连接
+    page._on_remote_probe_done(True)
+    qtbot.wait(20)
+    assert len(emitted) == 1, f"恢复后应 emit connect_remote_requested，got {emitted}"
+    assert emitted[0][4] == "127.0.0.1:19020"
+    assert page._pending_reconnect is False
 
 
 def test_set_connected_ui_shows_remote_mark(rtt_page, qtbot):
