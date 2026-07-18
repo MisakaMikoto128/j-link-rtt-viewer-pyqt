@@ -144,3 +144,47 @@ def test_ui_font_family_auto_emits_empty(settings_page, qtbot):
     qtbot.wait(20)
     assert cfg.get("ui_font_family") == ""
     assert "" in received
+
+
+# === 背景图片（v0.3.0 新增）===
+
+
+def test_settings_page_has_background_controls(settings_page):
+    """SettingsPage 应包含背景图片相关控件。"""
+    page, cfg = settings_page
+    assert hasattr(page, "le_bg_image")
+    assert hasattr(page, "btn_bg_browse")
+    assert hasattr(page, "btn_bg_clear")
+    assert hasattr(page, "slider_bg_opacity")
+    assert hasattr(page, "cmb_bg_fill")
+
+
+def test_settings_page_opacity_slider_writes_float(settings_page, qtbot):
+    """拖动透明度滑块应往 cfg 写入 float 值。"""
+    page, cfg = settings_page
+    page.slider_bg_opacity.setValue(75)
+    qtbot.wait(20)
+    val = cfg.get("background_opacity")
+    assert isinstance(val, float), f"expected float, got {type(val)}"
+    assert abs(val - 0.75) < 1e-6
+
+
+def test_settings_page_clear_background(settings_page, qtbot):
+    """点击清除按钮应置空 background_image_path。"""
+    page, cfg = settings_page
+    cfg.set("background_image_path", "/tmp/fake.png")
+    page.btn_bg_clear.click()
+    qtbot.wait(20)
+    assert cfg.get("background_image_path") == ""
+
+
+def test_settings_page_fill_mode_combo_writes_cfg(settings_page, qtbot):
+    """填充方式下拉索引应正确映射到 cfg。"""
+    page, cfg = settings_page
+    # _bg_fill_modes = ["stretch", "cover", "center", "tile"]
+    page.cmb_bg_fill.setCurrentIndex(2)  # center
+    qtbot.wait(20)
+    assert cfg.get("background_fill_mode") == "center"
+    page.cmb_bg_fill.setCurrentIndex(3)  # tile
+    qtbot.wait(20)
+    assert cfg.get("background_fill_mode") == "tile"

@@ -189,3 +189,38 @@ def test_flash_set_persists_recent_files(tmp_path, monkeypatch):
     cfg.flush()
     cfg2 = ConfigService(bundled_config_path=bundled, throttle_ms=50)
     assert cfg2.get("flash_recent_files") == ["C:/a.axf", "C:/b.hex"]
+
+
+# === 背景图片（v0.3.0 新增）===
+
+
+def test_config_has_background_defaults(cfg):
+    """背景图片 3 个 key 必须有正确默认值。"""
+    assert cfg.get("background_image_path") == ""
+    assert cfg.get("background_opacity") == 0.3
+    assert cfg.get("background_fill_mode") == "cover"
+
+
+def test_config_set_background_opacity_must_be_float(cfg, qapp):
+    """background_opacity 只接受 float；传 int 应被类型校验拒绝。"""
+    cfg.set("background_opacity", 0.5)
+    assert cfg.get("background_opacity") == 0.5
+    cfg.set("background_opacity", 1)  # int — should be rejected
+    assert cfg.get("background_opacity") == 0.5
+
+
+def test_config_emits_background_signals(cfg, qapp):
+    """背景三个 key 的 set 对应 emit 各自的 Signal。"""
+    received = {}
+    cfg.background_image_path_changed.connect(lambda v: received.__setitem__('path', v))
+    cfg.background_opacity_changed.connect(lambda v: received.__setitem__('op', v))
+    cfg.background_fill_mode_changed.connect(lambda v: received.__setitem__('fill', v))
+
+    cfg.set("background_image_path", "/tmp/x.png")
+    cfg.set("background_opacity", 0.8)
+    cfg.set("background_fill_mode", "tile")
+
+    QCoreApplication.processEvents()
+    assert received.get("path") == "/tmp/x.png"
+    assert abs(received.get("op", 0) - 0.8) < 1e-6
+    assert received.get("fill") == "tile"
