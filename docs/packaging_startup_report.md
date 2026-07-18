@@ -44,6 +44,28 @@
 
 共享缓存 `.\temp\nuitka_cache_*`（ccache/clcache/downloads/dll_dependencies/bytecode）跨脚本复用，多轮构建越快越明显。
 
+### 加快打包速度：`--nofollow-import-to` 排未用模块（第三轮，2026-07-18 实测）
+
+**这是目前发现对打包速度（+ 发行体积）收益最大的方向**，远胜任何编译标志。本轮把"项目代码 + qfluentwidgets/pylink import 链都没真正用到的模块"全列出来排除。
+
+调研方法：分别派 subagent 扫（a）`src/` 实际 import 全景、（b）qfluentwidgets 间接拉入的 PySide6 子模块链、（c）pylink/elftools/intelhex 子模块使用面，三者交叉验证"保留集"。
+
+**保留的 PySide6 子模块（仅 6 个）**：`QtCore / QtGui / QtWidgets`（src 直用）+ `QtSvg / QtSvgWidgets / QtXml`（qfluentwidgets `common/icon.py` 用 `QSvgRenderer`+`QDomDocument` 渲染 FluentIcon，间接硬依赖，不能删——删了 IconEngine/图标全崩）。
+
+**排除的 PySide6 子模块（~50 个）**：3D 全家桶、Bluetooth、Charts、Concurrent、DataVisualization、DBus、Designer、Graphs/GraphsWidgets、Help、HttpServer、Location、Multimedia/MultimediaWidgets、Network、NetworkAuth、Nfc、OpenGL/OpenGLWidgets、Pdf/PdfWidgets、Positioning、PrintSupport、Qml、Quick/Quick3D/QuickControls2/QuickTemplates2/QuickWidgets、RemoteObjects、Scxml、Sensors、SerialBus、SerialPort、ShaderTools、SpatialAudio、Sql、StateMachine、Test、TextToSpeech、UiTools、WebChannel、WebEngine 全家、WebSockets、WebView、AxContainer。
+
+**排除的第三方子包**：`qfluentwidgets.multimedia`（零引用）、`intelhex.__main__/test/bench`、`pylink.__main__`（CLI/测试 stub）。
+
+**实测结论**：
+1. 50 个 PySide6 排除项编译期**零 WARNING** —— Nuitka 静态追踪压根没发现任何代码路径 import 它们，说明排除完全安全，不只是"砍了但运行时靠回退"。
+2. 5 条 WARNING 全是预期命中（`qfluentwidgets.multimedia` / `pylink.__main__` / `intelhex.__main__/bench/test` 的 exact + `*.test` pattern）。
+3. standalone 构建成功，`--startup-bench` smoke 启动到 `launch_bench.txt` 写出（窗口 show + 事件循环一拍都跑过），exit 0。ELF/对话框等真实路径虽没在 smoke 里走到，但被排除模块全是"编译期未触及"，无回退风险。
+
+**关键不能排的（踩坑提醒）**：
+- `elftools.dwarf` / `elftools.ehabi` 看似没用到（项目只用 `elftools.elf.elffile` + `elftools.common.exceptions`），但 `elffile.py` 在**模块级别** `from ..dwarf.dwarfinfo import ...` 硬导入。`--nofollow-import-to=elftools.dwarf` 会让 `from elftools.elf.elffile import ELFFile` 运行时直接 `ModuleNotFoundError` ——**致命，绝不能排**。drawf（~244KB）是 elftools 体积大头，但只能靠 fork 改 lazy import 才能砍，不能靠 nofollow。
+- qfluentwidgets `components/__init__.py` 和 `widgets/__init__.py` 对子模块有显式 `from .xxx import *`，单文件级排除（如 `components.widgets.tree_view`）会炸包初始化。`date_time` 子包同理（`from .date_time import *`）。**只排 `qfluentwidgets.multimedia`（顶层无 `from .multimedia import *` 拉入）；其余 qfluentwidgets 子包都别碰**。
+- `--nofollow-import-to` 的语义是"运行时被 import 会 `ModuleNotFoundError`"（不是"保留字节码可回退"），所以只能排**确认零引用**的模块；对包内 `__init__` 用 `import *` 硬拉入的子包，排了等于自杀。
+
 ### 运行时速度
 
 - `--lto=yes` 是唯一实测可用的全局优化（MSVC CFLAGS/LDFLAGS env 注入在 Nuitka 4.1 下触发 scons AssertionError，不可用）。
