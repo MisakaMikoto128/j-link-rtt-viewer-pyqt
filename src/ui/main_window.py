@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import base64
 
-from PySide6.QtCore import QByteArray, QEvent, QThread
-from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QShortcut, QShowEvent
+from PySide6.QtCore import QByteArray, QEvent, Qt, QThread, Slot
+from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QPainter, QPixmap, QShortcut, QShowEvent
 from PySide6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, NavigationItemPosition
@@ -84,6 +84,16 @@ class MainWindow(FluentWindow):
         # 用控件默认字号，改字号才生效）。改默认 10pt 时正因此 bug 才被发现。
         self._apply_ui_font(cfg.get("ui_font_family") or "", int(cfg.get("ui_font_size") or 9))
 
+        # 6. 背景图片
+        self._bg_pixmap: QPixmap | None = None
+        self._bg_path: str = ""
+        self._bg_opacity: float = max(0.0, min(1.0, float(cfg.get("background_opacity"))))
+        self._bg_fill_mode: str = str(cfg.get("background_fill_mode"))
+        self._load_background_image(apply_mica=True)
+        cfg.background_image_path_changed.connect(self._on_background_image_path_changed)
+        cfg.background_opacity_changed.connect(self._on_background_opacity_changed)
+        cfg.background_fill_mode_changed.connect(self._on_background_fill_mode_changed)
+
     def _add_nav(self, widget, icon, text_key, position=NavigationItemPosition.TOP) -> None:
         """添加导航项并记录 route_key → tr_key 映射。"""
         self.addSubInterface(widget, icon, self.tr(text_key), position)
@@ -146,6 +156,77 @@ class MainWindow(FluentWindow):
         # 单独用 setStyleSheet 追加 font 规则覆盖（见 core._ui_font 注释）。
         # 用 QApplication 全量 widget（右键菜单/对话框是独立顶级窗口，不在主窗口子树）。
         sync_qss_font_locked_widgets(QApplication.instance(), resolved, size)
+
+    def _load_background_image(self, *, apply_mica: bool = True) -> None:
+        path = self._cfg.get("background_image_path")
+        self._bg_path = path or ""
+        if not path:
+            self._bg_pixmap = None
+        else:
+            pixmap = QPixmap(path)
+            if pixmap.isNull():
+                self._bg_pixmap = None
+                self._logger.warning(f"背景图片加载失败：{path}")
+            else:
+                self._bg_pixmap = pixmap
+        if apply_mica:
+            self._sync_mica_state()
+
+    def _sync_mica_state(self) -> None:
+        """有背景图时关 Mica（让基类打底为不透明 Fluent 色）；无背景图时恢复 Mica。"""
+        try:
+            self.setMicaEffectEnabled(self._bg_pixmap is None)
+        except Exception as e:
+            self._logger.warning(f"切换 Mica 状态失败：{e}")
+
+    @Slot(str)
+    def _on_background_image_path_changed(self, _path: str) -> None:
+        self._load_background_image(apply_mica=True)
+        self.update()
+
+    @Slot(float)
+    def _on_background_opacity_changed(self, opacity: float) -> None:
+        self._bg_opacity = max(0.0, min(1.0, float(opacity)))
+        self.update()
+
+    @Slot(str)
+    def _on_background_fill_mode_changed(self, mode: str) -> None:
+        self._bg_fill_mode = str(mode)
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        pixmap = self._bg_pixmap
+        if pixmap is None or pixmap.isNull():
+            return
+        painter = QPainter(self)
+        if not painter.isActive():
+            return
+        painter.setOpacity(self._bg_opacity)
+        rect = self.rect()
+        mode = self._bg_fill_mode
+        if mode == "stretch":
+            scaled = pixmap.scaled(rect.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            painter.drawPixmap(rect, scaled)
+        elif mode == "cover":
+            scaled = pixmap.scaled(rect.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            x = (rect.width() - scaled.width()) // 2
+            y = (rect.height() - scaled.height()) // 2
+            painter.drawPixmap(x, y, scaled)
+        elif mode == "center":
+            x = (rect.width() - pixmap.width()) // 2
+            y = (rect.height() - pixmap.height()) // 2
+            painter.drawPixmap(x, y, pixmap)
+        elif mode == "tile":
+            for x in range(0, rect.width(), pixmap.width()):
+                for y in range(0, rect.height(), pixmap.height()):
+                    painter.drawPixmap(x, y, pixmap)
+        else:
+            scaled = pixmap.scaled(rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            x = (rect.width() - scaled.width()) // 2
+            y = (rect.height() - scaled.height()) // 2
+            painter.drawPixmap(x, y, scaled)
+        painter.end()
 
     def _restore_geometry(self) -> None:
         geom_b64 = self._cfg.get("window_geometry")
