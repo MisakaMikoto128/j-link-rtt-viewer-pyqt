@@ -32,6 +32,9 @@ class ConfigService(QObject):
     rtt_encoding_changed = Signal(str)      # RTT 解码编码（utf-8 / gbk / utf-16-le / latin-1 / ascii）
     reset_mode_changed = Signal(str)        # "normal" / "auto_reconnect" — RTT 页用来更新按钮文字
     language_changed = Signal(str)          # "zh_CN" / "zh_TW" / "ja" / "ko" / "en" / "fr"
+    background_image_path_changed = Signal(str)
+    background_opacity_changed = Signal(float)
+    background_fill_mode_changed = Signal(str)
 
     DEFAULTS: dict[str, Any] = {
         "target_mcu": "",
@@ -124,6 +127,10 @@ class ConfigService(QObject):
         "flash_jlink_mode": "usb",
         "flash_remote_host": "",
         "flash_remote_port": "",
+        # === 背景图片（v0.3.0 新增）===
+        "background_image_path": "",      # 空串 = 未启用，使用默认 Fluent 背景
+        "background_opacity": 0.3,       # 0.0 ~ 1.0
+        "background_fill_mode": "cover",  # stretch / cover / center / tile
     }
 
     SEND_HISTORY_MAX = 50
@@ -276,6 +283,12 @@ class ConfigService(QObject):
             self.reset_mode_changed.emit(value)
         elif key == "language":
             self.language_changed.emit(value)
+        elif key == "background_image_path":
+            self.background_image_path_changed.emit(value)
+        elif key == "background_opacity":
+            self.background_opacity_changed.emit(float(value))
+        elif key == "background_fill_mode":
+            self.background_fill_mode_changed.emit(value)
 
     def flush(self) -> None:
         self._flush_timer.stop()
