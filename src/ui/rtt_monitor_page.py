@@ -7,10 +7,13 @@ from PySide6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
     QEvent,
+    QObject,
     QPoint,
     QPropertyAnimation,
     QSize,
     Qt,
+    QRunnable,
+    QThreadPool,
     QTimer,
     Signal,
 )
@@ -74,6 +77,12 @@ from core.crc_utils import CRC_ALGORITHMS, compute_crc
 from core.jlink_worker import CHANNEL_ALL, CHANNEL_DEFAULT, RESET_MODE_HALT, JLinkWorker, encode_send_payload
 
 from . import _infobar
+from .widgets.remote_host import (
+    REMOTE_ITEM_TEXT,
+    is_valid_port,
+    resolve_remote_host,
+    tcp_reachable,
+)
 from .widgets.search_bar import SearchBar
 
 
@@ -161,6 +170,28 @@ def _section_separator(parent: QWidget) -> QFrame:
     line.setStyleSheet(
         "QFrame { background-color: rgba(128,128,128,0.3); border: none; }")
     return line
+
+
+class _RemoteProbeHelper(QObject):
+    """QThreadPool 线程向主线程回传 TCP 探测结果的信号中转对象。"""
+    probe_done = Signal(bool)
+
+
+class _TcpReachableRunnable(QRunnable):
+    """在线程池中执行 tcp_reachable，完成后通过 helper 发信号回 UI 线程。"""
+
+    def __init__(self, ip: str, port: int, helper: _RemoteProbeHelper) -> None:
+        super().__init__()
+        self._ip = ip
+        self._port = port
+        self._helper = helper
+
+    def run(self) -> None:
+        try:
+            ok = tcp_reachable(self._ip, self._port)
+        except Exception:
+            ok = False
+        self._helper.probe_done.emit(ok)
 
 
 class _VResizeHandle(QFrame):
@@ -435,6 +466,14 @@ class RTTMonitorPage(QWidget):
 
         # 烧录期间锁定连接按钮：flash_page 通过 set_flash_busy 控制
         self._flash_busy = False
+
+        # 远程连接模式状态
+        self._remote_item_text = self.tr(REMOTE_ITEM_TEXT)
+        self._remote_reachable: bool | None = None
+        self._remote_probe_in_flight = False
+        self._remote_probe_helper = _RemoteProbeHelper()
+        self._remote_probe_helper.probe_done.connect(
+            self._on_remote_probe_done)
 
         # 发送字节统计缓存（跨连接累计；_update_stats 从 worker 同步）
         self._send_total_bytes = 0
@@ -730,6 +769,38 @@ class RTTMonitorPage(QWidget):
         self.cb_jlink.setMinimumWidth(50)
         row_jlink.addWidget(self.cb_jlink, 1)
         v.addLayout(row_jlink)
+
+        # ---- 远程主机行（选中「远程连接…」时显示）----
+        self.remote_row = QWidget(inner)
+        remote_layout = QHBoxLayout(self.remote_row)
+        remote_layout.setSpacing(6)
+        remote_layout.setContentsMargins(0, 0, 0, 0)
+        self._lbl_remote_host = BodyLabel(self.tr("远程主机:"))
+        self._lbl_remote_host.setFixedHeight(_CTRL_H)
+        remote_layout.addWidget(self._lbl_remote_host)
+        self.le_remote_host = LineEdit(inner)
+        self.le_remote_host.setPlaceholderText(
+            self.tr("IP 或域名，如 192.168.79.1"))
+        self.le_remote_host.setFixedHeight(_CTRL_H)
+        self.le_remote_host.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred)
+        remote_layout.addWidget(self.le_remote_host, 1)
+        self._lbl_remote_port = BodyLabel(self.tr("端口:"))
+        self._lbl_remote_port.setFixedHeight(_CTRL_H)
+        remote_layout.addWidget(self._lbl_remote_port)
+        self.le_remote_port = LineEdit(inner)
+        self.le_remote_port.setPlaceholderText("19020")
+        self.le_remote_port.setFixedWidth(80)
+        self.le_remote_port.setFixedHeight(_CTRL_H)
+        remote_layout.addWidget(self.le_remote_port)
+        v.addWidget(self.remote_row)
+        self.remote_row.setVisible(False)
+
+        # 从 cfg 恢复远程输入框初值（远程模式在首次枚举后切过去）
+        self.le_remote_host.setText(
+            str(self._cfg.get("last_remote_host") or ""))
+        self.le_remote_port.setText(
+            str(self._cfg.get("last_remote_port") or "19020"))
 
         self.cb_target = EditableComboBox(inner)
         self.cb_target.setPlaceholderText(self.tr("目标设备"))
@@ -1409,23 +1480,76 @@ class RTTMonitorPage(QWidget):
         # 真的选了 items 里某一项时触发；用户点开但没选（或列表空）不会改值。
         self.cb_jlink.currentIndexChanged.connect(self._on_jlink_selection_changed)
 
+        # 远程主机/端口输入变化：清空探测缓存 + 持久化
+        self.le_remote_host.textChanged.connect(self._on_remote_input_changed)
+        self.le_remote_port.textChanged.connect(self._on_remote_input_changed)
+
     def _on_jlink_selection_changed(self) -> None:
-        """用户从下拉列表选了真实设备 → 持久化并同步红点。"""
-        serial = self.cb_jlink.currentText().strip()
-        if serial:
-            self._cfg.set("last_jlink_serial", serial)
+        """用户从下拉列表选了设备或远程项 → 持久化模式并同步红点/输入行。"""
+        current = self.cb_jlink.currentText().strip()
+        if current == self._remote_item_text:
+            self._cfg.set("jlink_mode", "remote")
+            self.remote_row.setVisible(True)
+            self._sync_jlink_status_dot()
+            return
+        # 本地 USB 模式
+        self._cfg.set("jlink_mode", "usb")
+        self.remote_row.setVisible(False)
+        if current:
+            self._cfg.set("last_jlink_serial", current)
         self._sync_jlink_status_dot()
 
     def _sync_jlink_status_dot(self) -> None:
-        """按当前 currentText 是否在当前可用设备列表里，显示/隐藏红点。"""
-        serial = self.cb_jlink.currentText().strip()
-        if not serial:
+        """按当前 currentText 是否可用，显示/隐藏红点。
+
+        本地模式：currentText 在 items 里 → 隐藏（在线）；不在 → 显示（离线占位）。
+        远程模式：TCP 可达 → 隐藏；解析失败/不可达/未探测 → 显示。
+        """
+        current = self.cb_jlink.currentText().strip()
+        if not current:
             self._jlink_status_dot.hide()
             return
-        online = self.cb_jlink.findText(serial) >= 0
+        if current == self._remote_item_text:
+            self._jlink_status_dot.setVisible(self._remote_reachable is not True)
+            self.cb_jlink.setReadOnly(False)
+            return
+        online = self.cb_jlink.findText(current) >= 0
         self._jlink_status_dot.setVisible(not online)
         # 在线时恢复可编辑为 False（用户只能从下拉选），离线占位只读
         self.cb_jlink.setReadOnly(not online)
+
+    def _on_remote_input_changed(self, _text: str) -> None:
+        """远程主机/端口输入变化：清空探测结果 + 持久化。"""
+        self._remote_reachable = None
+        self._cfg.set("last_remote_host", self.le_remote_host.text().strip())
+        self._cfg.set("last_remote_port", self.le_remote_port.text().strip())
+        self._sync_jlink_status_dot()
+
+    def _probe_remote_reachability(self) -> None:
+        """在后台线程探测远程 J-Link TCP 端口，绝不阻塞 GUI。"""
+        if self._remote_probe_in_flight:
+            return
+        host = self.le_remote_host.text().strip()
+        port_text = self.le_remote_port.text().strip()
+        if not is_valid_port(port_text):
+            self._remote_reachable = False
+            self._sync_jlink_status_dot()
+            return
+        resolved = resolve_remote_host(host)
+        if resolved is None:
+            self._remote_reachable = False
+            self._sync_jlink_status_dot()
+            return
+        self._remote_probe_in_flight = True
+        runnable = _TcpReachableRunnable(
+            resolved, int(port_text), self._remote_probe_helper)
+        QThreadPool.globalInstance().start(runnable)
+
+    def _on_remote_probe_done(self, ok: bool) -> None:
+        """后台探测完成 → 更新红点状态。"""
+        self._remote_reachable = ok
+        self._remote_probe_in_flight = False
+        self._sync_jlink_status_dot()
 
     # ------------------------------------------------------------------
     # 槽函数
@@ -1466,6 +1590,7 @@ class RTTMonitorPage(QWidget):
         - 当前选中的 serial 不在这批里 → 视为设备被拔掉，若正处于连接态立即
           触发断开（不等 read_thread 检出 rtt_read 异常，可能滞后几秒）。
         - 下拉列表只显示当前电脑可用设备；currentText 可以是历史选择（离线占位）。
+        - 最后一项固定为「远程连接…」，不属于 USB 设备，不参与拔掉检测。
         """
         serials: list[str] = []
         if data:
@@ -1477,14 +1602,26 @@ class RTTMonitorPage(QWidget):
                 if serial and serial.isdigit():
                     serials.append(serial)
 
+        remote_text = self.tr(REMOTE_ITEM_TEXT)
+        self._remote_item_text = remote_text
+
         # 当前值：可能是用户已选设备，也可能是历史离线占位。
         # qfluentwidgets ComboBox 不允许显示非 items 的文本，所以用 EditableComboBox：
         # 在线选择走 setCurrentIndex；离线占位走 setText + setReadOnly(True)。
         prev = self.cb_jlink.currentText().strip()
+        first_init = not hasattr(self, "_jlink_initialized")
         # 启动后首次枚举（prev 为空）且配置里有上次选择 → 以它作为期望占位：
         # 一会儿在线就选中它，不在线就显示红点占位。
-        if not prev and not hasattr(self, "_jlink_initialized"):
-            prev = str(self._cfg.get("last_jlink_serial") or "").strip()
+        if not prev and first_init:
+            if self._cfg.get("jlink_mode") == "remote":
+                prev = remote_text
+                self.remote_row.setVisible(True)
+                self.le_remote_host.setText(
+                    str(self._cfg.get("last_remote_host") or ""))
+                self.le_remote_port.setText(
+                    str(self._cfg.get("last_remote_port") or "19020"))
+            else:
+                prev = str(self._cfg.get("last_jlink_serial") or "").strip()
             self._jlink_initialized = True
 
         self.cb_jlink.blockSignals(True)
@@ -1493,9 +1630,14 @@ class RTTMonitorPage(QWidget):
             self.cb_jlink.clear()
             for s in serials:
                 self.cb_jlink.addItem(s)
+            # 远程项永远放最后
+            self.cb_jlink.addItem(remote_text)
             if prev and prev in serials:
                 # 保持之前的在线选择（可能是历史选择刚好在线）
                 self.cb_jlink.setCurrentText(prev)
+            elif prev == remote_text:
+                # 远程项在 items 里，用 setCurrentIndex 选中最后一项
+                self.cb_jlink.setCurrentIndex(self.cb_jlink.count() - 1)
             elif prev:
                 # 之前的值不在线了（或无设备但有历史）：显示为离线占位，
                 # items 是在线设备；红点由下面 _sync_jlink_status_dot 点亮。
@@ -1513,8 +1655,14 @@ class RTTMonitorPage(QWidget):
         # 同步红点：currentText 不在 items 里 → 显示红点（离线占位）
         self._sync_jlink_status_dot()
 
+        # 远程模式：利用 200ms 枚举节拍做 TCP 可达性探测
+        if self.cb_jlink.currentText().strip() == remote_text:
+            self._probe_remote_reachability()
+
         # 拔掉检测：上次选中的 serial 没了 + 当前已连接 → 立刻断开
-        if prev and prev not in serials and self._is_connected:
+        # 远程项不是 USB 设备，跳过。
+        if (prev and prev not in serials and prev != remote_text
+                and self._is_connected):
             _infobar.warn(self, self.tr("提示"),
                           self.tr("当前连接的 J-Link（S/N: {sn}）已断开").format(sn=prev))
             self._set_disconnected_ui()
@@ -1526,7 +1674,48 @@ class RTTMonitorPage(QWidget):
             if not target:
                 _infobar.warn(self, self.tr("提示"), self.tr("请先选择目标芯片"))
                 return
-            jlink_serial = self.cb_jlink.currentText().strip()
+            current = self.cb_jlink.currentText().strip()
+            # 远程模式分支
+            if current == self._remote_item_text:
+                host = self.le_remote_host.text().strip()
+                port_text = self.le_remote_port.text().strip()
+                resolved = resolve_remote_host(host)
+                if not host or resolved is None:
+                    _infobar.warn(
+                        self, self.tr("提示"),
+                        self.tr('无法解析主机名 "{host}"，请检查输入').format(host=host))
+                    return
+                if not is_valid_port(port_text):
+                    _infobar.warn(self, self.tr("提示"),
+                                  self.tr("端口无效（1-65535）"))
+                    return
+                port = int(port_text)
+                if not tcp_reachable(resolved, port, timeout=2.0):
+                    addr = f"{host}:{port}"
+                    _infobar.warn(
+                        self, self.tr("提示"),
+                        self.tr("无法连接远程 J-Link（{addr}），请检查 Remote Server 是否运行、IP/端口是否正确").format(addr=addr))
+                    return
+                iface = self.cb_iface.currentText()
+                speed = int(self.cb_speed.currentText())
+                channel = self.sp_channel.value()
+                # 持久化用户选择
+                self._cfg.set("target_mcu", target)
+                self._cfg.set("interface", iface)
+                self._cfg.set("speed_khz", speed)
+                self._cfg.set("rtt_channel", channel)
+                self._cfg.set("jlink_mode", "remote")
+                self._cfg.set("last_remote_host", host)
+                self._cfg.set("last_remote_port", port_text)
+                # 立即给 UI 反馈：禁用按钮 + 改文字
+                self.btn_connect.setEnabled(False)
+                self.btn_connect.setText(self.tr("连接中…"))
+                self._worker.connect_remote_requested.emit(
+                    target, iface, speed, channel, f"{resolved}:{port}")
+                return
+
+            # 本地 USB 模式分支
+            jlink_serial = current
             # 合并提示：combo 空 / 没设备 / 选的是离线占位，统一提示「未检测到 J-Link 设备」。
             # 真正可以连接的唯一条件：currentText 是一个当前在线设备（出现在 items 里）。
             if not jlink_serial or self.cb_jlink.findText(jlink_serial) < 0:
@@ -1541,6 +1730,7 @@ class RTTMonitorPage(QWidget):
             self._cfg.set("speed_khz", speed)
             self._cfg.set("rtt_channel", channel)
             self._cfg.set("last_jlink_serial", jlink_serial)
+            self._cfg.set("jlink_mode", "usb")
             # 立即给 UI 反馈：禁用按钮 + 改文字
             self.btn_connect.setEnabled(False)
             self.btn_connect.setText(self.tr("连接中…"))
@@ -1965,6 +2155,14 @@ class RTTMonitorPage(QWidget):
 
         self.btn_toolbar_connect.setChecked(True)
         self.btn_toolbar_connect.setIcon(FluentIcon.PAUSE)
+
+        # 远程连接：在显示区追加一行提示（无论 auto_mark_on_connect 是否开启）
+        remote_addr = info.get("remote_addr", "")
+        if remote_addr:
+            self._insert_mark_text(
+                self.tr("已连接远程 J-Link {addr} (S/N: {sn})").format(
+                    addr=remote_addr, sn=info.get("jlink_serial", "-")))
+
         # 烧录期间保持锁定（烧录页已断开的场景）
         if self._flash_busy:
             self.btn_connect.setEnabled(False)
@@ -2489,6 +2687,18 @@ class RTTMonitorPage(QWidget):
         self._lbl_iface.setText(self.tr("接口"))
         self._lbl_speed.setText(self.tr("速度"))
         self._lbl_rtt_channel.setText(self.tr("RTT 通道"))
+        # 远程连接输入区
+        self._lbl_remote_host.setText(self.tr("远程主机:"))
+        self._lbl_remote_port.setText(self.tr("端口:"))
+        self.le_remote_host.setPlaceholderText(
+            self.tr("IP 或域名，如 192.168.79.1"))
+        # 更新下拉中「远程连接…」项的文本
+        new_remote_text = self.tr(REMOTE_ITEM_TEXT)
+        for i in range(self.cb_jlink.count()):
+            if self.cb_jlink.itemText(i) == self._remote_item_text:
+                self.cb_jlink.setItemText(i, new_remote_text)
+                break
+        self._remote_item_text = new_remote_text
         # SpinBox 特殊值文本 + 发送通道提示也要重翻译
         self.sp_channel.setSpecialValueText(self.tr("全部通道"))
         self._update_channel_tooltip()

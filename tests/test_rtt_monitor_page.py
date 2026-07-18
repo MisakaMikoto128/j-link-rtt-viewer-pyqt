@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, Signal
 class FakeWorker(QObject):
     """与 JLinkWorker 同形的信号 stub。RTTMonitorPage 只需要这些通道。"""
     connect_requested = Signal(str, str, int, int, str)
+    connect_remote_requested = Signal(str, str, int, int, str)
     disconnect_requested = Signal()
     enumerate_devices_requested = Signal()
     reset_requested = Signal(str)
@@ -530,18 +531,19 @@ def test_all_channel_not_pulled_back_on_connect(rtt_page, qtbot):
 # J-Link 设备下拉（多 J-Link 接入）
 # ============================================================
 def test_devices_enumerated_populates_combo(rtt_page, qtbot):
-    """worker devices_enumerated("s1|p1;s2|p2") 应重建下拉项并选中第一台。"""
+    """worker devices_enumerated("s1|p1;s2|p2") 应重建下拉项并选中第一台（含远程项）。"""
     page, worker, _ = rtt_page
     worker.devices_enumerated.emit("12345678|J-Link PLUS;87654321|J-Link EDU")
     qtbot.wait(30)
-    assert page.cb_jlink.count() == 2
+    # 2 个 serial + 1 个远程项
+    assert page.cb_jlink.count() == 3
     assert page.cb_jlink.itemText(0) == "12345678"
     assert page.cb_jlink.itemText(1) == "87654321"
     assert page.cb_jlink.currentText() == "12345678"
 
 
 def test_devices_enumerated_keeps_previous_selection_if_present(rtt_page, qtbot):
-    """刷新后上次选中的 serial 还在 → 保留选中（不被重置到第一台）。"""
+    """刷新后上次选中的 serial 还在 → 保留选中（不被重置到第一台；含远程项）。"""
     page, worker, _ = rtt_page
     worker.devices_enumerated.emit("111|A;222|B")
     qtbot.wait(30)
@@ -550,10 +552,11 @@ def test_devices_enumerated_keeps_previous_selection_if_present(rtt_page, qtbot)
     worker.devices_enumerated.emit("111|A;222|B;333|C")
     qtbot.wait(30)
     assert page.cb_jlink.currentText() == "222"
+    assert page.cb_jlink.count() == 4
 
 
 def test_devices_enumerated_keeps_offline_placeholder(rtt_page, qtbot):
-    """上次选中的 serial 不在当前列表 → 仍显示该 serial 并亮红点。"""
+    """上次选中的 serial 不在当前列表 → 仍显示该 serial 并亮红点（含远程项）。"""
     page, worker, _ = rtt_page
     page.show()
     qtbot.wait(20)
@@ -568,23 +571,24 @@ def test_devices_enumerated_keeps_offline_placeholder(rtt_page, qtbot):
     worker.devices_enumerated.emit("111|A;333|C")
     qtbot.wait(50)
     assert page.cb_jlink.currentText() == "222", "离线占位应保持显示"
-    assert page.cb_jlink.count() == 2
+    assert page.cb_jlink.count() == 3
     assert page._jlink_status_dot.isVisible(), "222 离线时红点显示"
 
 
 def test_devices_enumerated_empty_clears_combo(rtt_page, qtbot):
-    """无设备且无历史：devices_enumerated("") 清空下拉和红点。"""
+    """无设备且无历史：devices_enumerated("") 只保留远程项。"""
     page, worker, _ = rtt_page
     # 先让 prev 为空：直接发空列表
     worker.devices_enumerated.emit("")
     qtbot.wait(50)
-    assert page.cb_jlink.count() == 0
+    assert page.cb_jlink.count() == 1
+    assert page.cb_jlink.itemText(0) == page._remote_item_text
     assert page.cb_jlink.currentText() == ""
     assert not page._jlink_status_dot.isVisible()
 
 
 def test_devices_enumerated_empty_keeps_history_placeholder(rtt_page, qtbot):
-    """无设备但有历史选择：保留离线占位并亮红点。"""
+    """无设备但有历史选择：保留离线占位并亮红点（含远程项）。"""
     page, worker, _ = rtt_page
     page.show()
     qtbot.wait(20)
@@ -597,7 +601,7 @@ def test_devices_enumerated_empty_keeps_history_placeholder(rtt_page, qtbot):
 
     worker.devices_enumerated.emit("")
     qtbot.wait(50)
-    assert page.cb_jlink.count() == 0
+    assert page.cb_jlink.count() == 1
     assert page.cb_jlink.currentText() == "111", "历史选择应作为离线占位保留"
     assert page._jlink_status_dot.isVisible(), "无设备且历史占位应显示红点"
 
@@ -640,3 +644,131 @@ def test_disconnect_when_connected_jlink_removed(rtt_page, qtbot):
     qtbot.wait(30)
     assert page._is_connected is False, "选中的 J-Link 被拔掉应立即断开 UI"
     assert disconnects, "应 emit disconnect_requested"
+
+
+# ============================================================
+# 远程连接（Remote Server）
+# ============================================================
+def test_remote_item_is_last_combo_item(rtt_page, qtbot):
+    """devices_enumerated 重建后，远程项应始终是最后一项。"""
+    page, worker, _ = rtt_page
+    worker.devices_enumerated.emit("111|A;222|B")
+    qtbot.wait(30)
+    assert page.cb_jlink.count() == 3
+    assert page.cb_jlink.itemText(2) == page._remote_item_text
+
+
+def test_selecting_remote_item_shows_remote_row(rtt_page, qtbot):
+    """选中远程项显示 IP/端口行并设 cfg 为 remote；选回 serial 隐藏。"""
+    page, worker, cfg = rtt_page
+    worker.devices_enumerated.emit("111|A")
+    qtbot.wait(30)
+    page.cb_jlink.setCurrentIndex(page.cb_jlink.count() - 1)
+    qtbot.wait(30)
+    assert not page.remote_row.isHidden()
+    assert cfg.get("jlink_mode") == "remote"
+
+    page.cb_jlink.setCurrentIndex(0)
+    qtbot.wait(30)
+    assert page.remote_row.isHidden()
+    assert cfg.get("jlink_mode") == "usb"
+
+
+def test_connect_remote_unresolvable_host_warns(rtt_page, qtbot, monkeypatch):
+    """远程模式点击连接，主机名无法解析时应弹警告且不发 connect_remote_requested。"""
+    import ui.rtt_monitor_page as rtt_mod
+    page, worker, _ = rtt_page
+    warnings: list[tuple] = []
+    monkeypatch.setattr(
+        rtt_mod._infobar, "warn",
+        lambda *args, **kwargs: warnings.append(args))
+    emitted: list[tuple] = []
+    worker.connect_remote_requested.connect(lambda *args: emitted.append(args))
+
+    worker.devices_enumerated.emit("111|A")
+    qtbot.wait(30)
+    page.cb_jlink.setCurrentIndex(page.cb_jlink.count() - 1)
+    page.cb_target.setText("STM32H750VB")
+    page.le_remote_host.setText("not a host!!")
+    page.le_remote_port.setText("19020")
+    page._on_connect_clicked()
+    qtbot.wait(30)
+    assert any("无法解析主机名" in str(a) for a in warnings)
+    assert not emitted
+
+
+def test_connect_remote_emits_connect_remote_requested(rtt_page, qtbot, monkeypatch):
+    """远程模式 TCP 预检通过，应 emit connect_remote_requested(ip:port)。"""
+    import ui.rtt_monitor_page as rtt_mod
+    page, worker, _ = rtt_page
+    monkeypatch.setattr(
+        rtt_mod, "tcp_reachable",
+        lambda _ip, _port, timeout=2.0: True)
+    emitted: list[tuple] = []
+    worker.connect_remote_requested.connect(lambda *args: emitted.append(args))
+
+    worker.devices_enumerated.emit("111|A")
+    qtbot.wait(30)
+    page.cb_jlink.setCurrentIndex(page.cb_jlink.count() - 1)
+    page.cb_target.setText("STM32H750VB")
+    page.cb_iface.setCurrentText("SWD")
+    page.cb_speed.setCurrentText("4000")
+    page.sp_channel.setValue(0)
+    page.le_remote_host.setText("127.0.0.1")
+    page.le_remote_port.setText("19020")
+    page._on_connect_clicked()
+    qtbot.wait(30)
+    assert len(emitted) == 1
+    target, iface, speed, channel, addr = emitted[0]
+    assert target == "STM32H750VB"
+    assert iface == "SWD"
+    assert speed == 4000
+    assert channel == 0
+    assert addr == "127.0.0.1:19020"
+
+
+def test_remote_dot_reflects_reachability(rtt_page, qtbot):
+    """远程模式下红点随探测结果显隐。"""
+    page, worker, _ = rtt_page
+    worker.devices_enumerated.emit("111|A")
+    qtbot.wait(30)
+    page.cb_jlink.setCurrentIndex(page.cb_jlink.count() - 1)
+    qtbot.wait(30)
+    page._on_remote_probe_done(False)
+    assert not page._jlink_status_dot.isHidden()
+    page._on_remote_probe_done(True)
+    assert page._jlink_status_dot.isHidden()
+
+
+def test_set_connected_ui_shows_remote_mark(rtt_page, qtbot):
+    """_set_connected_ui 收到 remote_addr 时，显示区应追加远程连接提示行。"""
+    page, worker, _ = rtt_page
+    info = worker.get_device_info()
+    info["remote_addr"] = "192.168.79.1:19020"
+    info["jlink_serial"] = "602717758"
+    page._set_connected_ui(info)
+    qtbot.wait(30)
+    text = page.display.toPlainText()
+    assert "已连接远程 J-Link" in text
+    assert "192.168.79.1:19020" in text
+    assert "602717758" in text
+
+
+def test_startup_restore_remote_mode(isolated_appdata, qtbot):
+    """cfg jlink_mode=remote 时，首次枚举后应恢复远程输入框并选中远程项。"""
+    from core.config_service import ConfigService
+    from ui.rtt_monitor_page import RTTMonitorPage
+    cfg = ConfigService()
+    cfg.set("jlink_mode", "remote")
+    cfg.set("last_remote_host", "jlink.local")
+    cfg.set("last_remote_port", "19021")
+    worker = FakeWorker()
+    page = RTTMonitorPage(worker, cfg)
+    qtbot.addWidget(page)
+    worker.devices_enumerated.emit("111|A")
+    qtbot.wait(50)
+    assert not page.remote_row.isHidden()
+    assert page.cb_jlink.currentText() == page._remote_item_text
+    assert page.le_remote_host.text() == "jlink.local"
+    assert page.le_remote_port.text() == "19021"
+    assert cfg.get("jlink_mode") == "remote"

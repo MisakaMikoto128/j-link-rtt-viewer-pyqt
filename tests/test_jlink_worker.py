@@ -873,3 +873,123 @@ def test_reset_counts_clears_all_channels(worker):
     assert w.get_stats(None)["bytes"] == 0
     assert w.get_stats(0)["bytes"] == 0
     assert w.get_stats(1)["bytes"] == 0
+
+
+# ============================================================
+# 远程 J-Link（Remote Server）连接
+# ============================================================
+def test_remote_connect_uses_ip_addr_double_open(worker):
+    """远程连接：mock pylink，断言 open(ip_addr=) 被调两次、rtt_start 在 set_tif 前、
+    不调用 connected_emulators，_last_connect_params 为 6 元组。"""
+    import pylink
+    from unittest.mock import call, MagicMock
+    w, jl = worker
+    # 初次双开时 opened() 返回 False；连接成功后读 serial 时 opened() 返回 True
+    jl.opened.side_effect = [False, True]
+    jl.connected.return_value = True
+    jl.serial_number = 602717758
+    _set_allocated_channels(jl, 1)
+    jl.rtt_read.return_value = []
+
+    # 内建枚举 timer 会周期性调用 connected_emulators，先清空计数再开始断言
+    jl.connected_emulators.reset_mock()
+
+    manager = MagicMock()
+    manager.attach_mock(jl.rtt_start, "rtt_start")
+    manager.attach_mock(jl.set_tif, "set_tif")
+
+    states = []
+    w.connection_state_changed.connect(lambda c: states.append(c), type=Qt.DirectConnection)
+
+    w._do_connect("STM32F030F4", "SWD", 4000, 0, "", "192.168.79.1:19020")
+
+    # 远程模式跳过 USB 枚举
+    jl.connected_emulators.assert_not_called()
+    # 双开都使用 ip_addr
+    assert jl.open.call_count == 2
+    for c in jl.open.call_args_list:
+        assert c.kwargs.get("ip_addr") == "192.168.79.1:19020"
+
+    # rtt_start 在 set_tif 之前
+    manager.assert_has_calls([call.rtt_start(), call.set_tif(pylink.enums.JLinkInterfaces.SWD)])
+
+    assert True in states
+    assert w.state_name() == "CONNECTED"
+    assert w._last_connect_params == (
+        "STM32F030F4", "SWD", 4000, 0, "602717758", "192.168.79.1:19020"
+    )
+    info = w.get_device_info()
+    assert info.get("remote_addr") == "192.168.79.1:19020"
+
+
+def test_remote_connect_failure_logs_friendly_error(worker):
+    """远程 open 失败：emit 中文友好错误，状态回 IDLE，emit connection_state_changed(False)。"""
+    import pylink.errors
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.open.side_effect = pylink.errors.JLinkException("Cannot connect to J-Link name 192.168.79.1")
+
+    logs = []
+    states = []
+    w.log_message.connect(lambda lv, m: logs.append((lv, m)), type=Qt.DirectConnection)
+    w.connection_state_changed.connect(lambda c: states.append(c), type=Qt.DirectConnection)
+
+    w._do_connect("STM32F030F4", "SWD", 4000, 0, "", "192.168.79.1:19020")
+
+    assert w.state_name() == "IDLE"
+    assert False in states
+    errors = [(lv, m) for lv, m in logs if lv == "error"]
+    assert errors
+    assert "无法连接远程 J-Link" in errors[0][1]
+    assert "192.168.79.1:19020" in errors[0][1]
+
+
+def test_remote_reconnect_skips_usb_enumeration(worker):
+    """远程掉线后自动重连：connected_emulators 返回空也应尝试 _do_connect(remote_addr)。"""
+    from PySide6.QtCore import QMetaObject
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    jl.serial_number = 602717758
+    _set_allocated_channels(jl, 1)
+    jl.rtt_read.return_value = []
+    # 如果 _reconnect_tick 错误地调用 USB 枚举，这个返回值会让它静默返回；
+    # 但远程分支应跳过枚举，仍然发起重连。
+    jl.connected_emulators.return_value = []
+
+    # 伪造上次连接参数（远程）
+    w._last_connect_params = ("STM32F030F4", "SWD", 4000, 0, "602717758", "192.168.79.1:19020")
+    w._reconnect_target_serial = "602717758"
+    w._reconnect_remote_addr = "192.168.79.1:19020"
+    w._auto_reconnect_enabled = True
+
+    status = []
+    w.reconnect_status.connect(lambda k, d: status.append((k, d)))
+
+    # 通过 QueuedConnection 让 _reconnect_tick 在 worker 线程执行，贴近真实调度
+    QMetaObject.invokeMethod(w, "_reconnect_tick", Qt.ConnectionType.QueuedConnection)
+    _drain_events(1.0)
+
+    assert any(k == "attempt" for k, _ in status), f"应 emit attempt，got {status}"
+    # 远程分支应直接尝试连接，而不是因枚举为空就静默返回
+    assert jl.open.called, "远程重连应跳过 USB 枚举并尝试 _do_connect"
+    assert jl.open.call_args.kwargs.get("ip_addr") == "192.168.79.1:19020"
+
+
+def test_local_connect_stores_six_tuple_with_empty_remote_addr(worker):
+    """本地连接成功后 _last_connect_params 仍是 6 元组，remote_addr 为空串。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    _set_allocated_channels(jl, 1)
+    jl.rtt_read.return_value = []
+
+    w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
+    _drain_events(0.5)
+
+    assert w.state_name() == "CONNECTED"
+    params = w._last_connect_params
+    assert params is not None and len(params) == 6
+    assert params[5] == ""
+    assert w.get_device_info().get("remote_addr") == ""
+

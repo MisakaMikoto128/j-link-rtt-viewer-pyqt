@@ -55,6 +55,7 @@ class FlashParams:
     post_action: str          # POST_ACTION_*
     extra_verify: bool
     jlink_serial: str = ""    # 指定烧录器 serial；空/"0" 表示未指定
+    remote_addr: str = ""     # 远程模式 "ip:port"；空 = 本地 USB
 
 
 class FlashWorker(QObject):
@@ -128,7 +129,8 @@ class FlashWorker(QObject):
         try:
             # --- connect ---
             self.flash_stage_changed.emit(STAGE_CONNECT)
-            self._do_connect(p.device_name, p.interface, p.speed_khz, p.jlink_serial)
+            self._do_connect(p.device_name, p.interface, p.speed_khz,
+                             p.jlink_serial, p.remote_addr)
 
             # --- chip erase（sector 由 flash_file 内含，不显式 emit STAGE_ERASE）---
             if p.erase_mode == ERASE_MODE_CHIP:
@@ -172,41 +174,50 @@ class FlashWorker(QObject):
             self.flash_finished.emit(False, str(e))
 
     def _do_connect(self, device: str, iface: str, speed: int,
-                    jlink_serial: str = "") -> None:
+                    jlink_serial: str = "", remote_addr: str = "") -> None:
         """严格按 CLAUDE.md 'pylink 1.6.0 连接顺序'：open → close → open(serial)
         → set_tif → set_speed → connect。"""
         j = self._jlink
         if j is None:
             raise RuntimeError("FlashWorker 未 initialize")
 
-        # 前置校验：至少有一台 J-Link 接入；指定了 serial 还要校验它在线
-        try:
-            emus = j.connected_emulators()
-        except Exception as e:
-            self.flash_log.emit("warn", f"未检测到 J-Link 设备，请检查 USB 连接 ({e})")
-            raise RuntimeError("no jlink")
-        if not emus:
-            self.flash_log.emit("warn", "未检测到 J-Link 设备，请检查 USB 连接")
-            raise RuntimeError("no jlink")
-        if jlink_serial and jlink_serial != "0" and not any(
-                str(int(getattr(e, "SerialNumber", 0) or 0)) == jlink_serial
-                for e in emus):
-            self.flash_log.emit(
-                "warn", f"选中的 J-Link（S/N: {jlink_serial}）不在线，请刷新设备列表或重新选择")
-            raise RuntimeError("jlink offline")
+        if remote_addr:
+            # 远程模式：跳过 USB 枚举与 serial 校验，直接按 ip:port 双开
+            if not j.opened():
+                j.open(ip_addr=remote_addr)
+                ser = j.serial_number
+                j.close()
+                j.open(ip_addr=remote_addr)
+                self.flash_log.emit("info", f"J-Link SN: {ser} (远程 {remote_addr})")
+        else:
+            # 本地 USB 模式：前置校验 + serial 双开
+            try:
+                emus = j.connected_emulators()
+            except Exception as e:
+                self.flash_log.emit("warn", f"未检测到 J-Link 设备，请检查 USB 连接 ({e})")
+                raise RuntimeError("no jlink")
+            if not emus:
+                self.flash_log.emit("warn", "未检测到 J-Link 设备，请检查 USB 连接")
+                raise RuntimeError("no jlink")
+            if jlink_serial and jlink_serial != "0" and not any(
+                    str(int(getattr(e, "SerialNumber", 0) or 0)) == jlink_serial
+                    for e in emus):
+                self.flash_log.emit(
+                    "warn", f"选中的 J-Link（S/N: {jlink_serial}）不在线，请刷新设备列表或重新选择")
+                raise RuntimeError("jlink offline")
 
-        if not j.opened():
-            if jlink_serial and jlink_serial != "0":
-                j.open(serial_no=int(jlink_serial))
-                ser = j.serial_number
-                j.close()
-                j.open(serial_no=int(ser))
-            else:
-                j.open()
-                ser = j.serial_number
-                j.close()
-                j.open(str(ser))
-            self.flash_log.emit("info", f"J-Link SN: {ser}")
+            if not j.opened():
+                if jlink_serial and jlink_serial != "0":
+                    j.open(serial_no=int(jlink_serial))
+                    ser = j.serial_number
+                    j.close()
+                    j.open(serial_no=int(ser))
+                else:
+                    j.open()
+                    ser = j.serial_number
+                    j.close()
+                    j.open(str(ser))
+                self.flash_log.emit("info", f"J-Link SN: {ser}")
         tif = (pylink.enums.JLinkInterfaces.SWD if iface == "SWD"
                else pylink.enums.JLinkInterfaces.JTAG)
         j.set_tif(tif)

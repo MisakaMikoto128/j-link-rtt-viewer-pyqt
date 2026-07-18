@@ -86,6 +86,10 @@ class ConfigService(QObject):
         # 空串表示没有历史（首次启动）。不在线时会以「离线占位」形式显示在 combo
         # 中并带红点提示。
         "last_jlink_serial": "",
+        # RTT 页 J-Link 模式："usb" | "remote"，以及远程连接上次输入
+        "jlink_mode": "usb",
+        "last_remote_host": "",
+        "last_remote_port": "19020",
         # 内存页用户选择持久化（地址/大小/字节序/字节每行/diff/自动刷新间隔/导出/写地址）
         # 不持久化：auto_refresh（断开会清掉）、goto/search（一次性）、write_data（误点高危）
         "mem_read_addr": "0x08000000",
@@ -116,6 +120,10 @@ class ConfigService(QObject):
         "flash_recent_files_mtime": {},         # path → mtime（float），用于变更提示
         # 烧录页选定的 J-Link serial（离线时红点占位）
         "flash_jlink_serial": "",
+        # 烧录页 J-Link 模式："usb" | "remote"
+        "flash_jlink_mode": "usb",
+        "flash_remote_host": "",
+        "flash_remote_port": "",
     }
 
     SEND_HISTORY_MAX = 50
@@ -153,7 +161,13 @@ class ConfigService(QObject):
             base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
         else:
             xdg_config = os.environ.get("XDG_CONFIG_HOME")
-            base = Path(xdg_config) if xdg_config else Path.home() / ".config"
+            if xdg_config:
+                base = Path(xdg_config)
+            else:
+                # 不直接用 Path.home()：Windows 上 Path.home() 忽略 HOME 环境变量，
+                # 测试 monkeypatch HOME 会失效；真实 Linux 上两者等价。
+                home = os.environ.get("HOME")
+                base = (Path(home) if home else Path.home()) / ".config"
         return base / "JLinkRTTViewer" / "user_prefs.json"
 
     def _seed_user_config_if_missing(self) -> None:

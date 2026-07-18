@@ -10,21 +10,26 @@ class FakeRttWorker(QObject):
     connection_state_changed = Signal(bool)
     disconnect_requested = Signal()
     connect_requested = Signal(str, str, int, int, str)
+    connect_remote_requested = Signal(str, str, int, int, str)
 
-    def __init__(self, state: str = "IDLE", serial: str = "") -> None:
+    def __init__(self, state: str = "IDLE", serial: str = "",
+                 remote_addr: str = "") -> None:
         super().__init__()
         self._state = state
         self._serial = serial
+        self._remote_addr = remote_addr
         self.disconnects: list = []
         self.connects: list = []
+        self.connect_remotes: list = []
         self.disconnect_requested.connect(lambda: self.disconnects.append(None))
         self.connect_requested.connect(lambda *a: self.connects.append(a))
+        self.connect_remote_requested.connect(lambda *a: self.connect_remotes.append(a))
 
     def state_name(self) -> str:
         return self._state
 
     def get_device_info(self) -> dict:
-        return {"jlink_serial": self._serial}
+        return {"jlink_serial": self._serial, "remote_addr": self._remote_addr}
 
 
 class _SignalSpy(QObject):
@@ -60,9 +65,10 @@ def test_burner_combo_rebuilt_on_enumeration(flash_coord):
     page, worker, _cfg, _fd = flash_coord
     worker.devices_enumerated.emit("111|A;222|B")
     _process()
-    assert page.cmb_burner.count() == 2
+    assert page.cmb_burner.count() == 3
     assert page.cmb_burner.itemText(0) == "111"
     assert page.cmb_burner.itemText(1) == "222"
+    assert page.cmb_burner.itemText(2) == "远程连接…"
     assert page.cmb_burner.currentText() == "111"
 
 
@@ -82,6 +88,7 @@ def test_start_flash_without_burner_warns_and_does_not_request(flash_coord):
     page.cmb_device.setCurrentText("STM32H750VB")
     page.rb_swd.setChecked(True)
     page.cmb_speed.setCurrentText("4000")
+    # 未收到枚举，下拉仍为空
     assert page.cmb_burner.count() == 0
 
     spy = _SignalSpy(page._worker.flash_requested)
@@ -192,3 +199,54 @@ def test_set_rtt_busy_delegates_to_rtt_page(flash_coord):
     page._set_rtt_busy(True)
     page._set_rtt_busy(False)
     assert calls == [True, False]
+
+
+def test_remote_same_addr_disconnects_rtt_before_flash(flash_coord, qtbot):
+    """flash 远程地址与 RTT 当前 remote_addr 相同 → 先断 RTT，烧完回连。"""
+    page, worker, cfg, fixtures_dir = flash_coord
+    cfg.set("flash_jlink_mode", "remote")
+    cfg.set("flash_remote_host", "192.168.79.1")
+    cfg.set("flash_remote_port", "19020")
+    cfg.set("target_mcu", "STM32H750VB")
+    cfg.set("interface", "SWD")
+    cfg.set("speed_khz", 4000)
+    cfg.set("rtt_channel", 0)
+
+    worker._state = "CONNECTED"
+    worker._remote_addr = "192.168.79.1:19020"
+    worker.devices_enumerated.emit("111|A")
+    _process()
+
+    assert page.cmb_burner.currentText() == "远程连接…"
+    assert not page.remote_row.isHidden()
+
+    page._select_file(str(fixtures_dir / "blink.bin"))
+    page.cmb_device.setCurrentText("STM32H750VB")
+    page.le_remote_host.setText("192.168.79.1")
+    page.le_remote_port.setText("19020")
+
+    spy = _SignalSpy(page._worker.flash_requested)
+    page.btn_flash.click()
+    _process()
+
+    assert len(worker.disconnects) == 1
+    assert spy.count == 0
+    assert page._rtt_pending_disconnect is True
+
+    worker.connection_state_changed.emit(False)
+    qtbot.waitSignal(page._worker.flash_requested, timeout=1000)
+    _process()
+    assert spy.count == 1
+
+    page._worker.flash_finished.emit(True, "ok")
+    qtbot.waitSignal(worker.connect_remote_requested, timeout=1000)
+    _process()
+
+    assert len(worker.connects) == 0
+    assert len(worker.connect_remotes) == 1
+    args = worker.connect_remotes[0]
+    assert args[0] == "STM32H750VB"
+    assert args[1] == "SWD"
+    assert args[2] == 4000
+    assert args[3] == 0
+    assert args[4] == "192.168.79.1:19020"

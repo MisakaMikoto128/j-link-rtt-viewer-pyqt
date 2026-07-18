@@ -322,5 +322,13 @@
   "整片擦除（慢，更干净）": "Effacement complet de la puce (plus lent, plus propre)",
   "仅烧录": "Programmation seule",
   "烧录 + 复位": "Programmation + Réinitialisation",
-  "烧录 + 复位 + 运行（推荐）": "Programmation + Réinitialisation + Exécution (recommandé)"
+  "烧录 + 复位 + 运行（推荐）": "Programmation + Réinitialisation + Exécution (recommandé)",
+  "远程连接…": "Connexion distante…",
+  "远程主机:": "Hôte distant :",
+  "端口:": "Port :",
+  "IP 或域名，如 192.168.79.1": "IP ou nom d'hôte, ex. 192.168.79.1",
+  "无法解析主机名 \"{host}\"，请检查输入": "Impossible de résoudre le nom d'hôte \"{host}\", vérifiez la saisie",
+  "端口无效（1-65535）": "Port invalide (1-65535)",
+  "无法连接远程 J-Link（{addr}），请检查 Remote Server 是否运行、IP/端口是否正确": "Impossible de se connecter au J-Link distant ({addr}), vérifiez que Remote Server est lancé et que l'IP/port sont corrects",
+  "已连接远程 J-Link {addr} (S/N: {sn})": "Connecté au J-Link distant {addr} (S/N: {sn})"
 }

@@ -280,3 +280,23 @@ def test_on_stop_calls_safe_disconnect_and_quits_thread(monkeypatch, qapp):
     w._on_stop()
     fake_jlink.close.assert_called()
     fake_thread.quit.assert_called()
+
+
+def test_do_connect_remote_addr_skips_usb_enum_and_opens_by_ip(monkeypatch):
+    """remote_addr 非空时跳过 connected_emulators，按 ip:port 双开。"""
+    fake_jlink = MagicMock()
+    fake_jlink.opened.return_value = False
+    fake_jlink.serial_number = 602717758
+    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
+
+    w = FlashWorker()
+    w.initialize()
+    w._do_connect("STM32H750VB", "SWD", 4000,
+                  jlink_serial="", remote_addr="192.168.79.1:19020")
+
+    fake_jlink.connected_emulators.assert_not_called()
+    assert fake_jlink.open.call_count == 2
+    fake_jlink.open.assert_called_with(ip_addr="192.168.79.1:19020")
+    fake_jlink.set_tif.assert_called_once()
+    fake_jlink.set_speed.assert_called_with(4000)
+    fake_jlink.connect.assert_called_with("STM32H750VB")

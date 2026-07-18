@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, QThread, QTimer
+from PySide6.QtCore import QEvent, QObject, QRunnable, QThread, QThreadPool, QTimer, Qt, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QCompleter,
@@ -57,6 +57,28 @@ from core.flash_worker import (
 from . import _infobar
 from ._scroll_helpers import make_transparent_scroll
 from .firmware_analysis_view import FirmwareAnalysisView
+from .widgets.remote_host import (
+    REMOTE_ITEM_TEXT,
+    is_valid_port,
+    resolve_remote_host,
+    tcp_reachable,
+)
+
+
+class _RemoteProbe(QObject):
+    probe_done = Signal(bool)
+
+
+class _ReachabilityRunnable(QRunnable):
+    def __init__(self, ip: str, port: int, probe: _RemoteProbe) -> None:
+        super().__init__()
+        self._ip = ip
+        self._port = port
+        self._probe = probe
+
+    def run(self) -> None:
+        ok = tcp_reachable(self._ip, self._port)
+        self._probe.probe_done.emit(ok)
 
 
 _ERASE_LABELS = [
@@ -85,6 +107,14 @@ class FlashPage(QWidget):
         self._resume_rtt_after_flash = False
         self._rtt_pending_disconnect = False
         self._rtt_disconnect_timeout_timer: QTimer | None = None
+        self._rtt_resume_remote_addr = ""
+
+        # 远程 J-Link 模式状态
+        self._remote_mode = False
+        self._remote_reachable: bool | None = None
+        self._remote_probe = _RemoteProbe()
+        self._remote_probe.probe_done.connect(self._on_remote_probe_done)
+        self._remote_probe_in_flight = False
 
         # 独立 worker + 独立 QThread（和 JLinkWorker 完全无关）
         self._thread = QThread(self)
@@ -144,6 +174,29 @@ class FlashPage(QWidget):
         self.cmb_burner.setMinimumWidth(50)
         row_jlink.addWidget(self.cmb_burner, 1)
         layout.addLayout(row_jlink)
+
+        # ---- 远程主机输入行（选中「远程连接…」时显示）----
+        self.remote_row = QWidget(card)
+        remote_layout = QHBoxLayout(self.remote_row)
+        remote_layout.setSpacing(6)
+        remote_layout.setContentsMargins(0, 0, 0, 0)
+        self._lbl_remote_host = BodyLabel(self.tr("远程主机:"), self.remote_row)
+        self._lbl_remote_host.setFixedHeight(33)
+        remote_layout.addWidget(self._lbl_remote_host)
+        self.le_remote_host = LineEdit(self.remote_row)
+        self.le_remote_host.setFixedHeight(33)
+        self.le_remote_host.setPlaceholderText(self.tr("IP 或域名，如 192.168.79.1"))
+        remote_layout.addWidget(self.le_remote_host, 1)
+        self._lbl_remote_port = BodyLabel(self.tr("端口:"), self.remote_row)
+        self._lbl_remote_port.setFixedHeight(33)
+        remote_layout.addWidget(self._lbl_remote_port)
+        self.le_remote_port = LineEdit(self.remote_row)
+        self.le_remote_port.setFixedHeight(33)
+        self.le_remote_port.setPlaceholderText("19020")
+        self.le_remote_port.setMaximumWidth(80)
+        remote_layout.addWidget(self.le_remote_port)
+        layout.addWidget(self.remote_row)
+        self.remote_row.setVisible(False)
 
         row = QHBoxLayout()
         self.lbl_device = BodyLabel(self.tr("目标设备:"))
@@ -330,6 +383,10 @@ class FlashPage(QWidget):
 
         self.chk_verify.setChecked(bool(self._cfg.get("flash_verify")))
 
+        # 远程主机输入（下拉重建时会按 flash_jlink_mode 决定是否显示）
+        self.le_remote_host.setText(str(self._cfg.get("flash_remote_host") or ""))
+        self.le_remote_port.setText(str(self._cfg.get("flash_remote_port") or ""))
+
     # ---- 信号连接 ----
     def _connect_signals(self) -> None:
         # 持久化
@@ -357,7 +414,9 @@ class FlashPage(QWidget):
 
         # 烧录器下拉
         _Qt = Qt
-        self.cmb_burner.currentIndexChanged.connect(self._on_burner_selection_changed)
+        self.cmb_burner.currentTextChanged.connect(self._on_burner_selection_changed)
+        self.le_remote_host.textChanged.connect(self._trigger_remote_probe)
+        self.le_remote_port.textChanged.connect(self._trigger_remote_probe)
         if self._rtt_worker is not None:
             self._rtt_worker.devices_enumerated.connect(
                 self._on_burners_enumerated, _Qt.QueuedConnection)
@@ -433,32 +492,55 @@ class FlashPage(QWidget):
             prev = str(self._cfg.get("flash_jlink_serial") or "").strip()
             self._burner_initialized = True
 
+        # 远程模式：以前选中过远程项则优先恢复远程项
+        want_remote = str(self._cfg.get("flash_jlink_mode") or "") == "remote"
+
         self.cmb_burner.blockSignals(True)
         self.cmb_burner.setReadOnly(False)
         try:
             self.cmb_burner.clear()
             for s in serials:
                 self.cmb_burner.addItem(s)
-            if prev and prev in serials:
+            # 固定最后一项：远程连接
+            self.cmb_burner.addItem(REMOTE_ITEM_TEXT)
+
+            if want_remote:
+                self.cmb_burner.setCurrentText(REMOTE_ITEM_TEXT)
+            elif prev and prev in serials:
                 self.cmb_burner.setCurrentText(prev)
-            elif prev:
+            elif prev and prev != REMOTE_ITEM_TEXT:
                 self.cmb_burner.setText(prev)
                 self.cmb_burner.setReadOnly(True)
             elif serials:
                 self.cmb_burner.setCurrentIndex(0)
             else:
-                self.cmb_burner.setText("")
+                self.cmb_burner.setCurrentText(REMOTE_ITEM_TEXT)
         finally:
             self.cmb_burner.blockSignals(False)
 
+        # 同步远程模式状态（必须放在 unblock 之后，因为会读 currentText）
+        self._remote_mode = self.cmb_burner.currentText().strip() == REMOTE_ITEM_TEXT
+        self.remote_row.setVisible(self._remote_mode)
+        if self._remote_mode:
+            self._trigger_remote_probe()
         self._sync_burner_status_dot()
 
     def _sync_burner_status_dot(self) -> None:
-        """当前值不在可用设备列表里 → 显示红点并只读。"""
+        """当前值不在可用设备列表里 → 显示红点并只读。
+
+        远程模式下：解析失败或探测不可达 → 红点；可达 → 隐藏。
+        """
         serial = self.cmb_burner.currentText().strip()
         if not serial:
             self._burner_status_dot.hide()
             return
+
+        if self._remote_mode:
+            # None = 未知，也显示红点
+            self._burner_status_dot.setVisible(self._remote_reachable is not True)
+            self.cmb_burner.setReadOnly(False)
+            return
+
         online = self.cmb_burner.findText(serial) >= 0
         self._burner_status_dot.setVisible(not online)
         self.cmb_burner.setReadOnly(not online)
@@ -466,8 +548,37 @@ class FlashPage(QWidget):
     def _on_burner_selection_changed(self) -> None:
         """用户选了真实设备 → 持久化 + 同步红点。"""
         serial = self.cmb_burner.currentText().strip()
-        if serial:
-            self._cfg.set("flash_jlink_serial", serial)
+        self._remote_mode = serial == REMOTE_ITEM_TEXT
+        self.remote_row.setVisible(self._remote_mode)
+
+        if self._remote_mode:
+            self._cfg.set("flash_jlink_mode", "remote")
+            self._trigger_remote_probe()
+        else:
+            self._cfg.set("flash_jlink_mode", "usb")
+            if serial:
+                self._cfg.set("flash_jlink_serial", serial)
+        self._sync_burner_status_dot()
+
+    def _trigger_remote_probe(self) -> None:
+        """异步探测远程主机 TCP 可达性；有在飞探测时跳过。"""
+        if self._remote_probe_in_flight:
+            return
+        host = self.le_remote_host.text().strip()
+        port_text = self.le_remote_port.text().strip()
+        resolved = resolve_remote_host(host)
+        port = int(port_text) if is_valid_port(port_text) else 0
+        if resolved and port:
+            self._remote_probe_in_flight = True
+            runnable = _ReachabilityRunnable(resolved, port, self._remote_probe)
+            QThreadPool.globalInstance().start(runnable)
+        else:
+            self._remote_reachable = False
+            self._sync_burner_status_dot()
+
+    def _on_remote_probe_done(self, reachable: bool) -> None:
+        self._remote_probe_in_flight = False
+        self._remote_reachable = reachable
         self._sync_burner_status_dot()
 
     def _on_browse(self) -> None:
@@ -663,12 +774,6 @@ class FlashPage(QWidget):
         except (ValueError, TypeError):
             bin_addr = 0
 
-        burner_serial = self.cmb_burner.currentText().strip()
-        if not burner_serial or self.cmb_burner.findText(burner_serial) < 0:
-            _infobar.warn(self, self.tr("提示"),
-                          self.tr("未检测到 J-Link 设备，请检查 USB 连接"))
-            return
-
         device = self.cmb_device.currentText().strip()
         if not device:
             _infobar.warn(self, self.tr("未填 Device"), self.tr("请填写目标设备名（如 STM32H750VB）"))
@@ -680,22 +785,60 @@ class FlashPage(QWidget):
         post_action = _POST_LABELS[self.cmb_post.currentIndex()][1]
         verify = self.chk_verify.isChecked()
 
+        # ---- 本地 / 远程 烧录器参数分支 ----
+        remote_addr = ""
+        burner_serial = ""
+        if self._remote_mode:
+            host = self.le_remote_host.text().strip()
+            port_text = self.le_remote_port.text().strip()
+            resolved = resolve_remote_host(host)
+            if resolved is None:
+                _infobar.warn(self, self.tr("提示"),
+                              self.tr('无法解析主机名 "{host}"，请检查输入').format(host=host))
+                return
+            if not is_valid_port(port_text):
+                _infobar.warn(self, self.tr("提示"), self.tr("端口无效（1-65535）"))
+                return
+            remote_addr = f"{resolved}:{port_text}"
+            self._cfg.set("flash_remote_host", host)
+            self._cfg.set("flash_remote_port", port_text)
+        else:
+            burner_serial = self.cmb_burner.currentText().strip()
+            if not burner_serial or self.cmb_burner.findText(burner_serial) < 0:
+                _infobar.warn(self, self.tr("提示"),
+                              self.tr("未检测到 J-Link 设备，请检查 USB 连接"))
+                return
+
         params = FlashParams(
             file_path=path, file_format=fmt, bin_start_addr=bin_addr,
             device_name=device, interface=iface, speed_khz=speed,
             erase_mode=erase_mode, post_action=post_action,
             extra_verify=verify, jlink_serial=burner_serial,
+            remote_addr=remote_addr,
         )
         self._worker.set_pending_params(params)
 
-        # 与 RTT 协调：同一台 J-Link 且 RTT 已连接时，先断开 RTT 再烧录
+        # 与 RTT 协调：同一逻辑设备且 RTT 已连接时，先断开 RTT 再烧录
         self._set_rtt_busy(True)
+        self._rtt_resume_remote_addr = ""
         if self._rtt_worker is not None:
             rtt_state = self._rtt_worker.state_name()
-            rtt_serial = str(self._rtt_worker.get_device_info().get("jlink_serial", "") or "")
-            if rtt_state == "CONNECTED" and rtt_serial == burner_serial and burner_serial:
+            rtt_info = self._rtt_worker.get_device_info()
+            rtt_serial = str(rtt_info.get("jlink_serial", "") or "")
+            rtt_remote_addr = str(rtt_info.get("remote_addr", "") or "")
+            same_device = False
+            if self._remote_mode:
+                same_device = (rtt_state == "CONNECTED"
+                               and rtt_remote_addr == remote_addr
+                               and remote_addr)
+            else:
+                same_device = (rtt_state == "CONNECTED"
+                               and rtt_serial == burner_serial
+                               and burner_serial)
+            if same_device:
                 self._resume_rtt_after_flash = True
                 self._rtt_pending_disconnect = True
+                self._rtt_resume_remote_addr = rtt_remote_addr
                 self._rtt_worker.disconnect_requested.emit()
                 self._rtt_disconnect_timeout_timer.start()
                 return
@@ -750,10 +893,16 @@ class FlashPage(QWidget):
             iface = self._cfg.get("interface")
             speed = int(self._cfg.get("speed_khz") or 0)
             channel = int(self._cfg.get("rtt_channel") or 0)
-            burner_serial = self.cmb_burner.currentText().strip()
-            if target and burner_serial:
-                self._rtt_worker.connect_requested.emit(
-                    target, iface, speed, channel, burner_serial)
+            if target:
+                if self._rtt_resume_remote_addr:
+                    self._rtt_worker.connect_remote_requested.emit(
+                        target, iface, speed, channel, self._rtt_resume_remote_addr)
+                else:
+                    burner_serial = self.cmb_burner.currentText().strip()
+                    if burner_serial:
+                        self._rtt_worker.connect_requested.emit(
+                            target, iface, speed, channel, burner_serial)
+            self._rtt_resume_remote_addr = ""
         if ok:
             self.lbl_stage.setText(self.tr("完成 ✓"))
             self.progress.setValue(100)
@@ -771,7 +920,8 @@ class FlashPage(QWidget):
         for w in (self.cmb_device, self.rb_swd, self.rb_jtag, self.cmb_speed,
                   self.cmb_file, self.btn_browse, self.btn_save_as,
                   self.edit_bin_addr,
-                  self.cmb_erase, self.cmb_post, self.chk_verify):
+                  self.cmb_erase, self.cmb_post, self.chk_verify,
+                  self.cmb_burner, self.le_remote_host, self.le_remote_port):
             w.setEnabled(enabled)
         self.btn_flash.setEnabled(enabled)
 
@@ -785,12 +935,18 @@ class FlashPage(QWidget):
         # 静态标题 / 标签
         self.lbl_conn_title.setText(self.tr("连接参数"))
         self._lbl_burner.setText(self.tr("烧录器:"))
+        self._lbl_remote_host.setText(self.tr("远程主机:"))
+        self._lbl_remote_port.setText(self.tr("端口:"))
         self.lbl_device.setText(self.tr("目标设备:"))
         self.lbl_file_title.setText(self.tr("固件文件"))
         self.lbl_bin_addr.setText(self.tr("Bin 起始地址:"))
         self.lbl_options_title.setText(self.tr("烧录选项"))
         self.lbl_erase.setText(self.tr("擦除模式:"))
         self.lbl_post.setText(self.tr("完成动作:"))
+
+        # 输入框占位
+        self.le_remote_host.setPlaceholderText(self.tr("IP 或域名，如 192.168.79.1"))
+        self.le_remote_port.setPlaceholderText("19020")
 
         # 按钮
         self.btn_browse.setText(self.tr("浏览…"))

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import pytest
+from PySide6.QtCore import QObject
 
 
 @pytest.fixture
@@ -100,3 +101,128 @@ def test_device_combo_has_completer(flash_page):
     assert completer is not None
     assert completer.caseSensitivity() == Qt.CaseInsensitive
     assert completer.filterMode() == Qt.MatchContains
+
+
+# ------------------------------------------------------------------
+# 远程 J-Link 模式（FlashPage 部分）
+# ------------------------------------------------------------------
+
+class _SignalSpy(QObject):
+    def __init__(self, signal):
+        super().__init__()
+        self.count = 0
+        signal.connect(lambda: setattr(self, "count", self.count + 1))
+
+
+def _process():
+    from PySide6.QtCore import QCoreApplication
+    QCoreApplication.processEvents()
+
+
+def test_remote_item_is_last_combo_item(flash_page):
+    """枚举后远程项固定在下拉最末。"""
+    from ui.widgets.remote_host import REMOTE_ITEM_TEXT
+    flash_page._on_burners_enumerated("111|A;222|B")
+    _process()
+    assert flash_page.cmb_burner.count() == 3
+    assert flash_page.cmb_burner.itemText(2) == REMOTE_ITEM_TEXT
+
+
+def test_selecting_remote_item_shows_row_and_persists_mode(flash_page):
+    """选中「远程连接…」后显示 IP/端口行并持久化 flash_jlink_mode。"""
+    from ui.widgets.remote_host import REMOTE_ITEM_TEXT
+    flash_page._on_burners_enumerated("111|A")
+    _process()
+    idx = flash_page.cmb_burner.findText(REMOTE_ITEM_TEXT)
+    flash_page.cmb_burner.setCurrentIndex(idx)
+    _process()
+    assert not flash_page.remote_row.isHidden()
+    assert flash_page._cfg.get("flash_jlink_mode") == "remote"
+
+
+def test_start_flash_unresolvable_host_warns(flash_page, fixtures_dir):
+    """远程模式下主机名无法解析时拦截，不 emit flash_requested。"""
+    from ui.widgets.remote_host import REMOTE_ITEM_TEXT
+    flash_page._on_burners_enumerated("")
+    idx = flash_page.cmb_burner.findText(REMOTE_ITEM_TEXT)
+    flash_page.cmb_burner.setCurrentIndex(idx)
+    flash_page.le_remote_host.setText("not a valid host!!")
+    flash_page.le_remote_port.setText("19020")
+    flash_page._select_file(str(fixtures_dir / "blink.bin"))
+    flash_page.cmb_device.setCurrentText("STM32H750VB")
+    _process()
+
+    spy = _SignalSpy(flash_page._worker.flash_requested)
+    flash_page.btn_flash.click()
+    _process()
+    assert spy.count == 0
+
+
+def test_start_flash_valid_localhost_builds_remote_params(flash_page, fixtures_dir):
+    """127.0.0.1 不依赖 DNS，FlashParams 应带 remote_addr。"""
+    from ui.widgets.remote_host import REMOTE_ITEM_TEXT
+    flash_page._on_burners_enumerated("")
+    idx = flash_page.cmb_burner.findText(REMOTE_ITEM_TEXT)
+    flash_page.cmb_burner.setCurrentIndex(idx)
+    flash_page.le_remote_host.setText("127.0.0.1")
+    flash_page.le_remote_port.setText("19020")
+    flash_page._select_file(str(fixtures_dir / "blink.bin"))
+    flash_page.cmb_device.setCurrentText("STM32H750VB")
+    _process()
+
+    params = None
+
+    def capture(p):
+        nonlocal params
+        params = p
+
+    flash_page._worker.set_pending_params = capture
+    flash_page._on_start_flash()
+    _process()
+
+    assert params is not None
+    assert params.remote_addr == "127.0.0.1:19020"
+    assert params.jlink_serial == ""
+
+
+# ---- remote_host helper 单元 ----
+
+def test_resolve_remote_host_ipv4_literal():
+    from ui.widgets.remote_host import resolve_remote_host
+    assert resolve_remote_host("127.0.0.1") == "127.0.0.1"
+
+
+def test_resolve_remote_host_localhost_returns_ipv4():
+    from ui.widgets.remote_host import resolve_remote_host
+    ip = resolve_remote_host("localhost")
+    assert ip is not None
+    parts = ip.split(".")
+    assert len(parts) == 4
+
+
+def test_resolve_remote_host_invalid_returns_none():
+    from ui.widgets.remote_host import resolve_remote_host
+    assert resolve_remote_host("not a host!!") is None
+    assert resolve_remote_host("") is None
+
+
+def test_is_valid_port():
+    from ui.widgets.remote_host import is_valid_port
+    assert is_valid_port("19020") is True
+    assert is_valid_port("1") is True
+    assert is_valid_port("65535") is True
+    assert is_valid_port("0") is False
+    assert is_valid_port("65536") is False
+    assert is_valid_port("abc") is False
+    assert is_valid_port("") is False
+
+
+def test_tcp_reachable_localhost_refused_port():
+    """本地未监听端口应返回 False；不依赖外部网络。"""
+    import socket
+    from ui.widgets.remote_host import tcp_reachable
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    _, port = sock.getsockname()
+    sock.close()
+    assert tcp_reachable("127.0.0.1", port, timeout=0.5) is False
