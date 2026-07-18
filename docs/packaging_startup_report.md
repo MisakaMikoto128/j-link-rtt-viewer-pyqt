@@ -58,13 +58,15 @@
 
 **实测结论**：
 1. 50 个 PySide6 排除项编译期**零 WARNING** —— Nuitka 静态追踪压根没发现任何代码路径 import 它们，说明排除完全安全，不只是"砍了但运行时靠回退"。
-2. 5 条 WARNING 全是预期命中（`qfluentwidgets.multimedia` / `pylink.__main__` / `intelhex.__main__/bench/test` 的 exact + `*.test` pattern）。
-3. standalone 构建成功，`--startup-bench` smoke 启动到 `launch_bench.txt` 写出（窗口 show + 事件循环一拍都跑过），exit 0。ELF/对话框等真实路径虽没在 smoke 里走到，但被排除模块全是"编译期未触及"，无回退风险。
+2. 最初为 intelhex/pylink 的 CLI/test stub（`intelhex.__main__/test/bench`、`pylink.__main__`）也加了 `--nofollow-import-to`，构建时打 4 条 `Not allowed to include module` WARNING——这些是排除生效的确认，无害。但**根因是脚本里多了冗余的 `--include-package=intelhex` / `--include-package=pylink`**：这两条强制扫整包，stub 被纳入意向再被 nofollow 拦下 → 既占 WARNING 又是死循环。**修法**：standalone 模式 `--follow-imports` 默认开，本就会自动跟随 src 的 import（含 `flash_file_parser.py` 函数内 lazy 的 `from elftools.../from intelhex import IntelHex` + 模块级 `import pylink`），不需要 `--include-package`。实验（subagent 去 `--show-modules` 验证）：去掉这两条后 Nuitka 仍自动把 `intelhex/intelhex.compat/intelhex.getsizeof` 和 pylink 全套子模块打进 dist，**4 条 WARNING 消失**，stub nofollow 也随之删掉（再无扫描源触达它们）。**结论：`--include-package=intelhex/pylink` 是多余且有害的，已删**。
+3. standalone 构建成功，`--startup-bench` smoke 启动到 `launch_bench.txt` 写出（窗口 show + 事件循环一拍都跑过），exit 0。
+4. 最终构建只剩 **1 条 WARNING**：`qfluentwidgets.multimedia` —— 这条无法消除（`--include-package=qfluentwidgets` 必须保留以保动态加载的 widget 子模块/资源，见 CLAUDE.md 踩坑；multimedia 被它扫到，只能靠 nofollow 拦）。是的，1 条无害 WARNING 换来 81 KB 的干净排除，值。
 
 **关键不能排的（踩坑提醒）**：
-- `elftools.dwarf` / `elftools.ehabi` 看似没用到（项目只用 `elftools.elf.elffile` + `elftools.common.exceptions`），但 `elffile.py` 在**模块级别** `from ..dwarf.dwarfinfo import ...` 硬导入。`--nofollow-import-to=elftools.dwarf` 会让 `from elftools.elf.elffile import ELFFile` 运行时直接 `ModuleNotFoundError` ——**致命，绝不能排**。drawf（~244KB）是 elftools 体积大头，但只能靠 fork 改 lazy import 才能砍，不能靠 nofollow。
+- `elftools.dwarf` / `elftools.ehabi` 看似没用到（项目只用 `elftools.elf.elffile` + `elftools.common.exceptions`），但 `elffile.py` 在**模块级别** `from ..dwarf.dwarfinfo import ...` 硬导入。`--nofollow-import-to=elftools.dwarf` 会让 `from elftools.elf.elffile import ELFFile` 运行时直接 `ModuleNotFoundError` ——**致命，绝不能排**。dwarf（~244KB）是 elftools 体积大头，但只能靠 fork 改 lazy import 才能砍，不能靠 nofollow。`--include-package=elftools` 仍保留（elftools 的 lazy import 历史上不稳，保留扫全包更保险；它不产生我们关心的 stub WARNING）。
 - qfluentwidgets `components/__init__.py` 和 `widgets/__init__.py` 对子模块有显式 `from .xxx import *`，单文件级排除（如 `components.widgets.tree_view`）会炸包初始化。`date_time` 子包同理（`from .date_time import *`）。**只排 `qfluentwidgets.multimedia`（顶层无 `from .multimedia import *` 拉入）；其余 qfluentwidgets 子包都别碰**。
 - `--nofollow-import-to` 的语义是"运行时被 import 会 `ModuleNotFoundError`"（不是"保留字节码可回退"），所以只能排**确认零引用**的模块；对包内 `__init__` 用 `import *` 硬拉入的子包，排了等于自杀。
+- **冗余 `--include-package` 会催生 stub nofollow 的死循环 WARNING**：如果一个包靠 `--include-package` 全包扫，又对它的 `__main__/test/...` stub 加 nofollow，必然 WARNING。正解是**去掉那个 `--include-package`，改靠 default `--follow-imports` 自动跟随**（standalone 模式默认开），stub 不再被扫到，nofollow 也无需加。`--include-package` 只对"Nuitka 静态追踪追不到、但又确实在运行时用"的包保留（如_clr 的 ext、动态 `__import__`）。
 
 ### 运行时速度
 
