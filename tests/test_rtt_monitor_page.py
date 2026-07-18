@@ -833,3 +833,53 @@ def test_probe_remote_reachability_throttled(rtt_page, qtbot):
     page._last_remote_probe_ts = 0.0
     page._probe_remote_reachability()
     assert page._remote_probe_in_flight is True, "超过间隔后应启动探测"
+
+
+def test_probe_fires_despite_unchanged_enumeration(rtt_page, qtbot):
+    """远程模式下，即使枚举内容完全未变，_probe_remote_reachability 也应每次被调用。"""
+    page, worker, _ = rtt_page
+    worker.devices_enumerated.emit("111|A")
+    qtbot.wait(50)
+    page.cb_jlink.setCurrentIndex(page.cb_jlink.count() - 1)  # 选远程项
+    qtbot.wait(50)
+
+    probe_calls = []
+    original_probe = page._probe_remote_reachability
+
+    def counting_probe():
+        probe_calls.append(1)
+
+    page._probe_remote_reachability = counting_probe
+    try:
+        # 第一次（刚切到远程）之后，连续两次内容完全不变的枚举
+        worker.devices_enumerated.emit("111|A")
+        qtbot.wait(50)
+        worker.devices_enumerated.emit("111|A")
+        qtbot.wait(50)
+        assert len(probe_calls) == 2, "内容未变时远程探测仍应被触发"
+    finally:
+        page._probe_remote_reachability = original_probe
+
+
+def test_conn_panel_controls_aligned_fixed_width(rtt_page, qtbot):
+    """左侧面板连接区关键控件固定 200px，label + spring + control 对齐。"""
+    page, _, _ = rtt_page
+    page.resize(900, 700)
+    page.show()
+    qtbot.waitForWindowShown(page)
+    qtbot.wait(20)
+
+    controls = [
+        page.cb_jlink,
+        page.cb_target,
+        page.le_remote_host,
+        page.le_remote_port,
+        page.sp_channel,
+    ]
+    for w in controls:
+        assert w.width() == 200, f"{w.objectName()} width={w.width()} != 200"
+        assert w.minimumWidth() == 200, f"{w.objectName()} minWidth != 200"
+        assert w.maximumWidth() == 200, f"{w.objectName()} maxWidth != 200"
+
+    assert page._lbl_target.text() == page.tr("目标设备:")
+    assert page._jlink_status_dot.parentWidget() is page.cb_jlink

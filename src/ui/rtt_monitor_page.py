@@ -753,14 +753,7 @@ class RTTMonitorPage(QWidget):
         self._lbl_jlink_device = BodyLabel(self.tr("J-Link"))
         self._lbl_jlink_device.setFixedHeight(_CTRL_H)
         row_jlink.addWidget(self._lbl_jlink_device)
-
-        # 在线状态小红点：ComboBox 左侧。目标 J-Link 当前在接入列表里 → 隐藏；
-        # 不在线（历史占位）→ 显示。用 DotInfoBadge.setLevel(ERROR) 保持 Fluent 风格。
-        self._jlink_status_dot = DotInfoBadge(inner)
-        self._jlink_status_dot.setLevel(InfoLevel.ERROR)
-        self._jlink_status_dot.setFixedSize(8, 8)
-        self._jlink_status_dot.hide()
-        row_jlink.addWidget(self._jlink_status_dot, alignment=Qt.AlignVCenter)
+        row_jlink.addStretch(1)
 
         # 显示文本即 serial 号（这台 J-Link 的唯一识别），不额外存 userData。
         # 当前值可能是历史选择（不在 combo items 里）的离线占位，也可能是当前
@@ -770,10 +763,18 @@ class RTTMonitorPage(QWidget):
         # 禁止用户键盘输入即可。
         self.cb_jlink = EditableComboBox(inner)
         self.cb_jlink.setFixedHeight(_CTRL_H)
-        self.cb_jlink.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.cb_jlink.setMinimumWidth(50)
-        row_jlink.addWidget(self.cb_jlink, 1)
+        self.cb_jlink.setFixedWidth(200)
+        row_jlink.addWidget(self.cb_jlink)
         v.addLayout(row_jlink)
+
+        # 在线状态小红点：叠加在 ComboBox 左边缘。目标 J-Link 当前在接入列表里 → 隐藏；
+        # 不在线（历史占位）→ 显示。用 DotInfoBadge.setLevel(ERROR) 保持 Fluent 风格。
+        self._jlink_status_dot = DotInfoBadge(self.cb_jlink)
+        self._jlink_status_dot.setLevel(InfoLevel.ERROR)
+        self._jlink_status_dot.setFixedSize(8, 8)
+        self._jlink_status_dot.hide()
+        self._position_jlink_status_dot()
+        self._jlink_status_dot.raise_()
 
         # ---- 远程主机行（选中「远程连接」时显示）----
         self.remote_row = QWidget(inner)
@@ -786,13 +787,13 @@ class RTTMonitorPage(QWidget):
         self._lbl_remote_host = BodyLabel(self.tr("远程主机:"))
         self._lbl_remote_host.setFixedHeight(_CTRL_H)
         row_remote_host.addWidget(self._lbl_remote_host)
+        row_remote_host.addStretch(1)
         self.le_remote_host = LineEdit(inner)
         self.le_remote_host.setPlaceholderText(
             self.tr("IP 或域名，如 192.168.79.1"))
         self.le_remote_host.setFixedHeight(_CTRL_H)
-        self.le_remote_host.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Preferred)
-        row_remote_host.addWidget(self.le_remote_host, 1)
+        self.le_remote_host.setFixedWidth(200)
+        row_remote_host.addWidget(self.le_remote_host)
         remote_layout.addLayout(row_remote_host)
 
         row_remote_port = QHBoxLayout()
@@ -801,12 +802,12 @@ class RTTMonitorPage(QWidget):
         self._lbl_remote_port = BodyLabel(self.tr("端口:"))
         self._lbl_remote_port.setFixedHeight(_CTRL_H)
         row_remote_port.addWidget(self._lbl_remote_port)
+        row_remote_port.addStretch(1)
         self.le_remote_port = LineEdit(inner)
         self.le_remote_port.setPlaceholderText("19020")
         self.le_remote_port.setFixedHeight(_CTRL_H)
-        self.le_remote_port.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Preferred)
-        row_remote_port.addWidget(self.le_remote_port, 1)
+        self.le_remote_port.setFixedWidth(200)
+        row_remote_port.addWidget(self.le_remote_port)
         remote_layout.addLayout(row_remote_port)
         v.addWidget(self.remote_row)
         self.remote_row.setVisible(False)
@@ -817,8 +818,17 @@ class RTTMonitorPage(QWidget):
         self.le_remote_port.setText(
             str(self._cfg.get("last_remote_port") or "19020"))
 
+        # ---- 目标设备行 ----
+        row_target = QHBoxLayout()
+        row_target.setSpacing(6)
+        row_target.setContentsMargins(0, 0, 0, 0)
+        self._lbl_target = BodyLabel(self.tr("目标设备:"))
+        self._lbl_target.setFixedHeight(_CTRL_H)
+        row_target.addWidget(self._lbl_target)
+        row_target.addStretch(1)
         self.cb_target = EditableComboBox(inner)
         self.cb_target.setPlaceholderText(self.tr("目标设备"))
+        self.cb_target.setFixedWidth(200)
         chip_list = self._cfg.get_chip_list()
         self.cb_target.addItems(chip_list)
         last_mcu = self._cfg.get("target_mcu")
@@ -828,7 +838,8 @@ class RTTMonitorPage(QWidget):
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setFilterMode(Qt.MatchContains)
         self.cb_target.setCompleter(completer)
-        v.addWidget(self.cb_target)
+        row_target.addWidget(self.cb_target)
+        v.addLayout(row_target)
 
         row_iface = QHBoxLayout()
         row_iface.setSpacing(6)
@@ -865,6 +876,7 @@ class RTTMonitorPage(QWidget):
         self._lbl_rtt_channel = BodyLabel(self.tr("RTT 通道"))
         self._lbl_rtt_channel.setFixedHeight(_CTRL_H)
         row_ch.addWidget(self._lbl_rtt_channel)
+        row_ch.addStretch(1)
         self.sp_channel = SpinBox(inner)
         # -1 = 全部通道（显示为「全部通道」文本）；上限 15 是占位，连接成功后
         # 按 MCU 实际上报通道数收紧（_update_channel_range_from_worker）
@@ -873,9 +885,8 @@ class RTTMonitorPage(QWidget):
         self.sp_channel.setValue(self._cfg.get("rtt_channel"))
         self._update_channel_tooltip()
         self.sp_channel.setFixedHeight(_CTRL_H)
-        self.sp_channel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.sp_channel.setMinimumWidth(50)
-        row_ch.addWidget(self.sp_channel, 1)
+        self.sp_channel.setFixedWidth(200)
+        row_ch.addWidget(self.sp_channel)
         v.addLayout(row_ch)
 
         self.btn_connect = PrimaryPushButton(FluentIcon.PLAY, self.tr("连接"), inner)
@@ -1514,12 +1525,18 @@ class RTTMonitorPage(QWidget):
             self._cfg.set("last_jlink_serial", current)
         self._sync_jlink_status_dot()
 
+    def _position_jlink_status_dot(self) -> None:
+        """把红点定位到 cb_jlink 左边缘内侧（覆盖在 combo 上）。"""
+        self._jlink_status_dot.move(6, (self.cb_jlink.height() - 8) // 2)
+        self._jlink_status_dot.raise_()
+
     def _sync_jlink_status_dot(self) -> None:
         """按当前 currentText 是否可用，显示/隐藏红点。
 
         本地模式：currentText 在 items 里 → 隐藏（在线）；不在 → 显示（离线占位）。
         远程模式：TCP 可达 → 隐藏；解析失败/不可达/未探测 → 显示。
         """
+        self._position_jlink_status_dot()
         current = self.cb_jlink.currentText().strip()
         if not current:
             self._jlink_status_dot.hide()
@@ -1624,6 +1641,11 @@ class RTTMonitorPage(QWidget):
         remote_text = self.tr(REMOTE_ITEM_TEXT)
         self._remote_item_text = remote_text
 
+        # 远程探测不受枚举去抖影响：内容没变也要按 400ms 节拍探（内部已节流）。
+        # 它是 200ms 枚举节拍真正的消费者；combo 重建才需要去抖。
+        if self.cb_jlink.currentText().strip() == remote_text:
+            self._probe_remote_reachability()
+
         new_state = (tuple(serials), remote_text)
         if getattr(self, "_last_enum_state", None) == new_state and hasattr(self, "_jlink_initialized"):
             return   # 内容没变：不动 combo（避免 200ms 无谓重建/闪烁）
@@ -1678,10 +1700,6 @@ class RTTMonitorPage(QWidget):
 
         # 同步红点：currentText 不在 items 里 → 显示红点（离线占位）
         self._sync_jlink_status_dot()
-
-        # 远程模式：利用 200ms 枚举节拍做 TCP 可达性探测
-        if self.cb_jlink.currentText().strip() == remote_text:
-            self._probe_remote_reachability()
 
         # 拔掉检测：上次选中的 serial 没了 + 当前已连接 → 立刻断开
         # 远程项不是 USB 设备，跳过。
@@ -2719,6 +2737,7 @@ class RTTMonitorPage(QWidget):
 
         # 连接设置区
         self.cb_target.setPlaceholderText(self.tr("目标设备"))
+        self._lbl_target.setText(self.tr("目标设备:"))
         self._lbl_jlink_device.setText(self.tr("J-Link"))
         self._lbl_iface.setText(self.tr("接口"))
         self._lbl_speed.setText(self.tr("速度"))
