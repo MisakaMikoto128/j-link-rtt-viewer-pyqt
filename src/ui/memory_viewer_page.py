@@ -18,8 +18,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
-    QLabel,
-    QProgressBar,
     QSplitter,
     QTextEdit,
     QVBoxLayout,
@@ -31,8 +29,10 @@ from qfluentwidgets import (
     CheckBox,
     ComboBox,
     LineEdit,
+    MessageBox,
     PlainTextEdit,
     PrimaryPushButton,
+    ProgressBar,
     PushButton,
     SpinBox,
     StrongBodyLabel,
@@ -345,13 +345,13 @@ class MemoryViewerPage(QWidget):
         ex_row.addStretch(1)
         ex_root.addLayout(ex_row)
 
-        self.lbl_path = QLabel(self.tr("（未选择保存路径）"), self)
+        self.lbl_path = BodyLabel(self.tr("（未选择保存路径）"), self)
         ex_root.addWidget(self.lbl_path)
 
         bottom = QHBoxLayout()
         self.btn_export = PrimaryPushButton(self.tr("开始导出"), self)
         self.btn_export.setEnabled(False)
-        self.pb_export = QProgressBar(self)
+        self.pb_export = ProgressBar(self)
         self.pb_export.setRange(0, 100)
         self.pb_export.setValue(0)
         bottom.addWidget(self.btn_export)
@@ -749,6 +749,7 @@ class MemoryViewerPage(QWidget):
         except ValueError as e:
             _infobar.warn(self, self.tr("地址格式错误"), str(e))
             return
+        self._cfg.set("mem_goto_addr", self.le_goto.text())
         offset = addr - self._buffer_base
         if offset < 0 or offset >= len(self._buffer):
             _infobar.warn(self, self.tr("地址越界"), self.tr("该地址不在已读取的缓冲区内"))
@@ -925,25 +926,18 @@ class MemoryViewerPage(QWidget):
             _infobar.warn(self, self.tr("无数据"), self.tr("请输入要写入的 Hex 字节"))
             return
         # 二次确认（高风险）
-        from PySide6.QtWidgets import QMessageBox
-        msg_box = QMessageBox(self)
-        msg_box.setIcon(QMessageBox.Warning)
-        msg_box.setWindowTitle(self.tr("⚠ 确认写入内存"))
         preview = data[:16].hex(" ").upper() + (" ..." if len(data) > 16 else "")
-        msg_box.setText(
-            self.tr("即将向地址 <b>0x%1</b> 写入 <b>%2</b> 字节：<br/>"
-                    "<code>%3</code><br/><br/>"
-                    "<span style='color:#d04040;'>⚠ 写错地址可能让 MCU 失去响应！</span><br/>"
-                    "请确认地址是可写区域（SRAM/外设寄存器，<b>不要写 Flash 控制器</b>）")
-            .arg(f"{addr:08X}")
-            .arg(str(len(data)))
-            .arg(preview)
+        content = self.tr(
+            "即将向地址 <b>0x%1</b> 写入 <b>%2</b> 字节：<br/>"
+            "<code>%3</code><br/><br/>"
+            "<span style='color:#d04040;'>⚠ 写错地址可能让 MCU 失去响应！</span><br/>"
+            "请确认地址是可写区域（SRAM/外设寄存器，<b>不要写 Flash 控制器</b>）"
         )
-        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
-        msg_box.setDefaultButton(QMessageBox.Cancel)
-        msg_box.button(QMessageBox.Yes).setText(self.tr("确认写入"))
-        msg_box.button(QMessageBox.Cancel).setText(self.tr("取消"))
-        if msg_box.exec() != QMessageBox.Yes:
+        content = content.replace("%1", f"{addr:08X}").replace("%2", str(len(data))).replace("%3", preview)
+        msg_box = MessageBox(self.tr("⚠ 确认写入内存"), content, self)
+        msg_box.yesButton.setText(self.tr("确认写入"))
+        msg_box.cancelButton.setText(self.tr("取消"))
+        if not msg_box.exec():
             return
         self._worker.write_memory_requested.emit(addr, data)
 

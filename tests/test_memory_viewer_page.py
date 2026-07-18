@@ -6,6 +6,7 @@ import types
 import pytest
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtCore import QPoint, QPointF
+from qfluentwidgets import BodyLabel, ProgressBar
 
 
 class FakeMemWorker(QObject):
@@ -285,3 +286,22 @@ def test_write_card_above_export_card(mem_page, qtbot):
     write_y = page.lbl_write_title.mapTo(page, QPoint(0, 0)).y()
     export_y = page.lbl_export_title.mapTo(page, QPoint(0, 0)).y()
     assert write_y < export_y
+
+
+def test_export_path_label_and_progress_are_fluent(mem_page):
+    """导出卡片上的路径标签和进度条应使用 qfluentwidgets 控件。"""
+    page, _, _ = mem_page
+    assert isinstance(page.lbl_path, BodyLabel)
+    assert isinstance(page.pb_export, ProgressBar)
+
+
+def test_goto_save_on_jump(mem_page, qtbot):
+    """点击 Go 跳转时，goto 地址应立即持久化到 cfg。"""
+    page, worker, cfg = mem_page
+    _set_connected(page, worker, qtbot)
+    worker.memory_read_finished.emit(0x20000000, b"\x00" * 16)
+    qtbot.wait(20)
+    page.le_goto.setText("0x20000005")
+    page.btn_goto.click()
+    qtbot.wait(20)
+    assert cfg.get("mem_goto_addr") == "0x20000005"
