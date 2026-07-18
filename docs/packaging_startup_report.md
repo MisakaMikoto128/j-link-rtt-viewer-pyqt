@@ -35,6 +35,18 @@
 
 启动速度已到该技术栈地板（见上），本轮转向构建耗时、运行时性能与跨平台支持。
 
+### 踩坑：onefile 的 `--show-progress` 是打包管道杀手（2026-07-18）
+
+**现象**：`Build + package (full)`（`scripts/package_release.ps1` 菜单选项 0）跑完，`build/dist/<basename>/` 里**只有 onefile 的 `.exe`，standalone 同名目录和 `.zip` 缺席**。
+
+**根因**：`build_nuitka_onefile.bat` 曾带 `--show-progress`，每次 onefile 构建喷 ~4000 行 `Nuitka-Progress:`（~400KB）到 stdout。打包脚本 `[1/4]` 用 `cmd /c .\build_nuitka_onefile.bat` 跑构建——在任何**非纯 TTY**调用路径下（`Release to GitHub...` 菜单选项内部用 `Invoke-Expression` 重新拉一个 PowerShell 子进程跑同一脚本、CI、后台、`*>` 重定向），这巨量输出**撑爆管道缓冲区，Nuitka 进程被 OS 在 scons 链接阶段中途杀掉**，`$LASTEXITCODE -ne 0` → `throw` → 打包脚本停。打包阶段顺序是 `[3/4] onefile copy` → `[4/4] standalone dir+zip`，脚本在被杀前如果 onefile 已落盘、[3/4] 已 copy，就出现「dist 里只剩 onefile」的现象。standalone 的 `build_nuitka.bat` 从来没这个 flag（输出 46 行安静），所以它本身不发死，but 被 onefile 卡死连累整条流程。
+
+**处理**：删掉 `build_nuitka_onefile.bat` 的 `--show-progress`，让 onefile 与 standalone 一样安静。`--show-progress` 在交互终端也只是一直刷屏、15 分钟里没人盯着看，删掉零损失。
+
+**实测验证**：删后非交互模式（`-Version 0.6.0 -Detail verify`）跑完整流程 EXITCODE=0，四阶段 `[1/4]`→`[4/4]` 全到达，dist 三件套齐全（onefile `.exe` 30.9MB + standalone dir 43 文件 + `.zip` 43.9MB），日志里 `Nuitka-Progress` 行数 = 0（之前 4000+）。约 13 分钟。
+
+**判别**：凡是「打包/CI 跑完 dist 缺 artifact、但手动单跑构建 OK」的现象，先怀疑某个构建脚本在被管道调用时 stdout 喷得太猛撑爆 buffer。Nuitka 的 `--show-progress` 是典型元凶，别加回来。
+
 ### 编译速度
 
 | 脚本 | 用途 |
