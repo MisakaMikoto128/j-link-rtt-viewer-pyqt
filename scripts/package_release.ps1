@@ -14,6 +14,9 @@
       <basename>.zip    standalone, max-compressed (7-Zip if available)
       <basename>/       standalone, uncompressed (for testing)
 
+  Basename contains the git-derived version and detail, e.g.
+    JLinkRTTViewer-v0.6.0-dev.16.g3c4c56-win64
+
   Version is auto-detected from git describe:
     on a tag   v0.6.0            -> 0.6.0 + "release"
     after tag  v0.6.0-16-g3c4c56 -> 0.6.0 + "dev.16.g3c4c56"
@@ -25,14 +28,13 @@
 .EXAMPLE
   ./scripts/package_release.ps1                 # interactive menu
   ./scripts/package_release.ps1 -SkipBuild      # package existing build output
-  ./scripts/package_release.ps1 -BuildOnly      # build only, no packaging
   ./scripts/package_release.ps1 -Version 0.6.0 -Detail test1
+  ./scripts/package_release.ps1 -SkipOnefile    # standalone only
 #>
 param(
     [string]$Version = "",
     [string]$Detail = "",
     [switch]$SkipBuild,
-    [switch]$BuildOnly,
     [switch]$SkipStandalone,
     [switch]$SkipOnefile
 )
@@ -44,7 +46,7 @@ Set-Location $repoRoot
 $prefsFile = Join-Path $PSScriptRoot ".package_release.prefs"
 
 # ---- Interactive menu (only when no action flags given) ----------------------
-$noActionFlags = -not ($SkipBuild -or $BuildOnly -or $SkipStandalone -or $SkipOnefile -or $Version -or $Detail)
+$noActionFlags = -not ($SkipBuild -or $SkipStandalone -or $SkipOnefile -or $Version -or $Detail)
 
 function Read-MenuChoice([string[]]$options, [string[]]$descriptions, [int]$initial = 0) {
     $pos = [Math]::Max(0, [Math]::Min($initial, $options.Count - 1))
@@ -68,14 +70,12 @@ function Read-MenuChoice([string[]]$options, [string[]]$descriptions, [int]$init
 if ($noActionFlags) {
     $options = @(
         "Build + package (full)",
-        "Package only (use existing build output)",
-        "Build only (no packaging)",
+        "Package only (skip Nuitka build)",
         "Exit"
     )
     $descriptions = @(
         "run both Nuitka builds, then refresh build/dist artifacts (~15-25 min)",
-        "skip Nuitka; zip/copy whatever is already in build/ (~1 min)",
-        "run both Nuitka builds; do not touch build/dist",
+        "zip/copy whatever is already in build/main.dist and build/onefile (~1 min)",
         "do nothing"
     )
     $saved = 0
@@ -89,10 +89,9 @@ if ($noActionFlags) {
     [Console]::SetCursorPosition(0, [Console]::CursorTop)  # move past menu
     Set-Content $prefsFile "$choice" -Encoding ascii -NoNewline
     switch ($choice) {
-        0 { }                                   # full: no flags
-        1 { $SkipBuild = $true }
-        2 { $BuildOnly = $true }
-        3 { Write-Host "bye."; exit 0 }
+        0 { }                                   # full: build + package
+        1 { $SkipBuild = $true }                # package only
+        2 { Write-Host "bye."; exit 0 }
     }
     Write-Host "-> $($options[$choice])" -ForegroundColor Cyan
 }
@@ -144,10 +143,6 @@ if ($SkipBuild) {
     Write-Host "[1/4] Nuitka build (standalone + onefile)" -ForegroundColor Cyan
     if (-not $SkipStandalone) { cmd /c .\build_nuitka.bat;         if ($LASTEXITCODE -ne 0) { throw "build_nuitka.bat failed" } }
     if (-not $SkipOnefile)    { cmd /c .\build_nuitka_onefile.bat; if ($LASTEXITCODE -ne 0) { throw "build_nuitka_onefile.bat failed" } }
-}
-if ($BuildOnly) {
-    Write-Host "`nDone (build only). Output under build/" -ForegroundColor Green
-    exit 0
 }
 
 # ---- Prepare output dir ------------------------------------------------------

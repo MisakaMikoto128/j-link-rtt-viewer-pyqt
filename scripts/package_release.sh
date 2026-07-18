@@ -17,7 +17,6 @@
 #
 # Options:
 #   --skip-build        package existing build output (no Nuitka run)
-#   --build-only        build only, no packaging
 #   --skip-standalone   only onefile
 #   --skip-onefile      only standalone
 #   --version X.Y.Z     override auto-detected version
@@ -26,7 +25,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SKIP_BUILD=0
-BUILD_ONLY=0
 SKIP_STANDALONE=0
 SKIP_ONEFILE=0
 VERSION=""
@@ -35,7 +33,6 @@ DETAIL=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --skip-build)      SKIP_BUILD=1 ;;
-        --build-only)      BUILD_ONLY=1 ;;
         --skip-standalone) SKIP_STANDALONE=1 ;;
         --skip-onefile)    SKIP_ONEFILE=1 ;;
         --version)         VERSION="$2"; shift ;;
@@ -48,18 +45,16 @@ done
 PREFS_FILE="$(dirname "$0")/.package_release.prefs"
 
 # ---- Interactive menu (only when no action flags given) -----------------------
-if [ "$SKIP_BUILD" -eq 0 ] && [ "$BUILD_ONLY" -eq 0 ] && [ "$SKIP_STANDALONE" -eq 0 ] && \
+if [ "$SKIP_BUILD" -eq 0 ] && [ "$SKIP_STANDALONE" -eq 0 ] && \
    [ "$SKIP_ONEFILE" -eq 0 ] && [ -z "$VERSION" ] && [ -z "$DETAIL" ]; then
     options=(
         "Build + package (full)"
-        "Package only (use existing build output)"
-        "Build only (no packaging)"
+        "Package only (skip Nuitka build)"
         "Exit"
     )
     descriptions=(
         "run both Nuitka builds, then refresh build/dist artifacts (~15-25 min)"
-        "skip Nuitka; tarball/copy whatever is already in build/ (~1 min)"
-        "run both Nuitka builds; do not touch build/dist"
+        "tarball/copy whatever is already in build/main.dist and build/onefile (~1 min)"
         "do nothing"
     )
     saved=0
@@ -89,8 +84,7 @@ if [ "$SKIP_BUILD" -eq 0 ] && [ "$BUILD_ONLY" -eq 0 ] && [ "$SKIP_STANDALONE" -e
     case "$pos" in
         0) ;;
         1) SKIP_BUILD=1 ;;
-        2) BUILD_ONLY=1 ;;
-        3) echo "bye."; exit 0 ;;
+        2) echo "bye."; exit 0 ;;
     esac
     echo "-> ${options[$pos]}"
 fi
@@ -121,27 +115,22 @@ echo "== package_release: ${BASENAME}"
 
 # ---- Build -------------------------------------------------------------------
 if [ "$SKIP_BUILD" -eq 1 ]; then
-    echo "[1/4] skip build (--skip-build)"
+    echo "[1/3] skip build (--skip-build)"
 else
-    echo "[1/4] Nuitka build (standalone + onefile)"
+    echo "[1/3] Nuitka build (standalone + onefile)"
     [ "$SKIP_STANDALONE" -eq 1 ] || ./build_nuitka.sh
     [ "$SKIP_ONEFILE" -eq 1 ]    || ./build_nuitka_onefile.sh
-fi
-if [ "$BUILD_ONLY" -eq 1 ]; then
-    echo
-    echo "Done (build only). Output under build/"
-    exit 0
 fi
 
 # ---- Prepare output dir --------------------------------------------------------
 # Overwrite policy: an artifact is (re)generated when missing OR when its build
 # source is newer (fresh build => refresh dist). Rerun without rebuild = no-op.
-echo "[2/4] prepare ${OUT_DIR}"
+echo "[2/3] prepare ${OUT_DIR}"
 mkdir -p "$OUT_DIR"
 
 # ---- Onefile binary -------------------------------------------------------------
 if [ "$SKIP_ONEFILE" -eq 0 ]; then
-    echo "[3/4] onefile binary"
+    echo "[3/3] onefile binary"
     src="build/onefile/JLinkRTTViewer"
     [ -f "$src" ] || { echo "missing $src - run without --skip-build first" >&2; exit 1; }
     dst="${OUT_DIR}/${BASENAME}"
@@ -157,7 +146,7 @@ fi
 
 # ---- Standalone: uncompressed dir + tarball --------------------------------------
 if [ "$SKIP_STANDALONE" -eq 0 ]; then
-    echo "[4/4] standalone dir + tarball"
+    echo "[3/3] standalone dir + tarball"
     dist_dir="build/main.dist"
     src_marker="$dist_dir/JLinkRTTViewer"
     [ -f "$src_marker" ] || { echo "missing $src_marker" >&2; exit 1; }
