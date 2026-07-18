@@ -29,7 +29,11 @@ def worker(qapp, monkeypatch):
     ]
     fake_jlink_cls.return_value = fake_jlink_instance
 
-    monkeypatch.setattr(jw_mod.pylink, "JLink", fake_jlink_cls)
+    # worker 现在是懒加载 pylink（initialize 内 import），不能直接 patch
+    # jw_mod.pylink；改 patch 真实 pylink 模块的 JLink —— 懒加载拿到的
+    # 是同一个模块对象，monkeypatch 依然生效。
+    import pylink
+    monkeypatch.setattr(pylink, "JLink", fake_jlink_cls)
 
     worker = jw_mod.JLinkWorker()
     thread = QThread()
@@ -212,7 +216,8 @@ def test_stop_requested_quits_thread(qapp, monkeypatch):
     fake_jlink_instance.opened.return_value = False
     fake_jlink_instance.connected.return_value = False
     fake_jlink_cls.return_value = fake_jlink_instance
-    monkeypatch.setattr(jw_mod.pylink, "JLink", fake_jlink_cls)
+    import pylink
+    monkeypatch.setattr(pylink, "JLink", fake_jlink_cls)
 
     worker = jw_mod.JLinkWorker()
     thread = QThread()
