@@ -822,3 +822,33 @@ self.btn_reset_halt.setText(self.tr("重置并暂停"))
 **判别**：J-Link 的唯一 ID 是 `SerialNumber`（int），不是 USB 地址、不是产品名、不是枚举索引（同一台设备插拔后枚举索引会变）。
 
 参考：`src/core/jlink_worker.py` `_on_enumerate_devices` / `_do_connect` / `_reconnect_tick`、`src/ui/rtt_monitor_page.py` `_on_devices_enumerated` / `_on_connect_clicked`、commit `<本轮>`。
+
+---
+
+## J-Link 远程连接（Remote Server）：J-Link DLL 不做 DNS，域名必须 Python 侧解析
+
+**现象**：远程功能实测时，`jlink.open(ip_addr="localhost:19020")` 报 `Cannot connect to J-Link name localhost via TCP/IP`——pylink 底层 `JLINKARM_SelectIP` 把 host 原样传给 DLL，DLL 只接受 IPv4 字面量（或它自己的设备名），**不解析主机名**。
+
+**原因**：`open(ip_addr="ip:port")` 内部 `rsplit(':', 1)` 后直接 `JLINKARM_SelectIP(addr.encode(), port)`，没有任何 getaddrinfo 路径。
+
+**处理**：UI 侧统一走 `src/ui/widgets/remote_host.py` 的 `resolve_remote_host(host)`——IPv4 字面量原样返回，主机名（含 localhost）用 `socket.getaddrinfo(host, None, AF_INET)` 解析成 IPv4 再传给 worker；解析失败返回 None，UI 弹「无法解析主机名」合并警告，**不要**把未解析的域名透传给 pylink（否则用户看到的是 DLL 的英文内部错误）。
+
+其他实测结论（Remote Server @ 192.168.79.1:19020 验证）：
+- 远程连接序列与本地一致：`open(ip_addr=) → close → open(ip_addr=) → rtt_start → set_tif → set_speed → connect(target)`，RTT 收发正常。
+- 远程 open 后 `serial_number` 可读（可像本地一样显示 S/N）。
+- 不可达主机约 3s 抛 `JLinkException`（pylink 内置，**无超时参数可设**）——所以 UI 先用 `tcp_reachable()`（connect_ex，2s 超时）预检，错误提示才能分得清「网络不通」和「J-Link 协议失败」。
+- `connected_emulators(host=JLinkHost.IP)` 实测返回空——远程设备**无法**通过枚举发现，只能用户显式输 IP；自动重连远程模式必须跳过 USB 枚举校验（worker `_reconnect_tick` 的 `_reconnect_remote_addr` 分支）。
+
+参考：`src/ui/widgets/remote_host.py`、`src/core/jlink_worker.py` `_do_connect` 远程分支 / `_reconnect_tick`、`scratch/probe_remote.py` / `scratch/probe_remote_dns.py`、commit `2165bd0`。
+
+---
+
+## 测试/scratch 脚本里驱动 qfluentwidgets EditableComboBox：`setCurrentIndex` 选中后 `currentText()` 可能不同步
+
+**现象**：scratch 冒烟脚本里 `cb_jlink.setCurrentIndex(0)`（远程项就在 index 0）之后，`cb_jlink.currentText()` 仍是旧值，`currentIndexChanged` 派发的槽拿到的也是旧文本——表现像"选中了但页面没反应"。同一套路径在 pytest（qtbot）里却正常。
+
+**原因**：qfluentwidgets `EditableComboBox` 的 lineEdit 同步依赖其内部事件/焦点路径，裸脚本无事件循环深度处理时 `setCurrentIndex` 不会可靠地把文本刷进 lineEdit（与 `setCurrentText` 对非 items 文本 no-op 是同一家族的坑）。
+
+**处理**：UI 层冒烟脚本不要依赖 `setCurrentIndex` 触发完整链路；改为「`setText(目标文本)` + 直接调页面自己的槽（如 `page._on_jlink_selection_changed()`）」——这模拟的是用户点选后槽函数拿到的最终状态，才是要验证的页面逻辑。pytest 里 qtbot 的路径（`setCurrentIndex` + `qtbot.wait`）目前工作正常，测试照常用；只有独立 scratch 脚本需要绕。
+
+参考：`scratch/smoke_remote_ui.py`（最终用 setText + 直调槽验证通过）。
