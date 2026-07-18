@@ -1,8 +1,11 @@
 """UI 测试：MemoryViewerPage 的读取请求、hex dump 渲染、行宽切换、diff 高亮、跳转/搜索。"""
 from __future__ import annotations
 
+import types
+
 import pytest
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF
 
 
 class FakeMemWorker(QObject):
@@ -154,7 +157,7 @@ def test_memory_read_renders_hex_dump(mem_page, qtbot):
     worker.memory_read_finished.emit(0x20000000, data)
     qtbot.wait(50)
     text = page.display.toPlainText()
-    assert "20000000" in text.lower()         # 地址前缀
+    assert "0x2000 0000" in text         # 地址前缀
     assert "00 01 02 03" in text              # 起始字节
 
 
@@ -180,6 +183,8 @@ def test_diff_highlight_after_second_read_with_change(mem_page, qtbot):
     qtbot.wait(50)
     sels = page.display.extraSelections()
     assert len(sels) == 1                     # 只有 1 字节变化
+    # 高亮应恰好覆盖变化字节的两位 hex，不错位
+    assert sels[0].cursor.selectedText() == "AA"
 
 
 def test_diff_highlight_resets_when_addr_changes(mem_page, qtbot):
@@ -215,3 +220,68 @@ def test_goto_invalid_outside_buffer_no_crash(mem_page, qtbot):
     page.btn_goto.click()
     qtbot.wait(20)
     # 没崩就算通过；具体 InfoBar 状态不强制断言（InfoBar 是异步动画）
+
+
+def test_hover_parse_checkbox_default_on_and_persists(mem_page, qtbot):
+    """悬浮解析默认开启，切换后持久化到 cfg。"""
+    page, _, cfg = mem_page
+    assert page.chk_hover.isChecked() is True
+    page.chk_hover.setChecked(False)
+    qtbot.wait(20)
+    assert cfg.get("mem_hover_parse") is False
+
+
+def test_hover_tooltip_suppressed_when_disabled(mem_page, qtbot):
+    """chk_hover 关闭时 _show_hover_tooltip 不弹出 tip。"""
+    page, worker, _ = mem_page
+    _set_connected(page, worker, qtbot)
+    page._buffer = bytes(range(64))
+    page._buffer_base = 0x20000000
+    page._last_hover_offset = -1
+    page.chk_hover.setChecked(False)
+    page.show()
+    qtbot.wait(20)
+    event = types.SimpleNamespace(
+        pos=lambda: QPoint(100, 5),
+        globalPosition=lambda: QPointF(200, 50),
+    )
+    page._show_hover_tooltip(event)
+    assert page._hover_tip.is_showing() is False
+
+
+def test_goto_addr_persisted(mem_page, qtbot):
+    """le_goto editingFinished 后地址持久化到 cfg。"""
+    page, _, cfg = mem_page
+    page.le_goto.setText("0x20000010")
+    page.le_goto.editingFinished.emit()
+    qtbot.wait(20)
+    assert cfg.get("mem_goto_addr") == "0x20000010"
+
+
+def test_goto_addr_restored_on_init(qtbot, isolated_appdata):
+    """cfg 里保存的 goto 地址应在页面构造时恢复。"""
+    from core.config_service import ConfigService
+    from ui.memory_viewer_page import MemoryViewerPage
+    cfg = ConfigService()
+    cfg.set("mem_goto_addr", "0x20000020")
+    worker = FakeMemWorker()
+    page = MemoryViewerPage(worker, cfg)
+    qtbot.addWidget(page)
+    assert page.le_goto.text() == "0x20000020"
+
+
+def test_cursor_addr_selectable(mem_page):
+    """光标地址标签应可被鼠标选中复制。"""
+    page, _, _ = mem_page
+    assert page.lbl_cursor_addr.textInteractionFlags() & Qt.TextSelectableByMouse
+
+
+def test_write_card_above_export_card(mem_page, qtbot):
+    """写内存卡片应排在导出固件卡片上方。"""
+    page, _, _ = mem_page
+    page.resize(1200, 1200)
+    page.show()
+    qtbot.wait(50)
+    write_y = page.lbl_write_title.mapTo(page, QPoint(0, 0)).y()
+    export_y = page.lbl_export_title.mapTo(page, QPoint(0, 0)).y()
+    assert write_y < export_y

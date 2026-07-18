@@ -78,18 +78,21 @@ def format_hex_dump(data: bytes, base_addr: int = 0, bytes_per_row: int = 16) ->
         chunk = data[offset:offset + bytes_per_row]
         addr = base_addr + offset
 
-        hex_parts: list[str] = []
-        for j in range(bytes_per_row):
-            if j < len(chunk):
-                hex_parts.append(f"{chunk[j]:02X}")
-            else:
-                hex_parts.append("  ")
-            if j % 4 == 3:
-                hex_parts.append(" ")
-        hex_col = " ".join(hex_parts)
+        hex_col_parts: list[str] = []
+        for j in range(0, bytes_per_row, 4):
+            group = []
+            for k in range(4):
+                idx = j + k
+                if idx < len(chunk):
+                    group.append(f"{chunk[idx]:02X}")
+                else:
+                    group.append("  ")
+            hex_col_parts.append(" ".join(group))
+        hex_col = "  ".join(hex_col_parts)
 
         ascii_col = "".join(chr(b) if 32 <= b <= 126 else "." for b in chunk)
-        lines.append(f"0x{addr:08X}:  {hex_col} |{ascii_col}|")
+        # 地址前缀按 4 位 hex 分组，与 hex 数据区节奏一致（每 4 字节一组，组间 2 空格）
+        lines.append(f"0x{addr >> 16:04X} {addr & 0xFFFF:04X}:  {hex_col} |{ascii_col}|")
     return "\n".join(lines)
 
 

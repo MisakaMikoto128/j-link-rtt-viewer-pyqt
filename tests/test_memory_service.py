@@ -9,7 +9,7 @@ from core import memory_service
 def test_format_hex_dump_basic():
     data = bytes(range(16))
     out = memory_service.format_hex_dump(data, base_addr=0x08000000)
-    assert "0x08000000" in out
+    assert "0x0800 0000" in out
     assert "00 01 02 03" in out
     assert "0F" in out
 
@@ -19,9 +19,9 @@ def test_format_hex_dump_multi_line():
     out = memory_service.format_hex_dump(data, base_addr=0x20000000)
     lines = out.splitlines()
     assert len(lines) == 3  # 16 + 16 + 8
-    assert "0x20000000" in lines[0]
-    assert "0x20000010" in lines[1]
-    assert "0x20000020" in lines[2]
+    assert "0x2000 0000" in lines[0]
+    assert "0x2000 0010" in lines[1]
+    assert "0x2000 0020" in lines[2]
 
 
 def test_format_hex_dump_ascii_column():
@@ -98,9 +98,9 @@ def test_export_firmware_handles_partial_chunk(tmp_path):
 
 @pytest.mark.parametrize("bpr", [8, 16, 32])
 def test_format_hex_dump_row_layout_contract(bpr):
-    """每行结构：``0xAAAAAAAA:  HH HH HH HH  HH HH ... |ascii|``
+    """每行结构：``0xXXXX XXXX:  HH HH HH HH  HH HH ... |ascii|``
 
-    地址前缀 ``0x{addr:08X}:`` = 11 字符，再加 ``  ``（2 空格）→ hex 区起始 col 13。
+    地址前缀 ``0x{high:04X} {low:04X}:`` = 12 字符，再加 ``  ``（2 空格）→ hex 区起始 col 14。
     每字节 ``HH `` = 3 字符（join 后 stride 3），每 4 字节后追加 1 个分组空格。
     **这是 _cursor_byte_offset / _select_buffer_range 反推位置的硬契约——
     一旦此测失败，必须同步修源代码里的 hex_start 常量。**
@@ -108,17 +108,30 @@ def test_format_hex_dump_row_layout_contract(bpr):
     data = bytes(range(bpr))
     out = memory_service.format_hex_dump(data, base_addr=0x10000000, bytes_per_row=bpr)
     line = out.splitlines()[0]
-    assert line.startswith("0x10000000:  "), f"地址前缀必须 0x{'AAAAAAAA'}:<两空格> (line: {line!r})"
-    # hex 区起始位置硬约束 — col 13
-    hex_start = 13
+    assert line.startswith("0x1000 0000:  "), f"地址前缀必须 0xXXXX XXXX:<两空格> (line: {line!r})"
+    # hex 区起始位置硬约束 — col 14
+    hex_start = 14
     assert line[hex_start:hex_start + 2] == "00"
-    # 第一字节后是空格，第 4 字节后是双空格（分组）
+    # 第一字节后是空格，第 4 字节后是双空格（1 个分组空格 + 1 个普通空格）
     assert line[hex_start + 2] == " "
     # byte_chars * 4 = 12 处应为分组空格（紧跟第 4 字节后的额外空格）
     assert line[hex_start + 11] == " "
     assert line[hex_start + 12] == " "
     # ASCII 列 | 应在结尾
     assert "|" in line and line.rstrip().endswith("|")
+    # 地址前缀节奏与数据区一致：第 j 个字节的两位 hex 应正好在 _byte_start_col(j) 处
+    for j in range(min(bpr, 16)):
+        col = hex_start + j * 3 + (j // 4)
+        expected = f"{j:02X}"
+        assert line[col:col + 2] == expected, f"bpr={bpr} j={j} 期望 {expected!r} 在 col={col} (got {line[col:col+2]!r})"
+
+
+def test_format_hex_dump_address_prefix_grouped():
+    """样例行：base_addr=0x20000080, data=bytes(range(16)) 的新前缀格式。"""
+    out = memory_service.format_hex_dump(bytes(range(16)), base_addr=0x20000080)
+    line = out.splitlines()[0]
+    assert line.startswith("0x2000 0080:  ")
+    assert "00 01 02 03  04 05 06 07  08 09 0A 0B  0C 0D 0E 0F" in line
 
 
 def test_format_hex_dump_bytes_per_row_8():

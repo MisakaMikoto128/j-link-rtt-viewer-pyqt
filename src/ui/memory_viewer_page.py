@@ -57,9 +57,9 @@ _SIZE_PRESETS = [
 
 _BYTES_PER_ROW_OPTIONS = [8, 16, 32]
 _DTYPES = ["u8", "i8", "u16", "i16", "u32", "i32", "float", "double"]
-# format_hex_dump 每行 hex 区起始列：0x{8 hex}: + "  " = 11 + 2 = 13
+# format_hex_dump 每行 hex 区起始列：0xXXXX XXXX: + "  " = 12 + 2 = 14
 # 测试 test_format_hex_dump_row_layout_contract 保护此契约
-_HEX_START_COL = 13
+_HEX_START_COL = 14
 # Diff highlight 阈值——超过这个大小不算 diff（python 字节比较 O(n) + setExtraSelections
 # 大量选区会让 UI 主线程冻结 1-3s）。256 KB 在 STM32 系列上够看一片 RAM 或一两段 flash。
 _DIFF_MAX_SIZE = 256 * 1024
@@ -152,6 +152,10 @@ class MemoryViewerPage(QWidget):
         self.btn_clear = PushButton(self.tr("清空"), self)
         r1.addWidget(self.btn_read)
         r1.addWidget(self.btn_clear)
+        self.chk_hover = CheckBox(self.tr("悬浮解析"), self)
+        self.chk_hover.setChecked(bool(self._cfg.get("mem_hover_parse")))
+        self.chk_hover.setToolTip(self.tr("鼠标悬停在 hex 字节上时显示地址和 LE/BE 解析"))
+        r1.addWidget(self.chk_hover)
         r1.addStretch(1)
         read_outer.addLayout(r1)
 
@@ -173,6 +177,9 @@ class MemoryViewerPage(QWidget):
         r2.addWidget(self.lbl_goto)
         self.le_goto = LineEdit(self)
         self.le_goto.setPlaceholderText("0x...")
+        _goto = str(self._cfg.get("mem_goto_addr"))
+        if _goto:
+            self.le_goto.setText(_goto)
         self.le_goto.setMaximumWidth(140)
         self.btn_goto = PushButton("Go", self)
         r2.addWidget(self.le_goto)
@@ -225,6 +232,7 @@ class MemoryViewerPage(QWidget):
         self.lbl_cursor_addr_label = BodyLabel(self.tr("光标地址"))
         info_row.addWidget(self.lbl_cursor_addr_label)
         self.lbl_cursor_addr = StrongBodyLabel("—")
+        self.lbl_cursor_addr.setTextInteractionFlags(Qt.TextSelectableByMouse)
         info_row.addWidget(self.lbl_cursor_addr, 1)
         side_lay.addLayout(info_row)
 
@@ -271,7 +279,37 @@ class MemoryViewerPage(QWidget):
         splitter.setMinimumHeight(320)
         root.addWidget(splitter, 1)
 
-        # ---- 导出固件卡片（保留原功能）----
+        # ---- 写内存卡片（⚠ 高风险：写错地址可能 brick 目标）----
+        write_card = CardWidget(self)
+        wr_root = QVBoxLayout(write_card)
+        wr_header = QHBoxLayout()
+        self.lbl_write_title = StrongBodyLabel(self.tr("写内存 ⚠"))
+        wr_header.addWidget(self.lbl_write_title)
+        self.warn_lbl = BodyLabel(self.tr("写错地址可能让 MCU 失去响应直到复位。仅在确认安全地址（如 SRAM）时使用。"))
+        self.warn_lbl.setStyleSheet("color: #d04040;")
+        self.warn_lbl.setWordWrap(True)
+        wr_header.addWidget(self.warn_lbl, 1)
+        wr_root.addLayout(wr_header)
+
+        wr_row = QHBoxLayout()
+        self.lbl_write_addr = BodyLabel(self.tr("地址"))
+        wr_row.addWidget(self.lbl_write_addr)
+        self.le_write_addr = LineEdit(self)
+        self.le_write_addr.setText(str(self._cfg.get("mem_write_addr")))
+        self.le_write_addr.setMaximumWidth(140)
+        wr_row.addWidget(self.le_write_addr)
+        self.lbl_write_data = BodyLabel(self.tr("Hex 数据"))
+        wr_row.addWidget(self.lbl_write_data)
+        self.le_write_data = LineEdit(self)
+        self.le_write_data.setPlaceholderText("AA BB CC DD")
+        wr_row.addWidget(self.le_write_data, 1)
+        self.btn_write = PushButton(self.tr("写入…"), self)
+        self.btn_write.setEnabled(False)
+        wr_row.addWidget(self.btn_write)
+        wr_root.addLayout(wr_row)
+        root.addWidget(write_card)
+
+        # ---- 导出固件卡片 ----
         export_card = CardWidget(self)
         ex_root = QVBoxLayout(export_card)
         self.lbl_export_title = StrongBodyLabel(self.tr("导出固件（按块流式写盘）"))
@@ -321,36 +359,6 @@ class MemoryViewerPage(QWidget):
         ex_root.addLayout(bottom)
         root.addWidget(export_card)
 
-        # ---- 写内存卡片（⚠ 高风险：写错地址可能 brick 目标）----
-        write_card = CardWidget(self)
-        wr_root = QVBoxLayout(write_card)
-        wr_header = QHBoxLayout()
-        self.lbl_write_title = StrongBodyLabel(self.tr("写内存 ⚠"))
-        wr_header.addWidget(self.lbl_write_title)
-        self.warn_lbl = BodyLabel(self.tr("写错地址可能让 MCU 失去响应直到复位。仅在确认安全地址（如 SRAM）时使用。"))
-        self.warn_lbl.setStyleSheet("color: #d04040;")
-        self.warn_lbl.setWordWrap(True)
-        wr_header.addWidget(self.warn_lbl, 1)
-        wr_root.addLayout(wr_header)
-
-        wr_row = QHBoxLayout()
-        self.lbl_write_addr = BodyLabel(self.tr("地址"))
-        wr_row.addWidget(self.lbl_write_addr)
-        self.le_write_addr = LineEdit(self)
-        self.le_write_addr.setText(str(self._cfg.get("mem_write_addr")))
-        self.le_write_addr.setMaximumWidth(140)
-        wr_row.addWidget(self.le_write_addr)
-        self.lbl_write_data = BodyLabel(self.tr("Hex 数据"))
-        wr_row.addWidget(self.lbl_write_data)
-        self.le_write_data = LineEdit(self)
-        self.le_write_data.setPlaceholderText("AA BB CC DD")
-        wr_row.addWidget(self.le_write_data, 1)
-        self.btn_write = PushButton(self.tr("写入…"), self)
-        self.btn_write.setEnabled(False)
-        wr_row.addWidget(self.btn_write)
-        wr_root.addLayout(wr_row)
-        root.addWidget(write_card)
-
         # 控件初始 disabled 状态（启动时未连接）
         self.btn_read.setEnabled(False)
         self.btn_export.setEnabled(False)
@@ -380,6 +388,8 @@ class MemoryViewerPage(QWidget):
         self.lbl_row_width.setText(self.tr("字节/行"))
         self.btn_read.setText(self.tr("读取"))
         self.btn_clear.setText(self.tr("清空"))
+        self.chk_hover.setText(self.tr("悬浮解析"))
+        self.chk_hover.setToolTip(self.tr("鼠标悬停在 hex 字节上时显示地址和 LE/BE 解析"))
         self.chk_auto_refresh.setText(self.tr("自动刷新"))
         self.chk_diff.setText(self.tr("高亮变化"))
         self.chk_diff.setToolTip(self.tr("重新读取相同地址/大小时，把变化的字节背景标红"))
@@ -454,6 +464,7 @@ class MemoryViewerPage(QWidget):
         )
         self.chk_auto_refresh.toggled.connect(self._on_auto_refresh_toggled)
         self.chk_diff.toggled.connect(lambda v: self._cfg.set("mem_diff_highlight", v))
+        self.chk_hover.toggled.connect(lambda v: self._cfg.set("mem_hover_parse", v))
         self.sp_refresh_sec.valueChanged.connect(self._on_refresh_sec_changed)
 
         # LineEdit 用 editingFinished：避免每键击都写盘，且按钮点击的 focus 离开会触发
@@ -471,6 +482,9 @@ class MemoryViewerPage(QWidget):
         )
         self.le_write_addr.editingFinished.connect(
             lambda: self._cfg.set("mem_write_addr", self.le_write_addr.text())
+        )
+        self.le_goto.editingFinished.connect(
+            lambda: self._cfg.set("mem_goto_addr", self.le_goto.text())
         )
         self.btn_goto.clicked.connect(self._on_goto_clicked)
         self.le_goto.returnPressed.connect(self._on_goto_clicked)
@@ -616,6 +630,9 @@ class MemoryViewerPage(QWidget):
         return super().eventFilter(obj, event)
 
     def _show_hover_tooltip(self, event) -> None:
+        if not self._chk_hover_enabled():
+            self._hover_tip.hide()
+            return
         if not self._buffer:
             return
         cursor = self.display.cursorForPosition(event.pos())
@@ -638,6 +655,9 @@ class MemoryViewerPage(QWidget):
                 f"u16 LE: {le_u16}")
         # duration=0：hover 持续显示直到鼠标移走（Leave 时 hide）
         self._hover_tip.show_at(event.globalPosition().toPoint(), text, duration=0)
+
+    def _chk_hover_enabled(self) -> bool:
+        return self.chk_hover.isChecked()
 
     def _rerender(self) -> None:
         if not self._buffer:
@@ -676,8 +696,8 @@ class MemoryViewerPage(QWidget):
     def _byte_offset_at(self, block_num: int, col: int) -> int:
         """根据 (block行号, 列位置) 反推 buffer 字节偏移；-1 表示越界。
 
-        format_hex_dump 每行：``0xAAAAAAAA:  HH HH HH HH  HH HH HH HH ...``
-        硬契约：hex 区起始 col 13，每字节 ``HH `` 3 字符，每 4 字节末加 1 个分组空格。
+        format_hex_dump 每行：``0xXXXX XXXX:  HH HH HH HH  HH HH HH HH ...``
+        硬契约：hex 区起始 col 16，每字节 ``HH `` 3 字符，每 4 字节末加 1 个分组空格。
         被 _cursor_byte_offset（点击）+ _hover_byte_offset（悬停）共用。
         契约由 test_format_hex_dump_row_layout_contract 保护。
         """
