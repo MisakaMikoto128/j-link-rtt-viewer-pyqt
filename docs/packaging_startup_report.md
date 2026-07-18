@@ -26,4 +26,39 @@
 6. **cmd 下跑 bat 文件必须是 CRLF 行尾**。Git Bash 的 Edit/Write 会写 LF，cmd 解析失败静默退出（只打印 banner 后回到提示符）。改完 bat 用 python 转 CRLF。
 7. **console-disabled 的 exe 重定向 stdout 拿不到输出**（onefile 是子进程 stdout、standalone 完全丢）。启动计时之类需要进程外拿数据的场景，让 app 写文件，外部轮询。
 
-**最终方案**：发版用 `build_nuitka.bat`（standalone，最快）；onefile 用 `build_nuitka_onefile_opt.bat`（持久缓存）。启动时间差异主要在 onefile 冷启动的解压，缓存机制已把稳态差距压到 ~0.2s。
+**最终方案**：发版用 `build_nuitka.bat`（standalone，最快）；onefile 用 `build_nuitka_onefile.bat`（持久缓存）。启动时间差异主要在 onefile 冷启动的解压，缓存机制已把稳态差距压到 ~0.2s。
+
+---
+
+## 第二轮：编译速度 / 运行时速度 / Linux 打包（2026-07-18）
+
+启动速度已到该技术栈地板（见上），本轮转向构建耗时、运行时性能与跨平台支持。
+
+### 编译速度
+
+| 脚本 | 用途 |
+|---|---|
+| `build_nuitka.bat` | 发版（standalone + LTO + bytecode cache） |
+| `build_nuitka.sh` / `build_nuitka_onefile.sh` | Linux（见下） |
+
+共享缓存 `.\temp\nuitka_cache_*`（ccache/clcache/downloads/dll_dependencies/bytecode）跨脚本复用，多轮构建越快越明显。
+
+### 运行时速度
+
+- `--lto=yes` 是唯一实测可用的全局优化（MSVC CFLAGS/LDFLAGS env 注入在 Nuitka 4.1 下触发 scons AssertionError，不可用）。
+- `--python-flag=no_docstrings`（= -OO）理论上省内存、加速属性访问；**本项目未实测**（第一轮已验证 -OO 对启动无影响，运行时收益预期也在噪声内）。如需验证：把 `build_nuitka.bat` 的 `--python-flag=-O` 换成 `--python-flag=-OO`，用 `scripts/measure_launch.py` 对比 + 手动跑 RTT 高频数据流看 CPU 占用。
+- 运行时热点（RTT 数据渲染、内存页 hex dump）的优化在代码层已做过（QColor 预构造、缓冲合并节流等，见 CLAUDE.md），打包层面无额外收益。
+
+### Linux 打包（待实测）
+
+脚本：`build_nuitka.sh`（standalone）、`build_nuitka_onefile.sh`（onefile + 持久解压缓存 `{CACHE_DIR}/JLinkRTTViewer/Cache/{VERSION}` → `~/.cache/JLinkRTTViewer/Cache/0.6.0/`）。
+
+代码层 Linux 适配（本轮已改）：
+- `core/config_service.py`：用户偏好 Windows → `%APPDATA%`，Linux → `XDG_CONFIG_HOME`（默认 `~/.config`）/JLinkRTTViewer/
+- `core/logger.py`：日志目录 Windows → `%APPDATA%`，Linux → `XDG_STATE_HOME`（默认 `~/.local/state`）/JLinkRTTViewer/logs
+
+**未验证的坑（到 Linux 机器上首先检查）**：
+1. `pylink-square==1.6.0` 只内置 Windows/macOS 的 J-Link 库；Linux 需先装 SEGGER J-Link 工具包（提供 `libjlinkarm.so`），`pylink.JLink()` 才能构造成功。若 SEGGER 未装，main.py 的 DLL 致命检测会弹框退出——这是预期行为。
+2. Qt 运行时库：PySide6 pip 包自带大部分，但系统侧常需 `libgl1 libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1`。
+3. onefile 解压缓存目录语义：`{CACHE_DIR}` 在 Linux 解析为 `$XDG_CACHE_HOME`（默认 `~/.cache`）。
+4. `--windows-console-mode=disable` / `--windows-icon-from-ico` 是 Windows 专属，Linux 脚本里已去掉；GUI 模式由 ELF 本身决定，无需参数。
