@@ -897,6 +897,7 @@ class JLinkWorker(QObject):
             return
         try:
             if enable:
+                #  default=False（当前用法）：立即打开/关闭电源输出，仅本次生效。
                 self.jlink.power_on(default=False)
             else:
                 self.jlink.power_off(default=False)
