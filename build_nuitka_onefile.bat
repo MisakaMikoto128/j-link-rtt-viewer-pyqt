@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 REM Onefile build: single build\onefile\JLinkRTTViewer.exe
 REM Startup notes (see docs\packaging_startup_report.md):
 REM   - Cold start extracts payload once per version; cached launches are
@@ -6,12 +6,14 @@ REM     ~0.2s slower than standalone (measured 1.96s vs 1.63s median).
 REM   - For fastest startup ship the standalone build (build_nuitka.bat).
 REM Build speed: ccache/clcache/bytecode caches under .\temp make rebuilds
 REM much faster; keep the temp dir between builds.
-REM Keep PRODUCT_VERSION in sync with pyproject.toml / about_page.py
+REM Keep PRODUCT_VERSION in sync with pyproject.toml / about_page.py.
 set PRODUCT_VERSION=0.6.0
 set COMPANY_NAME=MisakaMikoto128
 set PRODUCT_NAME=JLinkRTTViewer
+set FILE_DESCRIPTION=J-Link RTT Viewer GUI
 
 call venv\Scripts\activate.bat
+
 set NUITKA_CACHE_DIR_DOWNLOADS=.\temp\nuitka_cache_downloads
 set NUITKA_CACHE_DIR_CCACHE=.\temp\nuitka_cache_ccache
 set NUITKA_CACHE_DIR_CLCACHE=.\temp\nuitka_cache_clcache
@@ -23,17 +25,35 @@ python -m nuitka ^
     --enable-plugin=pyside6 ^
     --windows-console-mode=disable ^
     --windows-icon-from-ico=assets\icons\app_icon.ico ^
+    --windows-company-name="%COMPANY_NAME%" ^
+    --windows-product-name="%PRODUCT_NAME%" ^
+    --windows-file-version="%PRODUCT_VERSION%" ^
+    --windows-product-version="%PRODUCT_VERSION%" ^
+    --windows-file-description="%FILE_DESCRIPTION%" ^
     --lto=yes ^
     --remove-output ^
     --python-flag=-O ^
     --python-flag=no_warnings ^
+    --python-flag=no_site ^
     --jobs=8 ^
+    --show-progress ^
     --assume-yes-for-downloads ^
-    --company-name=%COMPANY_NAME% ^
-    --product-name=%PRODUCT_NAME% ^
+    --company-name="%COMPANY_NAME%" ^
+    --product-name="%PRODUCT_NAME%" ^
     --product-version=%PRODUCT_VERSION% ^
     --file-version=%PRODUCT_VERSION% ^
     --onefile-tempdir-spec={CACHE_DIR}\%PRODUCT_NAME%\Cache\{VERSION} ^
+    --nofollow-import-to=*.tests ^
+    --nofollow-import-to=*.test ^
+    --nofollow-import-to=*.testing ^
+    --nofollow-import-to=setuptools ^
+    --nofollow-import-to=pip ^
+    --nofollow-import-to=wheel ^
+    --nofollow-import-to=pytest ^
+    --nofollow-import-to=docutils ^
+    --nofollow-import-to=unittest ^
+    --nofollow-import-to=ensurepip ^
+    --nofollow-import-to=distutils ^
     --include-package=qfluentwidgets ^
     --include-package-data=qfluentwidgets ^
     --include-package=pylink ^

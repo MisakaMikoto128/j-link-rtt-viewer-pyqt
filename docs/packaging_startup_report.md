@@ -22,9 +22,10 @@
 2. **`-OO`/`no_site`/`no_asserts`/`no_docstrings` 对启动几乎无影响**（1.63→1.69s，噪声内）。src 内无 `assert` 依赖，`-OO` 理论上可用，但收益可忽略，默认脚本保持 `-O` 保守。
 3. **删除 Qt6 DLL 要小心**：`Qt6Svg` 被 qfluentwidgets 间接依赖（IconEngine → QtSvg），删了 ImportError。可安全删的只有 `Qt6Pdf/Qt6Multimedia/Qt6Qml/Qt6Quick` 系列（dist 113M→104M），对启动无可见影响。
 4. **onefile 必须配 `--onefile-tempdir-spec={CACHE_DIR}\...` 持久缓存**：冷启动解压 3.5~3.9s，缓存命中后 1.8~2.0s。`--onefile-no-compression` 让缓存命中再快 ~0.15s 但 exe 从 33M→116M，不值。
-5. **MSVC CFLAGS/LDFLAGS(/Ox /GL /LTCG）环境变量注入会踩 scons AssertionError**(PIL 模块编译崩），Nuitka 4.1 下不可用。`--lto=yes` 已带 LTCG。
-6. **cmd 下跑 bat 文件必须是 CRLF 行尾**。Git Bash 的 Edit/Write 会写 LF，cmd 解析失败静默退出（只打印 banner 后回到提示符）。改完 bat 用 python 转 CRLF。
-7. **console-disabled 的 exe 重定向 stdout 拿不到输出**（onefile 是子进程 stdout、standalone 完全丢）。启动计时之类需要进程外拿数据的场景，让 app 写文件，外部轮询。
+5. **MSVC CFLAGS/LDFLAGS 全局环境变量注入历史上会踩 scons AssertionError（旧 PIL 模块编译崩）**；当前依赖已不含 PIL，但 PySide6/shiboken 等第三方 C 扩展仍可能不稳，故默认 build 脚本不全局注入这些标志。`--lto=yes` 已覆盖大部分 LTCG 收益。
+6. **`--msvc=latest` 实测无可见收益，已撤回**：试过显式指定最新 VS 工具链，构建耗时、产物体积、启动耗时均与默认（Nuitka 自动探测）无差异，故从 build 脚本移除，避免多余配置项。保留下来的只是低风险的清理项：`--nofollow-import-to` 排除 `*.tests/*.test/*.testing` 及 `setuptools/pip/wheel/pytest/docutils/unittest/ensurepip/distutils`（减少扫描量与产物体积）和 `--python-flag=no_site`（跳过 site 启动逻辑，收益在噪声内但零风险）。
+7. **cmd 下跑 bat 文件必须是 CRLF 行尾**。Git Bash 的 Edit/Write 会写 LF，cmd 解析失败静默退出（只打印 banner 后回到提示符）。改完 bat 用 python 转 CRLF。
+8. **console-disabled 的 exe 重定向 stdout 拿不到输出**（onefile 是子进程 stdout、standalone 完全丢）。启动计时之类需要进程外拿数据的场景，让 app 写文件，外部轮询。
 
 **最终方案**：发版用 `build_nuitka.bat`（standalone，最快）；onefile 用 `build_nuitka_onefile.bat`（持久缓存）。启动时间差异主要在 onefile 冷启动的解压，缓存机制已把稳态差距压到 ~0.2s。
 
