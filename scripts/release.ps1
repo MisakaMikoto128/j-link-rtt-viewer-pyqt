@@ -64,15 +64,17 @@ if ($SkipBuild) {
     Write-Host "[3/6] 跳过编译（-SkipBuild）" -ForegroundColor Yellow
 } else {
     Write-Host "[3/6] Nuitka 编译 standalone + onefile（耗时较长）" -ForegroundColor Cyan
-    Run "cmd /c build_nuitka.bat"
-    Run "cmd /c build_nuitka_onefile.bat"
+    Run "cmd /c .\build_nuitka.bat"
+    Run "cmd /c .\build_nuitka_onefile.bat"
 }
 
 # ---- 4. 打包 ----
+# ---- 4. 打包 ----
 Write-Host "[4/6] 打包 Release 资产" -ForegroundColor Cyan
-Run "powershell -ExecutionPolicy Bypass -File scripts/package_release.ps1 -Mode both -Version $Version"
-$zip = "build/JLinkRTTViewer-$tag-win64.zip"
-$exe = "build/JLinkRTTViewer-$tag-win64.exe"
+Run "powershell -ExecutionPolicy Bypass -File scripts/package_release.ps1 -Version $Version -Detail release -SkipBuild"
+$baseName = "JLinkRTTViewer-$tag-win64"
+$zip = "dist/$baseName/$baseName.zip"
+$exe = "dist/$baseName/$baseName.exe"
 
 # ---- 5. 推送 ----
 if ($SkipPush) {
