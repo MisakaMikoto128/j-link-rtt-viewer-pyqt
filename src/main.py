@@ -96,6 +96,25 @@ def main() -> int:
     win = MainWindow(cfg)
     win.show()
 
+    # 启动计时基准模式：写 timestamp 后立即退出。打包后 stdout 不可用，写文件兜底。
+    if "--startup-bench" in sys.argv:
+        import time
+        from PySide6.QtCore import QTimer as _QTimer
+
+        def _report_ready() -> None:
+            ts = time.time()
+            print(f"LAUNCH_READY_TS={ts}", flush=True)
+            try:
+                from core.logger import get_log_dir
+                (get_log_dir() / "launch_bench.txt").write_text(
+                    f"LAUNCH_READY_TS={ts}\n", encoding="utf-8"
+                )
+            except Exception:
+                pass
+            QApplication.quit()
+
+        _QTimer.singleShot(0, _report_ready)
+
     rc = app.exec()
     apply_keep_screen_on(False)
     cfg.flush()
