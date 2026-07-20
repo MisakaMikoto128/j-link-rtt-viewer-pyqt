@@ -83,9 +83,25 @@
 
 ### 运行时速度
 
-- `--lto=yes` 是唯一实测可用的全局优化（MSVC CFLAGS/LDFLAGS env 注入在 Nuitka 4.1 下触发 scons AssertionError，不可用）。
-- `--python-flag=no_docstrings`（= -OO）理论上省内存、加速属性访问；**本项目未实测**（第一轮已验证 -OO 对启动无影响，运行时收益预期也在噪声内）。如需验证：把 `build_nuitka.bat` 的 `--python-flag=-O` 换成 `--python-flag=-OO`，用 `scripts/measure_launch.py` 对比 + 手动跑 RTT 高频数据流看 CPU 占用。
-- 运行时热点（RTT 数据渲染、内存页 hex dump）的优化在代码层已做过（QColor 预构造、缓冲合并节流等，见 CLAUDE.md），打包层面无额外收益。
+- `--lto=yes` 是唯一实测可用的全局编译优化（MSVC CFLAGS/LDFLAGS env 注入在 Nuitka 4.1 下触发 scons AssertionError，不可用）。
+- 运行时热点（RTT 数据渲染、内存页 hex dump）由 Qt C++ 渲染主导；Python 侧热点已被 Nuitka 以 C+LTO 编进 exe。**Nuitka 编译标志不影响 Qt C++ 运行时**，所以打包层面已无额外运行时收益空间——见下「第四轮：激进优化已穷尽」。
+
+### 第四轮：激进编译优化已穷尽（2026-07-20 受控实验）
+
+为找比现状更激进的运行时提速手段，在独立 `temp/` 目录做了对照实验（不碰主产物）。逐项实测结论：
+
+| 选项 | 运行时收益 | 风险 | 4.1 支持 | 实测 |
+|---|---|---|---|---|
+| `--python-flag=-OO`（no_docstrings） | **会崩** | 高 | 是 | qfluentwidgets `singledispatchmethod` 依赖函数注解，`-OO` 破坏注解 → import 期崩。**发版只能用 `-O`，绝不能升 `-OO`** |
+| `--python-flag=no_annotations` | 零 | 低 | 是 | 只改 sys.flags，不动 AST，零运行时影响 |
+| `--deployment` | 零 | 低 | 是 | 只删诊断 loader stub（excluded-module 标记/`-c` 自启守卫），零运行时影响 |
+| `--experimental=iterator-optimization` | 崩 | 高 | 有 bug | 优化阶段 AttributeError |
+| `--experimental=optimize-dual-int` | 崩 | 高 | 有 bug | elftools 触发 C2440 |
+| `--experimental=standalone-imports` | 崩 | 高 | 有 bug | 漏 Shiboken.pyd，运行期崩 |
+| `--experimental=assume-type-complete / del_optimization / eliminate-backports` | 零微 | 低 | 是 | 纯 import 期或冷路径，无热点收益 |
+| `--pgo-c` | 理论 | 不可用 | 否 | 官方明说"not working with standalone modes yet" |
+
+**结论**：维持现状（`--lto=yes` + `--python-flag=-O / no_warnings / no_site` + 全量 nofollow 清理）。`-OO` 是唯一诱人但实测崩 qfluentwidgets 的项，别踩。剩下的提速空间只在代码层（减少 import 深度、懒加载少见 qfluentwidgets 子包），不在编译标志层。详见 CLAUDE.md「Nuitka 激进编译优化已穷尽」。
 
 ### Linux 打包（待实测）
 

@@ -161,6 +161,28 @@ if at_bottom and self.chk_auto_scroll.isChecked():
 
 ---
 
+## Nuitka 激进编译优化已穷尽，维持现状（2026-07-20 实测）
+
+**现象**：想找比 `--lto=yes`/`-O`/`no_site`/大砍 nofollow 更激进的 Nuitka 编译优化提速运行时（RTT 高频 insertText、hex dump、symbol 表刷新这些热点）。
+
+**原因（实测结论）**：热路径由 Qt C++ 渲染主导（QPlainTextEdit.insertText、QTextCursor、QTableWidget 刷新），Nuitka 编译标志**不影响 Qt C++ 运行时**；Python 侧热点代码本就被 Nuitka 以 C+LTO 编进 exe。逐一实测后的可用性结论：
+
+1. **`--python-flag=-OO`（no_docstrings）会崩 qfluentwidgets**：qfluentwidgets 用 `singledispatchmethod` 做重载，依赖 **函数注解**，`-OO` 在剥 docstrings 的同时破坏注解路径 → 运行时 import 期就崩。**所以发版脚本只能用 `-O`（no_asserts），绝不能升 `-OO`**。这条是已有 `--python-flag=-O` 选择背后的非平凡原因，别动。
+
+2. **`--deployment`**、`--python-flag=no_annotations` 安全但**零运行时收益**（只删诊断 loader stub / 改 sys.flags，不动 AST）。不纳入（无收益）。
+
+3. **`--experimental` 系列**：`iterator-optimization` / `optimize-dual-int` / `standalone-imports` 在本项目直接崩（AttributeError / C2440 / 漏 Shiboken.pyd）；`assume-type-complete` / `del_optimization` / `eliminate-backports` 零收益或纯 import 期。**全不纳入**。
+
+4. **`--pgo-c` 官方明说不支持 standalone**。
+
+**处理**：维持 `build_nuitka.bat` / `build_nuitka_onefile.bat` 现状（`--lto=yes` + `--python-flag=-O / no_warnings / no_site` + 全量 nofollow 清理）。剩下的提速空间**只在代码层**（减少 import 深度、懒加载少见 qfluentwidgets 子包），不在编译标志层。
+
+**判别**：凡"Nuitka 还有什么激进 flag 能加速运行时"的念头，先记住——热路径在 Qt C++，Nuitka flags 不会动它；能动的 Python 热点已被 LTO 编译。不再重复试。`-OO` 是唯一看起来诱人但实测会崩 qfluentwidgets 的项，别踩。
+
+参考：`docs/packaging_startup_report.md` 第四轮激进优化实测
+
+---
+
 ## TODO：发版前敲定作者信息
 
 `src/ui/about_page.py` 顶部的 `AUTHOR_NAME = "待定"` 和 `AUTHOR_GITHUB = "https://github.com/"` 在 0.1.0 发版前需要替换为真实信息。
