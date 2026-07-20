@@ -2423,19 +2423,22 @@ class RTTMonitorPage(QWidget):
 
         cursor = self.display.textCursor()
         cursor.movePosition(QTextCursor.End)
-
-        if self.chk_hex_display.isChecked():
-            # HEX 显示：将文本编码为字节，每字节大写 HEX + 空格
-            try:
-                raw = text.encode(self._cfg.get("rtt_encoding") or "utf-8",
-                                  errors="replace")
-            except LookupError:
-                raw = text.encode("utf-8", errors="replace")
-            hex_str = " ".join(f"{b:02X}" for b in raw)
-            cursor.insertText(hex_str + " ")
-        else:
-            for seg, attrs in parse_ansi(text):
-                cursor.insertText(seg, self._fmt(attrs))
+        cursor.beginEditBlock()
+        try:
+            if self.chk_hex_display.isChecked():
+                # HEX 显示：将文本编码为字节，每字节大写 HEX + 空格
+                try:
+                    raw = text.encode(self._cfg.get("rtt_encoding") or "utf-8",
+                                      errors="replace")
+                except LookupError:
+                    raw = text.encode("utf-8", errors="replace")
+                hex_str = " ".join(f"{b:02X}" for b in raw)
+                cursor.insertText(hex_str + " ")
+            else:
+                for seg, attrs in parse_ansi(text):
+                    cursor.insertText(seg, self._fmt(attrs))
+        finally:
+            cursor.endEditBlock()
 
         if at_bottom and self.chk_auto_scroll.isChecked():
             with self._programmatic_scroll_guard():

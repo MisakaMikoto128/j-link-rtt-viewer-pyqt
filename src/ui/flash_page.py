@@ -487,6 +487,18 @@ class FlashPage(QWidget):
                 if serial and serial.isdigit():
                     serials.append(serial)
 
+        # diff guard：serials 与远程项文案都没变 → 跳过 combo 重建（避免 200ms 无谓重建/闪烁）
+        # 仿 RTT 页 _on_devices_enumerated 的 _last_enum_state 模式
+        new_state = (tuple(serials), REMOTE_ITEM_TEXT)
+        if (getattr(self, "_last_burner_enum_state", None) == new_state
+                and hasattr(self, "_burner_initialized")):
+            self._remote_mode = self.cmb_burner.currentText().strip() == REMOTE_ITEM_TEXT
+            if self._remote_mode:
+                self._trigger_remote_probe()
+            self._sync_burner_status_dot()
+            return
+        self._last_burner_enum_state = new_state
+
         prev = self.cmb_burner.currentText().strip()
         if not prev and not hasattr(self, "_burner_initialized"):
             prev = str(self._cfg.get("flash_jlink_serial") or "").strip()
