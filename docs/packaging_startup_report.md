@@ -101,7 +101,32 @@
 | `--experimental=assume-type-complete / del_optimization / eliminate-backports` | 零微 | 低 | 是 | 纯 import 期或冷路径，无热点收益 |
 | `--pgo-c` | 理论 | 不可用 | 否 | 官方明说"not working with standalone modes yet" |
 
-**结论**：维持现状（`--lto=yes` + `--python-flag=-O / no_warnings / no_site` + 全量 nofollow 清理）。`-OO` 是唯一诱人但实测崩 qfluentwidgets 的项，别踩。剩下的提速空间只在代码层（减少 import 深度、懒加载少见 qfluentwidgets 子包），不在编译标志层。详见 CLAUDE.md「Nuitka 激进编译优化已穷尽」。
+**结论**：维持现状（`--lto=yes` + `--python-flag=-O / no_warnings / no_site` + 全量 nofollow 清理）。`-OO` 是唯一诱人但实测崩 qfluentwidgets 的项，别踩。剩下的提速空间只在代码层（减少 import 深度、懒加载少见 qfluentwidgets 子包），不在编译标志层。
+
+### 替代 Python 打包技术调研（启动速度视角，2026-07-20 纯分析）
+
+背景：想确认是否有比 Nuitka standalone（实测 1.63s）启动更快的 Python 打包方案。第一性原理--启动瓶颈是 Python import 本身：PySide6.QtCore ~115ms + qfluentwidgets ~290ms + pylink ~70ms ≈ 0.47s 是任何方案都跑不掉的硬开销。Nuitka 之所以 1.63s < 直接 `python main.py` 2.0s，是因为它把 `src/*.py` 编进 C、省了 src 自身的解析/字节码加载。其他打包器要么走标准解释器（吃满 import），要么工程风险高。
+
+| 方案 | PySide6 支持 | 预期启动 | 判定 | 备注 |
+|---|---|---|---|---|
+| **Nuitka standalone**（当前） | 成熟 | 1.63s | **基线** | 把 src 编进 C，唯一已实测最快 |
+| **PyInstaller** (onedir) | 成熟（有 hook） | ~2.0s+ | 更慢 | 仍走标准字节码 import，自带的导入包装层比直接 python 还略慢；onefile 解压更慢 |
+| **PyInstaller** (onefile) | 成熟 | ~3s+ | 更慢 | 解压开销 |
+| **cx_Freeze** | 有坑（Qt 插件/platforms 路径需手动配） | ~2.0s+ | 更慢 | 走标准解释器 |
+| **Briefcase** (BeeWare) | 偏 Toga，PySide6 支持弱 | ~2.0s | 更慢 | 走标准解释器，启动 ≈ 直接 python |
+| **PyOxidizer** | PySide6/Qt 扩展历史不友好 | 理论可能 ~1.4-1.5s | 不可用/高风险 | oxidized importer（memory-mapped module index）理论可加速 import 是唯一可能破基线的机制；但项目半停维护（2022 后 release 缓慢），Qt C 扩展 + DLL 资源映射配置工程量大，PySide6 成功案例少 |
+| **shiv/pex/zipapp** | 不支持 | N/A | 不可用 | zipimport 对 Windows .pyd C 扩展有限制，PySide6 跑不起来 |
+| **不打包 + venv 复制**（embedded Python 部署） | N/A | ~2.0s | 更慢但简单 | 启动 ≈ 直接 python；免去编译，适工控机部署对照 |
+
+**核心判别**：
+- 任何**走标准 Python 解释器**的打包器（PyInstaller / cx_Freeze / Briefcase / embedded 部署），启动起步就 ≈ 直接 python（2.0s），**不可能**比 Nuitka standalone 1.63s 快--它们都没有把 Python 代码编进 C 的能力，省不掉 src 的解析开销。
+- **要破 1.63s 基线**只有两条理论路径：
+  1. **把 Python 编进 C**（Nuitka 是唯一成熟方案；PyPy 对 PySide6 支持差、Cython 工程量巨大，都不现实）。
+  2. **加速 import 机制本身**（PyOxidizer oxidized importer，但半停维护 + PySide6 支持差，ROI 低）。
+
+**最终结论**：**Nuitka standalone 已是该技术栈启动速度最优解，无更优替代**。剩余提速空间只在**代码层**：减少 import 深度、对少见 qfluentwidgets 子包做懒加载（如把某些 widget 的 import 从模块级挪到首次使用处），把 qfluentwidgets 那 290ms 的 import 进一步压缩。这是唯一可能再省 50-150ms 的方向，但属代码重构，不是打包技术。
+
+注：本节为基于工具知识 + 实测基线的分析判断，未在本机实测 PyInstaller/cx_Freeze/PyOxidizer（避免装环境耗时）。如未来要坐实，最小验证：装 PyInstaller 跑 onedir，用 `scripts/measure_launch.py` 测中位数对比 1.63s--预期持平或更慢。
 
 ### Linux 打包（待实测）
 
