@@ -7,7 +7,7 @@ REM   - For fastest startup ship the standalone build (build_nuitka.bat).
 REM Build speed: ccache/clcache/bytecode caches under .\temp make rebuilds
 REM much faster; keep the temp dir between builds.
 REM Keep PRODUCT_VERSION in sync with pyproject.toml / about_page.py.
-set PRODUCT_VERSION=0.6.0
+set PRODUCT_VERSION=0.7.0
 set COMPANY_NAME=MisakaMikoto128
 set PRODUCT_NAME=JLinkRTTViewer
 set FILE_DESCRIPTION=J-Link RTT Viewer GUI

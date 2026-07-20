@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-07-20
+
+### Features
+
+- **🎯 多 J-Link 设备选择** — 电脑同时插多台 J-Link 时，顶部下拉自动枚举所有接入设备（按 serial 区分），200ms 自动刷新；上次选中的 serial 持久化，下次启动自动回选；目标设备离线时在下拉左侧显示红点状态指示，插回后红点自动消失。
+- **🔗 J-Link 远程连接（Remote Server）** — 支持通过 J-Link Remote Server 连接远端 J-Link，IPv4 / 主机名均可（主机名由 Python 侧 `socket.getaddrinfo` 解析，规避 DLL 不做 DNS 的坑），2s TCP 可达性预检区分「网络不通」与「协议失败」；连接面板双行输入 + 蓝色远程标记 + 探测节流。
+- **🖼️ 可配置背景图片** — 设置页「外观」新增背景图片路径（浏览 / 清除）+ 透明度滑块（0–100%）+ 填充方式（拉伸 / 覆盖 / 居中 / 平铺），主窗口统一 `paintEvent` 绘制；启用背景图自动关闭 Mica 以保证可读性，5 语言 i18n。
+- **🔧 烧录页独立烧录器选择** — 烧录页可选独立 J-Link（与 RTT 会话分离），设备枚举轮询在 worker 内建；烧录开始时与 RTT 协调断开 / 烧录结束自动回连，互不干涉。
+- **🐧 Linux XDG 路径支持** — 用户配置与日志目录改用 XDG 规范（`~/.config/JLinkRTTViewer/` / `~/.local/share/JLinkRTTViewer/`），新增 Linux 打包脚本。
+- **⚙️ 自动重连重构** — 由 UI 轮询统一驱动，删除 worker 3s 轮询；断开提示去重，避免枚举与读线程异常同时触发时打印两次。
+
+### Performance
+
+- **RTT 文本批量布局** — `_on_rtt_data` 用 `beginEditBlock` / `endEditBlock` 把多段 insertText 合并为一次布局重算，高吞吐流下显著减少主线程负载。
+- **背景图缩放缓存** — `paintEvent` 缓存按（源图 + 填充方式 + 尺寸）键控的缩放结果，仅在 resize / 换图 / 换方式重算，避免每帧全图 `Qt.SmoothTransformation` 重算。
+- **设备枚举下拉 diff guard** — 设备列表未变时跳过 200ms 的 combo 重建（QSS 重解析 + 布局重算），空闲态零开销。
+
+### Engineering
+
+- **Nuitka 打包清理** — 删除多余的 `--include-package=qfluentwidgets`（资源已嵌进 `_rc/resource.py`，全库静态 import，靠 `--follow-imports` 自动跟随即可），构建零 WARNING；`--nofollow-import-to` 排除约 50 个未用到的 PySide6 Qt 模块与 cli/test stub；`--show-progress` pipe-buffer 导致构建被杀的坑已修复并记录。
+- **打包脚本一键发版** — `package_release.ps1` 合并发版流程：版本 bump → 提交 → tag → 双版本编译 → 打包 → push → gh release，产物按版本号归档到 `build/dist/<version>/`。
+- **工程笔记** — CLAUDE.md 新增远程连接 DNS 解析、多设备 serial 匹配、buf descriptor 通道计数、QSS font 锁定、`EditableComboBox` 坑等多条经验。
+
+### Testing
+
+- 新增背景图片配置（defaults / signals / 设置页控件）测试；全量回归 303 项通过。
+
 ## [0.6.0] — 2026-07-17
 
 ### Features
@@ -186,7 +213,8 @@
 - 配置写盘 200ms 节流，关窗 flush，避免拖窗/调字号每帧刷盘
 - 详细工程踩坑笔记见 [CLAUDE.md](CLAUDE.md)
 
-[Unreleased]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.3.0...v0.5.0
 [0.3.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.2.3...v0.3.0
