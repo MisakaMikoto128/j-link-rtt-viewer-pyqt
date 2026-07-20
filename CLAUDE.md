@@ -138,21 +138,26 @@ if at_bottom and self.chk_auto_scroll.isChecked():
 
 ---
 
-## Nuitka 打包 qfluentwidgets / pylink 资源
+## Nuitka 打包 qfluentwidgets / pylink 资源（已订正）
 
-**现象**：Nuitka 打包后运行，qfluentwidgets qss 找不到、pylink 找不到 JLinkARM.dll。
+**现象**：早期 Nuitka 打包后运行，qfluentwidgets qss 找不到、pylink 找不到 JLinkARM.dll。
 
-**原因**：Nuitka 默认只打包 .py 源码，包内的 .qss / .dll / 图片资源不会跟着进。
+**原因（订正）**：这条是历史踩坑，但根因要分清楚：
+- **pylink 的 DLL**：pylink-square 1.6.0 的 `library.py` 在**运行时**从 SEGGER 系统安装目录（Win: `C:\Program Files\SEGGER\JLink\`）查找 `JLinkARM.dll`，包内不捆绑任何二进制 data —— 所以 `--include-package-data=pylink` 实际上 no-op，pylink 的 DLL 问题靠"用户装 SEGGER JLink 工具包"解决，不靠打包参数。
+- **qfluentwidgets 的 qss/图标/字体/翻译**：现代版本（项目用的 1.11.2）全部由 Qt Resource Compiler 编进 `qfluentwidgets/_rc/resource.py`（纯 Python，~3.2MB），由 `__init__.py` **静态** `from ._rc import resource` 引入。**不存在从文件系统读 `.qss` 的路径**。早期"qss 找不到"的踩坑是旧版本党或当时缺 `--include-package-data`，现在已不是独立文件问题。
 
-**处理**：`build_nuitka.bat` 加：
+**处理（订正，2026-07-20 实测）**：
 ```
---include-package=qfluentwidgets
---include-package-data=qfluentwidgets
---include-package=pylink
---include-package-data=pylink
+--include-package-data=qfluentwidgets      # 保留（保险，对无 data 文件的包扫一遍是零成本 no-op）
 ```
+**`--include-package=qfluentwidgets` 已删除** —— 实测发现它**多余且有害**：
+- 它强制 Nuitka 扫整个 qfluentwidgets 磁盘目录，把项目用不到的子包（如 `qfluentwidgets.multimedia`）也纳入"有意包含"意向；再配 `--nofollow-import-to=qfluentwidgets.multimedia` 拦下会打一条 `Nuitka-Inclusion:WARNING`。这条 WARNING 就是它催生的。
+- 删掉后改靠 standalone 默认的 `--follow-imports` 自动跟随 `src → qfluentwidgets` 的**静态 import 链**。qfluentwidgets 全库零动态 import（实测 `importlib/__import__/pkgutil/getattr-import` 全零命中），所有 widget 子模块走 `from .xxx import` 静态可达，`--follow-imports` 必然追到；`_rc/resource.py` 也是静态 `from ._rc import resource`，qss/资源不会丢。
+- 实测：两个 bat 都删 `--include-package=qfluentwidgets` + 对应 `--nofollow-import-to=qfluentwidgets.multimedia` 后，构建**零 WARNING**，standalone + onefile 深度 smoke（窗口存活 12s/15s、FluentWindow 渲染、app.log 无 ImportError/qss 报错）全通过。
 
-参考：`build_nuitka.bat`
+**判别**：凡一个第三方库的资源已嵌进 Python（`_rc/resource.py`）+ 全库静态 import，`--include-package` 就是多余的磁盘扫描，删掉改靠 `--follow-imports`；只有库在运行时从文件系统读 `.qss`/`.dll`/图片（即包内真有 data 文件、且代码运行时读 `__file__` 同级路径）时才需要 `--include-package-data`，且不需要 `--include-package`。
+
+参考：`build_nuitka.bat` / `build_nuitka_onefile.bat`、`docs/packaging_startup_report.md` 第三轮 nofollow 调研
 
 ---
 

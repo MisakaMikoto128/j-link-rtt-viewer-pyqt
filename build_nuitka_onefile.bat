@@ -106,8 +106,6 @@ python -m nuitka ^
     --nofollow-import-to=PySide6.QtWebSockets ^
     --nofollow-import-to=PySide6.QtWebView ^
     --nofollow-import-to=PySide6.QtAxContainer ^
-    --nofollow-import-to=qfluentwidgets.multimedia ^
-    --include-package=qfluentwidgets ^
     --include-package-data=qfluentwidgets ^
     --include-package-data=pylink ^
     --include-package=elftools ^
