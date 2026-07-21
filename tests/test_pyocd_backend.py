@@ -63,3 +63,28 @@ def test_resolve_target_unknown_returns_none(monkeypatch):
     _stub_packs(monkeypatch, ["STM32F030C8Tx"])
     from core.probe.pyocd_backend import PyOCDBackend
     assert PyOCDBackend._resolve_target_type("STM32F999XY") is None
+
+
+def test_swd_err_hint_appends_for_swd_errors():
+    """SWD 通信类错误（IDCODE/DP/parity/transfer）追加接线排查提示。"""
+    from core.probe.pyocd_backend import _swd_err_hint
+    for err in (
+        "STLink error (9): Get IDCODE error",
+        "STLink error (22): DP error",
+        "STLink error (23): DP parity error",
+        "TransferFaultError: Memory transfer fault (STLink error (17): AP fault)",
+    ):
+        out = _swd_err_hint(err)
+        assert "VREF" in out and "SWDIO" in out, f"hint missing for: {err}"
+        assert err in out  # 原消息保留
+
+
+def test_swd_err_hint_passthrough_for_other_errors():
+    """非 SWD 类错误原样返回，不追加提示。"""
+    from core.probe.pyocd_backend import _swd_err_hint
+    for err in (
+        "probe open failed: device not found",
+        "FileNotFoundError: /x.bin",
+        "",
+    ):
+        assert _swd_err_hint(err) == err

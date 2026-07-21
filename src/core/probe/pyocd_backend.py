@@ -45,6 +45,30 @@ def _pack_part_wildcard_eq(pattern: str, text: str) -> bool:
     return True
 
 
+# SWD 通信失败的特征串：匹配到则给排查提示（接线 / VREF / 多 probe 冲突）。
+_SWD_ERR_KEYWORDS = (
+    "idcode", "dp error", "dp fault", "dp parity", "ap fault",
+    "transfer fault", "transfer error", "memory transfer fault",
+)
+
+
+def _swd_err_hint(msg: str) -> str:
+    """SWD 通信类错误追加接线排查提示；其它错误原样返回。
+
+    实验依据：ST-Link + STM32F030 在 10kHz–4MHz 全频率、default/under_reset/attach
+    全模式下 SWD 均失败（Get IDCODE error / DP error / DP parity），同一目标下
+    DAPLink 正常 -> 属信号完整性问题，非 pyOCD 配置。STLinkV3 必须接 VREF。
+    """
+    low = msg.lower()
+    if any(k in low for k in _SWD_ERR_KEYWORDS):
+        return (
+            f"{msg}\nSWD 通信失败：请检查烧录器接线（SWDIO/SWCLK/GND/VREF），"
+            "STLinkV3 必须接 VREF；确保仅一个烧录器连接目标（拔掉 DAPLink）；"
+            "可尝试降低 SWD 速率。"
+        )
+    return msg
+
+
 class PyOCDBackend:
     """CMSIS-DAP / ST-Link via pyOCD 0.45。"""
 
@@ -86,12 +110,31 @@ class PyOCDBackend:
         try:
             self._session.open()
         except Exception as e:
-            self._log("warn", f"target open failed: {e}")
+            msg = _swd_err_hint(str(e))
+            self._log("warn", f"target open failed: {msg}")
             with contextlib.suppress(Exception):
                 self._session.close()
             self._session = None
-            raise ProbeNotConnected(str(e)) from e
+            raise ProbeNotConnected(msg) from e
         self._target = self._session.target
+        # open() 不一定在 SWD 通信失败时抛异常（ST-Link 实测会 false-OK：open 过，
+        # 但 halt/DP 访问报 DP error）。读 DP IDCODE（寄存器 0）校验通信是否真正建立。
+        # read_reg 是 pyOCD DebugPort 的标准读法；API 不匹配时跳过校验，不阻断连接。
+        dp = getattr(self._target, "dp", None)
+        read_reg = getattr(dp, "read_reg", None) if dp is not None else None
+        if read_reg is not None:
+            try:
+                read_reg(0)  # DP IDCODE：触发一次 SWD 读，失败说明 SWD 未通
+            except AttributeError:
+                # API 差异（read_reg 存在但调用异常）：跳过校验，不破坏可用连接
+                pass
+            except Exception as e:
+                msg = _swd_err_hint(f"SWD 校验失败：{e}")
+                self._log("warn", msg)
+                with contextlib.suppress(Exception):
+                    self._session.close()
+                self._session = None
+                raise ProbeNotConnected(msg) from e
         # halt before erase/program（pyOCD 连接后默认 halt，显式再 halt 一次保险）
         with contextlib.suppress(Exception):
             self._target.halt()
