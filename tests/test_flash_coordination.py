@@ -65,11 +65,14 @@ def test_burner_combo_rebuilt_on_enumeration(flash_coord):
     page, worker, _cfg, _fd = flash_coord
     worker.devices_enumerated.emit("111|A;222|B")
     _process()
-    assert page.cmb_burner.count() == 3
-    assert page.cmb_burner.itemText(0) == "111"
-    assert page.cmb_burner.itemText(1) == "222"
-    assert page.cmb_burner.itemText(2) == "远程连接"
-    assert page.cmb_burner.currentText() == "111"
+    # 新分组下拉：["── J-Link ──", "J-Link: 111", "J-Link: 222", "远程连接"]
+    assert page.cmb_burner.count() == 4
+    assert page.cmb_burner.itemText(0) == "── J-Link ──"
+    assert page.cmb_burner.itemText(1) == "J-Link: 111"
+    assert page.cmb_burner.itemText(2) == "J-Link: 222"
+    assert page.cmb_burner.itemText(3) == "远程连接"
+    # 默认选第一个真实设备（跳过 index 0 的分隔项）
+    assert page.cmb_burner.currentText() == "J-Link: 111"
 
 
 def test_offline_burner_shows_red_dot(flash_coord):
@@ -144,7 +147,8 @@ def test_different_serial_flashes_directly(flash_coord, qtbot):
     worker._serial = "111"
     worker.devices_enumerated.emit("111|A;222|B")
     _process()
-    page.cmb_burner.setCurrentIndex(page.cmb_burner.findText("222"))
+    # 新分组下拉里 "J-Link: 222" 是 index 2
+    page.cmb_burner.setCurrentIndex(page.cmb_burner.findText("J-Link: 222"))
     _process()
 
     page._select_file(str(fixtures_dir / "blink.bin"))

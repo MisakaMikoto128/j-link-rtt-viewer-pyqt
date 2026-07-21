@@ -1,15 +1,18 @@
-"""FlashWorker 单元测试：dataclass / 常量 / 流程 / 错误路径。
+"""FlashWorker 单元测试：dataclass / 常量 / stage 编排 / 错误兜底。
 
-走 pylink mock，不需要实际 J-Link 硬件。
+走 pylink mock（注入到 PylinkBackend），不需要实际 J-Link 硬件。
+连接序列 / 接口枚举 / close 容错等实现细节测试见 test_jlink_backend.py；
+本文件聚焦 FlashWorker 的 stage 编排 + 信号透传 + 错误兜底。
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from dataclasses import FrozenInstanceError
+from unittest.mock import MagicMock
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QThread, QTimer
 
 from core.flash_worker import (
+    BURNER_KIND_JLINK,
     ERASE_MODE_CHIP,
     ERASE_MODE_SECTOR,
     FORMAT_BIN,
@@ -22,7 +25,6 @@ from core.flash_worker import (
     STAGE_ERASE,
     STAGE_PROGRAM,
     STAGE_RESET,
-    STAGE_VERIFY,
     FlashParams,
     FlashWorker,
 )
@@ -46,7 +48,7 @@ def test_flash_params_frozen():
         erase_mode=ERASE_MODE_SECTOR, post_action=POST_ACTION_RESET_RUN,
         extra_verify=False,
     )
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         p.file_path = "/y.bin"  # type: ignore
 
 
@@ -58,47 +60,9 @@ def test_worker_signals_present():
         assert hasattr(w, name), f"missing signal: {name}"
 
 
-def test_do_connect_follows_open_close_open_dance(monkeypatch):
-    """严格按 CLAUDE.md 'pylink 1.6.0 连接顺序'：open → close → open(serial)
-    → set_tif → set_speed → connect。"""
-    fake_jlink = MagicMock()
-    fake_jlink.opened.return_value = False
-    fake_jlink.serial_number = 851012345
-    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
-
-    w = FlashWorker()
-    w.initialize()
-    # 调真实方法
-    w._do_connect("STM32H750VB", "SWD", 4000)
-
-    # 验证调用序列（用 mock_calls 的顺序）
-    call_names = [c[0] for c in fake_jlink.mock_calls]
-    # 期望前几次：opened → open(空) → close → open(serial) → set_tif → set_speed → connect
-    assert "opened" in call_names
-    assert "open" in call_names
-    assert "close" in call_names
-    assert "set_tif" in call_names
-    assert "set_speed" in call_names
-    assert "connect" in call_names
-
-    fake_jlink.set_speed.assert_called_with(4000)
-    fake_jlink.connect.assert_called_with("STM32H750VB")
-
-
-def test_do_connect_uses_jtag_enum_when_iface_jtag(monkeypatch):
-    import pylink as _pylink
-    fake_jlink = MagicMock()
-    fake_jlink.opened.return_value = True   # 已开，跳过双开
-    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
-    w = FlashWorker()
-    w.initialize()
-    w._do_connect("STM32", "JTAG", 1000)
-    set_tif_arg = fake_jlink.set_tif.call_args[0][0]
-    assert set_tif_arg == _pylink.enums.JLinkInterfaces.JTAG
-
-
 # ============================================================
-# Task 6: _run_flash 成功路径测试
+# _run_flash 成功 / 错误路径测试
+# monkeypatch 注入 PylinkBackend 内的 pylink.JLink
 # ============================================================
 
 def _params_default(**overrides):
@@ -123,15 +87,19 @@ def _collect_signals(worker):
     return log
 
 
+def _make_worker(monkeypatch, fake_jlink):
+    """monkeypatch PylinkBackend 内的 pylink.JLink，返回 initialize 后的 worker。"""
+    monkeypatch.setattr("core.probe.jlink_backend.pylink.JLink", lambda: fake_jlink)
+    w = FlashWorker()
+    w.initialize()
+    return w
+
+
 def test_run_flash_success_elf_sector_reset_run(monkeypatch, qapp):
-    import pylink as _pylink
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = False
     fake_jlink.serial_number = 851012345
-    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
-
-    w = FlashWorker()
-    w.initialize()
+    w = _make_worker(monkeypatch, fake_jlink)
     log = _collect_signals(w)
 
     w._run_flash(_params_default())
@@ -152,9 +120,7 @@ def test_run_flash_success_elf_sector_reset_run(monkeypatch, qapp):
 def test_run_flash_bin_uses_bin_start_addr(monkeypatch, qapp):
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True
-    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
-    w = FlashWorker()
-    w.initialize()
+    w = _make_worker(monkeypatch, fake_jlink)
     p = _params_default(file_format=FORMAT_BIN, bin_start_addr=0x20000000)
     w._run_flash(p)
     qapp.processEvents()
@@ -165,9 +131,7 @@ def test_run_flash_bin_uses_bin_start_addr(monkeypatch, qapp):
 def test_run_flash_chip_erase_calls_erase_before_program(monkeypatch, qapp):
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True
-    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
-    w = FlashWorker()
-    w.initialize()
+    w = _make_worker(monkeypatch, fake_jlink)
     log = _collect_signals(w)
     w._run_flash(_params_default(erase_mode=ERASE_MODE_CHIP))
     qapp.processEvents()
@@ -180,9 +144,7 @@ def test_run_flash_chip_erase_calls_erase_before_program(monkeypatch, qapp):
 def test_run_flash_post_action_none_no_reset(monkeypatch, qapp):
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True
-    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
-    w = FlashWorker()
-    w.initialize()
+    w = _make_worker(monkeypatch, fake_jlink)
     log = _collect_signals(w)
     w._run_flash(_params_default(post_action=POST_ACTION_NONE))
     qapp.processEvents()
@@ -196,30 +158,22 @@ def test_run_flash_post_action_reset_no_run(monkeypatch, qapp):
     """post_action=reset 调 reset(halt=True)，不调 restart。"""
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True
-    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
-    w = FlashWorker()
-    w.initialize()
+    w = _make_worker(monkeypatch, fake_jlink)
     w._run_flash(_params_default(post_action=POST_ACTION_RESET))
     qapp.processEvents()
     fake_jlink.reset.assert_called_with(halt=True)
     fake_jlink.restart.assert_not_called()
 
 
-# ============================================================
-# Task 7: _run_flash 错误路径测试
-# ============================================================
-
 def test_run_flash_connect_failure(monkeypatch, qapp):
-    """connect 抛异常 → flash_finished(False, ...) 且 _safe_disconnect 被调。"""
+    """connect 抛异常 -> flash_finished(False, ...) 且 backend.close 被调。"""
     import pylink as _pylink
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = False
     fake_jlink.connect.side_effect = _pylink.JLinkException("Could not connect")
-    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
-
-    w = FlashWorker()
-    w.initialize()
+    w = _make_worker(monkeypatch, fake_jlink)
     log = _collect_signals(w)
+
     w._run_flash(_params_default())
     qapp.processEvents()
 
@@ -232,16 +186,14 @@ def test_run_flash_connect_failure(monkeypatch, qapp):
 
 
 def test_run_flash_program_failure(monkeypatch, qapp):
-    """flash_file 抛异常 → finished(False) + 错误 log 已写。"""
+    """flash_file 抛异常 -> finished(False) + 错误 log 已写。"""
     import pylink as _pylink
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True
     fake_jlink.flash_file.side_effect = _pylink.JLinkException("Erase failed")
-    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
-
-    w = FlashWorker()
-    w.initialize()
+    w = _make_worker(monkeypatch, fake_jlink)
     log = _collect_signals(w)
+
     w._run_flash(_params_default())
     qapp.processEvents()
 
@@ -251,52 +203,35 @@ def test_run_flash_program_failure(monkeypatch, qapp):
     fake_jlink.close.assert_called()
 
 
-def test_safe_disconnect_swallows_jlink_exception(monkeypatch, qapp):
-    """_safe_disconnect 内 close 抛 JLinkException 不传播（参考 CLAUDE.md
-    'close/rtt_stop 抛异常不致命'）。"""
-    import pylink as _pylink
-    fake_jlink = MagicMock()
-    fake_jlink.close.side_effect = _pylink.JLinkException("not connected")
-    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
-    w = FlashWorker()
-    w.initialize()
-    log = _collect_signals(w)
-    w._safe_disconnect()  # 不应抛
-    qapp.processEvents()
-    warns = [e for e in log if e[0] == "log" and e[1] == "warn"]
-    assert any("close warn" in e[2] for e in warns)
-
-
-def test_on_stop_calls_safe_disconnect_and_quits_thread(monkeypatch, qapp):
-    """_on_stop 调 _safe_disconnect → thread.quit()。"""
+def test_on_stop_closes_backend_and_quits_thread(monkeypatch, qapp):
+    """_on_stop 调 backend.close -> thread.quit()。"""
+    from core.probe.factory import make_backend
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True
-    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
-    w = FlashWorker()
-    w.initialize()
+    w = _make_worker(monkeypatch, fake_jlink)
+    # 新设计：backend 按 burner_kind 在 _run_flash 内动态创建（initialize 不预建）。
+    # 模拟"有活跃 backend"的 shutdown 场景：手动建一个 jlink backend。
+    w._backend = make_backend(BURNER_KIND_JLINK, w._log)
     fake_thread = MagicMock()
-    # 替换 self.thread() —— QObject 没法直接 setattr 'thread' 方法，monkeypatch
+    # 替换 self.thread() -- QObject 没法直接 setattr 'thread' 方法，monkeypatch
     monkeypatch.setattr(w, "thread", lambda: fake_thread)
     w._on_stop()
     fake_jlink.close.assert_called()
     fake_thread.quit.assert_called()
 
 
-def test_do_connect_remote_addr_skips_usb_enum_and_opens_by_ip(monkeypatch):
-    """remote_addr 非空时跳过 connected_emulators，按 ip:port 双开。"""
-    fake_jlink = MagicMock()
-    fake_jlink.opened.return_value = False
-    fake_jlink.serial_number = 602717758
-    monkeypatch.setattr("core.flash_worker.pylink.JLink", lambda: fake_jlink)
+def test_run_flash_routes_backend_by_burner_kind(monkeypatch, qapp):
+    """_run_flash 按 FlashParams.burner_kind 选 backend，不固定 jlink。
 
+    选 cmsisdap 时必须 make_backend("cmsisdap", ...) -> PyOCDBackend；否则
+    CMSIS-DAP 烧录误用 PylinkBackend 报 "jlink offline"。
+    """
+    calls: list[str] = []
+    fake_backend = MagicMock()
+    monkeypatch.setattr("core.flash_worker.make_backend",
+                        lambda kind, log: (calls.append(kind) or fake_backend))
     w = FlashWorker()
     w.initialize()
-    w._do_connect("STM32H750VB", "SWD", 4000,
-                  jlink_serial="", remote_addr="192.168.79.1:19020")
-
-    fake_jlink.connected_emulators.assert_not_called()
-    assert fake_jlink.open.call_count == 2
-    fake_jlink.open.assert_called_with(ip_addr="192.168.79.1:19020")
-    fake_jlink.set_tif.assert_called_once()
-    fake_jlink.set_speed.assert_called_with(4000)
-    fake_jlink.connect.assert_called_with("STM32H750VB")
+    w._run_flash(_params_default(burner_kind="cmsisdap"))
+    qapp.processEvents()
+    assert calls == ["cmsisdap"]

@@ -1,46 +1,69 @@
 """FlashWorker：固件烧录后台业务对象。
 
-**和 JLinkWorker 完全独立**：自己的 pylink.JLink 实例 + 自己的 QThread。
-用户负责确保烧录前 RTT 页已断开（不自动协调）。
+**和 JLinkWorker 完全独立**：自己的 ProbeBackend 实例 + 自己的 QThread。
+用户负责确保烧录前 RTT 页已断开（同设备检测见 flash_page._on_start_flash）。
 
-设计要点（参考 JLinkWorker 同款套路）：
+设计要点（参考 JLinkWorker 同款套路 + CLAUDE.md）：
 - 不继承 QThread；调用方外部创建 QThread + moveToThread。
-- 所有 pylink.JLink 操作都在 worker 线程。
+- 所有 probe 操作都在 worker 线程；backend 实例在 initialize() 内创建。
 - 参数传递避开 PySide6 跨线程 Signal 传 dict 的坑：UI 调
   set_pending_params() 用 lock，然后 emit 无参 flash_requested。
-- 退出清理：_on_stop 槽内 _safe_disconnect → thread.quit()。
+- 烧录逻辑下沉到 ProbeBackend（src/core/probe/），本类只编排 stage/progress/log。
+- pyOCD 烧录器枚举（非 J-Link）在 worker 线程 1s tick；J-Link 归 rtt_worker。
+- 退出清理：_on_stop 槽内 backend.close + timer stop/deleteLater -> thread.quit()。
 """
 from __future__ import annotations
 
+import contextlib
+import os
 import threading
 import time
 from dataclasses import dataclass
 
-import pylink
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from .logger import get_logger
+from .probe.base import (
+    BURNER_KIND_JLINK,
+    ERASE_MODE_CHIP,
+    ERASE_MODE_SECTOR,
+    FORMAT_BIN,
+    FORMAT_ELF,
+    FORMAT_HEX,
+    POST_ACTION_NONE,
+    POST_ACTION_RESET,
+    POST_ACTION_RESET_RUN,
+    STAGE_CONNECT,
+    STAGE_DISCONNECT,
+    STAGE_ERASE,
+    STAGE_PROGRAM,
+    STAGE_RESET,
+    STAGE_VERIFY,
+    ProbeParams,
+)
+from .probe.factory import make_backend
 
-# ============================================================
-# 公开常量（避免散落字面值，参考 CLAUDE.md "模式/枚举字符串必须有常量"）
-# ============================================================
-ERASE_MODE_SECTOR = "sector"
-ERASE_MODE_CHIP = "chip"
-
-POST_ACTION_NONE = "none"
-POST_ACTION_RESET = "reset"
-POST_ACTION_RESET_RUN = "reset_run"
-
-FORMAT_ELF = "elf"
-FORMAT_HEX = "hex"
-FORMAT_BIN = "bin"
-
-STAGE_CONNECT = "connect"
-STAGE_ERASE = "erase"
-STAGE_PROGRAM = "program"
-STAGE_VERIFY = "verify"
-STAGE_RESET = "reset"
-STAGE_DISCONNECT = "disconnect"
+# 常量 re-export：UI 层沿用 `from core.flash_worker import ERASE_MODE_CHIP` 等
+# 旧 import 路径，真源在 probe.base（CLAUDE.md '模式/枚举字符串必须有常量'）。
+__all__ = [
+    "BURNER_KIND_JLINK",
+    "ERASE_MODE_CHIP",
+    "ERASE_MODE_SECTOR",
+    "FORMAT_BIN",
+    "FORMAT_ELF",
+    "FORMAT_HEX",
+    "POST_ACTION_NONE",
+    "POST_ACTION_RESET",
+    "POST_ACTION_RESET_RUN",
+    "STAGE_CONNECT",
+    "STAGE_DISCONNECT",
+    "STAGE_ERASE",
+    "STAGE_PROGRAM",
+    "STAGE_RESET",
+    "STAGE_VERIFY",
+    "FlashParams",
+    "FlashWorker",
+]
 
 
 @dataclass(frozen=True)
@@ -56,6 +79,7 @@ class FlashParams:
     extra_verify: bool
     jlink_serial: str = ""    # 指定烧录器 serial；空/"0" 表示未指定
     remote_addr: str = ""     # 远程模式 "ip:port"；空 = 本地 USB
+    burner_kind: str = BURNER_KIND_JLINK  # 烧录器类型，见 probe.base.BURNER_KIND_*
 
 
 class FlashWorker(QObject):
@@ -69,19 +93,19 @@ class FlashWorker(QObject):
     flash_started = Signal()
     flash_stage_changed = Signal(str)        # STAGE_*
     flash_progress = Signal(int, int)        # (current_bytes, total_bytes)
-    flash_log = Signal(str, str)             # (level, msg) — "info"/"warn"/"error"
+    flash_log = Signal(str, str)             # (level, msg) - "info"/"warn"/"error"
     flash_finished = Signal(bool, str)       # (success, summary_text)
+    pyocd_probes_enumerated = Signal(str)     # "kind|serial|product;..."（非 J-Link probe）
 
     def __init__(self) -> None:
         super().__init__()
         self._logger = get_logger()
         # 这些在 initialize() 内（worker 线程）创建：
-        self._jlink: pylink.JLink | None = None
+        self._backend = None  # type: ignore[assignment]
+        self._pyocd_enum_timer: QTimer | None = None
         # 参数 setter + lock，避开跨线程 Signal 传 dataclass
         self._pending_params: FlashParams | None = None
         self._params_lock = threading.Lock()
-        # 进度回调用：在 _run_flash 启动时记录 total
-        self._current_total: int = 0
         self._t_start: float = 0.0
 
     def set_pending_params(self, params: FlashParams) -> None:
@@ -91,16 +115,60 @@ class FlashWorker(QObject):
 
     @Slot()
     def initialize(self) -> None:
-        """thread.started → 这里。worker 线程内创建 pylink.JLink。"""
-        self._jlink = pylink.JLink()
+        """thread.started -> 这里。worker 线程内创建枚举 timer 并连接信号槽。
+
+        backend 在 _run_flash 内按 FlashParams.burner_kind 动态创建：
+        BURNER_KIND_JLINK -> PylinkBackend，ST-Link / CMSIS-DAP -> PyOCDBackend
+        （make_backend(p.burner_kind, self._log)）。本方法只负责枚举 timer，
+        不持有 backend 引用。
+        """
+        # pyOCD 烧录器枚举（1s tick；J-Link 归 rtt_worker，此处只枚举非 J-Link）。
+        # QTimer 无 parent，affinity 跟 worker_thread（CLAUDE.md 'QThread 子类陷阱'）。
+        # 测试模式（JLINK_RTT_TEST_MODE）跳过 timer，避免 1s tick 扫真机 USB +
+        # 跨线程 emit 在 teardown 期间投递到已销毁 page 导致 pytestqt segfault。
+        if not os.environ.get("JLINK_RTT_TEST_MODE"):
+            self._pyocd_enum_timer = QTimer()
+            self._pyocd_enum_timer.setInterval(1000)
+            self._pyocd_enum_timer.timeout.connect(self._on_enumerate_pyocd)
+            self._pyocd_enum_timer.start()
         # 把输入信号连到本地槽
         self.flash_requested.connect(self._on_flash_requested)
         self.stop_requested.connect(self._on_stop)
         self._logger.info("FlashWorker initialized in worker thread")
 
     @Slot()
+    def _on_enumerate_pyocd(self) -> None:
+        """1s tick：枚举 pyOCD 可见 probe（非 J-Link），emit 给 UI 合并下拉。
+
+        pyOCD 枚举可能 100-300ms；在 worker 线程跑不阻塞主线程。烧录期间
+        worker 阻塞在 backend.program，timer timeout 排队等烧录完再处理，无冲突。
+        """
+        from .probe.enumerator import enumerate_pyocd_probes
+        try:
+            probes = enumerate_pyocd_probes()
+        except Exception as e:
+            self._logger.warning(f"pyocd enumerate failed: {e}")
+            return
+        chunks = [f"{p.kind}|{p.serial}|{p.product}" for p in probes]
+        self.pyocd_probes_enumerated.emit(";".join(chunks))
+
+    def _log(self, level: str, msg: str) -> None:
+        """backend 回调入口：透传到 flash_log 信号。"""
+        self.flash_log.emit(level, msg)
+
+    @Slot()
     def _on_stop(self) -> None:
-        self._safe_disconnect()
+        if self._backend is not None:
+            try:
+                self._backend.close()
+            except Exception as e:
+                self._logger.warning(f"FlashWorker stop close warn: {e}")
+        # worker 线程内创建的 QTimer 退出前必须自己 stop + deleteLater
+        # （CLAUDE.md 'worker 线程内的 QTimer/QObject 退出前必须自己 stop + deleteLater'）
+        if self._pyocd_enum_timer is not None:
+            self._pyocd_enum_timer.stop()
+            self._pyocd_enum_timer.deleteLater()
+            self._pyocd_enum_timer = None
         t = self.thread()
         if t is not None:
             t.quit()
@@ -115,54 +183,65 @@ class FlashWorker(QObject):
             return
         self._run_flash(params)
 
-    # 下面在 Task 5/6/7 里实现：
     def _run_flash(self, p: FlashParams) -> None:
         self.flash_started.emit()
         self._t_start = time.time()
         self.flash_log.emit("info", "=== Flash session ===")
-        self.flash_log.emit("info",
-            f"File: {p.file_path} ({p.file_format})")
+        self.flash_log.emit("info", f"File: {p.file_path} ({p.file_format})")
         self.flash_log.emit("info",
             f"Device: {p.device_name} | {p.interface} @ {p.speed_khz} kHz")
         self.flash_log.emit("info",
             f"Options: erase={p.erase_mode} post={p.post_action} verify={p.extra_verify}")
+        backend = None
         try:
+            backend = make_backend(p.burner_kind, self._log)
+            self._backend = backend  # 供 _on_stop 兜底关闭（worker 线程串行，无竞态）
+            probe_params = ProbeParams(
+                device_name=p.device_name,
+                interface=p.interface,
+                speed_khz=p.speed_khz,
+                file_path=p.file_path,
+                file_format=p.file_format,
+                bin_start_addr=p.bin_start_addr,
+                erase_mode=p.erase_mode,
+                post_action=p.post_action,
+                extra_verify=p.extra_verify,
+                serial=p.jlink_serial,
+                remote_addr=p.remote_addr,
+            )
+
             # --- connect ---
             self.flash_stage_changed.emit(STAGE_CONNECT)
-            self._do_connect(p.device_name, p.interface, p.speed_khz,
-                             p.jlink_serial, p.remote_addr)
+            backend.connect(probe_params)
 
-            # --- chip erase（sector 由 flash_file 内含，不显式 emit STAGE_ERASE）---
+            # --- chip erase（sector 由 program 内含，不显式 emit STAGE_ERASE）---
             if p.erase_mode == ERASE_MODE_CHIP:
                 self.flash_stage_changed.emit(STAGE_ERASE)
-                self._jlink.erase()
+                backend.erase(p.erase_mode)
                 self.flash_log.emit("info", "chip erase OK")
 
             # --- program ---
-            addr = p.bin_start_addr if p.file_format == FORMAT_BIN else 0
             self.flash_stage_changed.emit(STAGE_PROGRAM)
-            self._current_total = 0
-            self._jlink.flash_file(p.file_path, addr,
-                                   on_progress=self._on_pylink_progress)
-            self.flash_log.emit("info", "flash_file OK")
+            backend.program(on_progress=self._on_progress)
+            self.flash_log.emit("info", "program OK")
 
             # --- extra verify ---
             if p.extra_verify:
                 self.flash_stage_changed.emit(STAGE_VERIFY)
-                self._verify_bytewise(p)
+                backend.verify()
                 self.flash_log.emit("info", "extra verify OK")
 
             # --- post action ---
             if p.post_action in (POST_ACTION_RESET, POST_ACTION_RESET_RUN):
                 self.flash_stage_changed.emit(STAGE_RESET)
-                self._jlink.reset(halt=(p.post_action == POST_ACTION_RESET))
-                if p.post_action == POST_ACTION_RESET_RUN:
-                    self._jlink.restart()
-                    self.flash_log.emit("info", "CPU running")
+                backend.reset(
+                    halt=(p.post_action == POST_ACTION_RESET),
+                    run=(p.post_action == POST_ACTION_RESET_RUN),
+                )
 
             # --- disconnect ---
             self.flash_stage_changed.emit(STAGE_DISCONNECT)
-            self._safe_disconnect()
+            backend.close()
 
             elapsed = time.time() - self._t_start
             self.flash_log.emit("info", f"=== Done ({elapsed:.1f}s) ===")
@@ -170,104 +249,15 @@ class FlashWorker(QObject):
 
         except Exception as e:
             self.flash_log.emit("error", f"{type(e).__name__}: {e}")
-            self._safe_disconnect()
+            if backend is not None:
+                with contextlib.suppress(Exception):
+                    backend.close()
             self.flash_finished.emit(False, str(e))
+        finally:
+            # 清掉活跃 backend 引用；_on_stop 仅在关窗时跑，worker 线程串行不会
+            # 与 _run_flash 并发，清空后 _on_stop 不会拿到已 close 的 backend。
+            self._backend = None
 
-    def _do_connect(self, device: str, iface: str, speed: int,
-                    jlink_serial: str = "", remote_addr: str = "") -> None:
-        """严格按 CLAUDE.md 'pylink 1.6.0 连接顺序'：open → close → open(serial)
-        → set_tif → set_speed → connect。"""
-        j = self._jlink
-        if j is None:
-            raise RuntimeError("FlashWorker 未 initialize")
-
-        if remote_addr:
-            # 远程模式：跳过 USB 枚举与 serial 校验，直接按 ip:port 双开
-            if not j.opened():
-                j.open(ip_addr=remote_addr)
-                ser = j.serial_number
-                j.close()
-                j.open(ip_addr=remote_addr)
-                self.flash_log.emit("info", f"J-Link SN: {ser} (远程 {remote_addr})")
-        else:
-            # 本地 USB 模式：前置校验 + serial 双开
-            try:
-                emus = j.connected_emulators()
-            except Exception as e:
-                self.flash_log.emit("warn", f"未检测到 J-Link 设备，请检查 USB 连接 ({e})")
-                raise RuntimeError("no jlink")
-            if not emus:
-                self.flash_log.emit("warn", "未检测到 J-Link 设备，请检查 USB 连接")
-                raise RuntimeError("no jlink")
-            if jlink_serial and jlink_serial != "0" and not any(
-                    str(int(getattr(e, "SerialNumber", 0) or 0)) == jlink_serial
-                    for e in emus):
-                self.flash_log.emit(
-                    "warn", f"选中的 J-Link（S/N: {jlink_serial}）不在线，请刷新设备列表或重新选择")
-                raise RuntimeError("jlink offline")
-
-            if not j.opened():
-                if jlink_serial and jlink_serial != "0":
-                    j.open(serial_no=int(jlink_serial))
-                    ser = j.serial_number
-                    j.close()
-                    j.open(serial_no=int(ser))
-                else:
-                    j.open()
-                    ser = j.serial_number
-                    j.close()
-                    j.open(str(ser))
-                self.flash_log.emit("info", f"J-Link SN: {ser}")
-        tif = (pylink.enums.JLinkInterfaces.SWD if iface == "SWD"
-               else pylink.enums.JLinkInterfaces.JTAG)
-        j.set_tif(tif)
-        j.set_speed(int(speed))
-        j.connect(device)
-        self.flash_log.emit("info", f"Target connected: {device}")
-
-    def _safe_disconnect(self) -> None:
-        if self._jlink is None:
-            return
-        try:
-            self._jlink.close()
-        except pylink.JLinkException as e:
-            self.flash_log.emit("warn", f"close warn: {e}")
-
-    def _on_pylink_progress(self, action, progress_string, percentage) -> None:
-        """pylink flash_file 的 on_progress 回调。
-
-        pylink 1.6.0 签名（推测）：(action, progress_string, percentage)
-        如果实际签名不符，需要对照 pylink 文档调整。
-
-        percentage: int 0-100
-        """
-        try:
-            pct = int(percentage) if percentage is not None else 0
-        except (TypeError, ValueError):
-            pct = 0
-        # 没有精确 byte 数，把百分比 * 100 当 total = 100 报上去
-        self.flash_progress.emit(pct, 100)
-
-    def _verify_bytewise(self, p: FlashParams) -> None:
-        """按文件实际内容逐字节比对（在 flash_file 内含 CRC verify 之上的二次保险）。
-
-        ELF/HEX/BIN 的解析复用 flash_file_parser.to_intelhex（不在 worker 里
-        重复实现），再按 IntelHex 的连续段分块校验。pylink memory_read 一次
-        最多读 4096 字节，_verify_range 内分块。
-        """
-        from core import flash_file_parser as fp
-        ih = fp.to_intelhex(p.file_path, p.bin_start_addr)
-        for start, end in ih.segments():  # end 为开区间
-            data = bytes(ih.tobinarray(start=start, end=end - 1))
-            self._verify_range(start, data)
-
-    def _verify_range(self, addr: int, expected: bytes) -> None:
-        CHUNK = 4096
-        off = 0
-        while off < len(expected):
-            n = min(CHUNK, len(expected) - off)
-            got = bytes(self._jlink.memory_read(addr + off, n))
-            if got != expected[off:off + n]:
-                raise RuntimeError(
-                    f"verify mismatch at 0x{addr + off:08X}: {n} bytes")
-            off += n
+    def _on_progress(self, current: int, total: int) -> None:
+        """backend program 进度回调 -> flash_progress 信号。"""
+        self.flash_progress.emit(current, total)

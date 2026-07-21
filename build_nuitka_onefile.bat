@@ -109,6 +109,8 @@ python -m nuitka ^
     --include-package-data=qfluentwidgets ^
     --include-package-data=pylink ^
     --include-package=elftools ^
+    --include-package=pyocd ^
+    --include-distribution-metadata=pyocd ^
     --include-data-files=src\config.json=config.json ^
     --include-data-files=assets\icons\app_icon.ico=app_icon.ico ^
     --include-data-files=assets\icons\app_icon_256.png=app_icon_256.png ^

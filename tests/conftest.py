@@ -45,6 +45,22 @@ def fixtures_dir():
     return FIXTURES
 
 
+@pytest.fixture(autouse=True)
+def stub_pyocd_enumerator(monkeypatch):
+    """隔离测试与真机 + 防 pytestqt segfault：
+
+    1. 设 JLINK_RTT_TEST_MODE=1 -> FlashWorker.initialize 跳过 1s pyOCD 枚举
+       timer。否则 timer 在 worker 线程 fire + 跨线程 emit pyocd_probes_enumerated，
+       在测试 teardown 后投递到已销毁的 FlashPage，触发 pytestqt _process_events
+       segfault（Qt 线程 assertion）。
+    2. stub enumerate_pyocd_probes -> []：即使 timer 误触发也不扫真机 USB
+       （开发机连着 H7-TOOL 时会 emit 真 probe 重建 combo，干扰测试状态）。
+    """
+    monkeypatch.setenv("JLINK_RTT_TEST_MODE", "1")
+    from core.probe import enumerator
+    monkeypatch.setattr(enumerator, "enumerate_pyocd_probes", lambda: [])
+
+
 @pytest.fixture
 def screenshot_dir(tmp_path):
     """每个测试一个目录，方便 grab() 落盘观察。失败时通过 pytest -s 看路径。"""

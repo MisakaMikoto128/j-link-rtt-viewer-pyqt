@@ -10,3 +10,4 @@ nuitka>=2.0
 # firmware flashing
 pyelftools>=0.29
 intelhex>=2.3.0
+pyocd>=0.36      # ST-Link / CMSIS-DAP / DAPLink 烧录（J-Link 仍走 pylink，RTT 必须保留）

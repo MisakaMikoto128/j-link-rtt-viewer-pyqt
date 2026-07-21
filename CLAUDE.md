@@ -857,3 +857,102 @@ self.btn_reset_halt.setText(self.tr("重置并暂停"))
 **处理**：UI 层冒烟脚本不要依赖 `setCurrentIndex` 触发完整链路；改为「`setText(目标文本)` + 直接调页面自己的槽（如 `page._on_jlink_selection_changed()`）」——这模拟的是用户点选后槽函数拿到的最终状态，才是要验证的页面逻辑。pytest 里 qtbot 的路径（`setCurrentIndex` + `qtbot.wait`）目前工作正常，测试照常用；只有独立 scratch 脚本需要绕。
 
 参考：`scratch/smoke_remote_ui.py`（最终用 setText + 直调槽验证通过）。
+
+---
+
+## 烧录器下拉：programmatic `setCurrentIndex` 后别靠 combo 状态解析 serial，要存真源
+
+**现象**：CMSIS-DAP 烧录器拔掉 -> 关软件 -> 重开（红点，离线占位）-> 再插上，红点**不灭**；点烧录报"选中的烧录器不在线，请刷新设备列表或重新选择"。但**手动**点开下拉重选一次同一台设备就正常了，手动输入 serial 也能检测到在线--矛盾。拔掉再插上（不重启软件）却正常。
+
+**原因**：`_rebuild_burner_combo` 每次 1s 枚举 tick 重建下拉：`clear() -> addItem(...) -> setCurrentIndex(idx)` 恢复选中。qfluentwidgets `EditableComboBox` 在 `clear` 重建后 programmatic `setCurrentIndex` 偶发**不同步** `currentIndex()`/`currentText()`（CLAUDE.md 另有条「`setCurrentIndex` 选中后 `currentText()` 可能不同步」，那条讲 scratch 脚本，本条是真实 app 事件循环下也踩）。`_current_burner()` 原实现回退分支是 `("jlink", currentText())`--此时 `currentText()` 是整条 label `"CMSIS-DAP: 0037..."` 而非裸 serial `"0037..."`。设备列表 `_pyocd_probes` 里存的是裸 serial，label 匹配不上 -> `online=False` -> 红点不灭 + 烧录前置检查"不在线"。手动点选之所以正常：用户点击会可靠同步 `currentIndex`，`itemData(idx)` 命中真实 tuple。
+
+**处理**：选中状态用**显式真源字段** `self._selected_serial` / `self._selected_kind`，不靠 combo 解析：
+- `_rebuild_burner_combo` 恢复选中时同时写真源（online 则 kind=`_lookup_burner_kind(serial)`；offline 占位 kind=`""`）。
+- `_current_burner()` 优先读 combo `itemData(currentIndex)`（用户点选后可靠），**不可靠时回退真源**；删掉 `("jlink", currentText())` 这条把 label 当 serial 的回退。
+- `_on_burner_selection_changed`（手动点选）也同步写真源。
+- 顺带：`setCurrentIndex(idx)` 后补一句 `setText(itemText(idx))` 强制 lineEdit 显示，避免占位文本残留。
+
+判别：凡"程序重建 combo 后读 `currentText()`/`currentIndex()` 当数据真源、且偶发对不上"的，都改显式真源字段；combo 只负责显示。CLAUDE.md 已有两条 `EditableComboBox` 坑（`setCurrentText` no-op、`setCurrentText` 任意路径），本条是同家族第三面--`setCurrentIndex` 重建后状态不可靠。
+
+参考：`src/ui/flash_page.py` `_rebuild_burner_combo` / `_current_burner` / `_lookup_burner_kind` / `_on_burner_selection_changed`、`tests/test_flash_page.py`。
+
+---
+
+## FlashWorker backend 必须按 FlashParams.burner_kind 动态创建，不能预建固定 jlink
+
+**现象**：选 CMSIS-DAP 点烧录，报 "jlink offline" 烧录失败。
+
+**原因**：`FlashWorker.initialize()` 原预建 `self._backend = make_backend(BURNER_KIND_JLINK, ...)`，`_run_flash` 直接用 `self._backend`--无视 `FlashParams.burner_kind`。选 CMSIS-DAP 时 `burner_kind="cmsisdap"`，但 worker 仍走 `PylinkBackend`（J-Link 未连）-> `ProbeNotConnected("jlink offline")`。
+
+**处理**：`initialize()` 不预建 backend；`_run_flash` 内 `backend = make_backend(p.burner_kind, self._log)` 按 kind 取（jlink -> PylinkBackend，stlink/cmsisdap -> PyOCDBackend）。`self._backend` 仅作 `_on_stop` 兜底关闭引用，`_run_flash` 的 `finally` 里清 None（worker 线程串行，`_on_stop` 不会与烧录并发）。factory 本身已支持 kind 派发，原 bug 只是 FlashWorker 没用 `p.burner_kind`。
+
+参考：`src/core/flash_worker.py` `initialize` / `_run_flash`、`tests/test_flash_worker.py` `test_run_flash_routes_backend_by_burner_kind`。
+
+---
+
+## 烧录器下拉：cfg serial 与在线设备不匹配时必须自动选在线设备，不能卡在离线占位
+
+**现象**：CMSIS-DAP 明明插着，打开软件下拉里也显示「CMSIS-DAP: 0037...」，但状态红点不灭、烧录被"不在线"拦截，必须手动点开下拉重选一次才好。只在重新打开软件后出现，烧录中途拔插正常。
+
+**原因**：`_rebuild_burner_combo` 恢复选中时，`prev_serial`（cfg 存的 `flash_jlink_serial`）若不在 items（`_find_burner_index_by_serial` 返回 -1），原实现一律走"离线占位"分支：`setText(prev_serial)` + readOnly + 红点。但 app 是 J-Link RTT Viewer，`flash_jlink_serial` 很可能存的是 **J-Link** 的 serial（RTT / 上次烧 J-Link 留下），用户改用 CMSIS-DAP（不同 serial）时，cfg serial 永远不在 `_pyocd_probes` 里 -> 离线占位永久卡住，红点不灭。设备其实在线（下拉里有），只是被 cfg 的旧 serial "劫持"了。`_selected_serial` 真源（上一条）修了 combo 解析，但没修这个"cfg serial 与在线设备不匹配"的语义。
+
+**处理**：`_rebuild_burner_combo` 的 `elif prev_serial:` 分支，`idx < 0`（cfg serial 不在线）时**先看有没有在线设备**：
+```python
+elif prev_serial:
+    idx = self._find_burner_index_by_serial(prev_serial)
+    if idx >= 0:
+        # cfg serial 在线 -> 选中它
+        ...
+    elif self._jlink_serials or self._pyocd_probes:
+        # cfg serial 不在线，但有其它在线设备 -> 自动选第一个（index 1）
+        setCurrentIndex(1) + setText(itemText(1)) + _selected_serial=itemData(1)[1]
+    else:
+        # 无任何在线设备 -> 离线占位（等用户插上 prev 指定的设备）
+        setText(prev_serial) + readOnly + _selected_serial=prev_serial
+```
+判别：用户报"设备在下拉里但红点不灭、必须手点"，且只在重启后出现 -> 查 cfg serial 是否与当前设备匹配；不匹配就走自动选在线设备。诊断方法：写 scratch repro（stub `enumerate_pyocd_probes` 返回设备 + cfg 存不同 serial），跑真实 MainWindow 3s 看 `_selected_serial` / `_burner_status_dot` 状态--`scratch/repro_bug1.py`。
+
+参考：`src/ui/flash_page.py` `_rebuild_burner_combo` `elif prev_serial:` 三分支、`tests/test_flash_page.py` `test_stale_cfg_serial_auto_selects_online_device`、`scratch/repro_bug1.py`。
+
+---
+
+## pyOCD target_override：CMSIS-Pack part_number 用 'x' 作封装通配，用户填完整型号要通配匹配
+
+**现象**：选 CMSIS-DAP 烧 STM32F030，device 填 `STM32F030C8T6`（SEGGER 完整型号，带封装后缀 T6），pyOCD 报 `未知 target:STM32F030C8T6`（烧录失败）。但 device 填 `STM32F030C8`（短名）却正常。
+
+**原因**：已装 CMSIS-Pack 的 `part_number` 是 `STM32F030C8Tx`（`x` = 封装/等级通配）。`_resolve_target_type` 原只用 `part.startswith(key)`：`stm32f030c8tx`.startswith(`stm32f030c8t6`) = False（第 12 位 `x` vs `6`）-> 不匹配 -> None -> "未知 target"。短名 `stm32f030c8` 是 pack part_number 的真前缀，所以撞上了。用户在 SEGGER 工具里看到的多是完整型号（带 T6/T7），直接填进 UI 就踩。
+
+**处理**：匹配顺序补一条**等长 'x' 通配**比较（pack 的 'x' 当单字符通配）：
+```python
+def _pack_part_wildcard_eq(pattern, text):
+    if len(pattern) != len(text): return False
+    return all(pc == 'x' or pc == tc for pc, tc in zip(pattern, text))
+# stm32f030c8tx ~ stm32f030c8t6 -> True
+```
+完整顺序：exact -> wildcard_eq（Tx~T6）-> prefix（短名->Tx）-> 反向前缀。注意只通配 pattern 里是 'x' 的位，其它位严格相等（`tx` 不会匹配 `ab`，只匹配 `t6`/`t7` 这种末位）。pyOCD `session_with_chosen_probe(target_override="STM32F030C8Tx")` 接受带 'x' 的 part_number（smoke 实测）。
+
+判别：用户报 "未知 target" 但短名能烧 -> 8 成是封装后缀通配问题，查 `_resolve_target_type` 的匹配。
+
+参考：`src/core/probe/pyocd_backend.py` `_resolve_target_type` / `_pack_part_wildcard_eq`、`tests/test_pyocd_backend.py`。
+
+---
+
+## PySide6 测试信号 spy：裸 lambda 连接 worker 线程拥有的信号不触发，要用 QObject bound-method 槽
+
+**现象**：测试里 `_SignalSpy` 用 `signal.connect(lambda: setattr(self, "count", self.count+1))` 计数 `FlashWorker.flash_requested`（属 worker 线程 QObject）。烧录流程明明 emit 了（QObject 槽能收到），但裸 lambda 的 count 永远 0。结果：断言 `count==0` 的测试（如"离线应拦截"）**无意义通过**，断言 `count==1` 的测试（"在线应 emit"）**误报失败**。
+
+**原因**：被测信号 `flash_requested` 的 owner 是 FlashWorker（`moveToThread` 到 worker 线程）。从主线程 emit 一个属其它线程 QObject 的信号时，PySide6 对**裸 callable 连接**（lambda / 普通函数，无 receiver QObject）的处理不可靠--没有 receiver QObject 就定不了接收线程，slot 不触发。而 bound method（`self._on_signal`）带 receiver QObject（spy 在主线程）-> AutoConnection 按 receiver 线程判，同线程直连，可靠触发。
+
+**处理**：信号 spy 用 QObject + bound-method 槽，不用裸 lambda：
+```python
+class _SignalSpy(QObject):
+    def __init__(self, signal):
+        super().__init__()
+        self.count = 0
+        signal.connect(self._on_signal)
+    def _on_signal(self, *args):  # *args 吃掉任意信号参数
+        self.count += 1
+```
+判别：spy 计数和实际 emit 对不上（尤其被测信号 owner 在 worker 线程）-> 换 QObject bound-method 槽。单测里被测信号 owner 在主线程时裸 lambda 也能用，但统一用 bound-method 槽最稳。
+
+参考：`tests/test_flash_page.py` `_SignalSpy`、`scratch/diag_bug1_flash.py`（同信号 QObject 槽 count=1、裸 lambda count=0 的对照实证）。
