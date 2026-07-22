@@ -797,9 +797,9 @@ class RTTMonitorPage(QWidget):
 
         self.cb_jlink = EditableComboBox(inner)
         self.cb_jlink.setFixedHeight(_CTRL_H)
-        self.cb_jlink.setFixedWidth(260)
-        self.cb_jlink.setMinimumWidth(260)
-        self.cb_jlink.setMaximumWidth(260)
+        self.cb_jlink.setFixedWidth(200)
+        self.cb_jlink.setMinimumWidth(200)
+        self.cb_jlink.setMaximumWidth(200)
         self.cb_jlink.setPlaceholderText(self.tr("未检测到 J-Link"))
         self._row_jlink.addWidget(self.cb_jlink)
         v.addLayout(self._row_jlink)
