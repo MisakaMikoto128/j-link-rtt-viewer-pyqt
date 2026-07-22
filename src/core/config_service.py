@@ -96,6 +96,8 @@ class ConfigService(QObject):
         "jlink_mode": "usb",
         "last_remote_host": "",
         "last_remote_port": "19020",
+        # RTT 页目标设备输入历史（最近使用 8 条），与 flash_device_history 分开。
+        "rtt_target_history": [],
         # 内存页用户选择持久化（地址/大小/字节序/字节每行/diff/自动刷新间隔/导出/写地址）
         # 不持久化：auto_refresh（断开会清掉）、goto/search（一次性）、write_data（误点高危）
         "mem_read_addr": "0x08000000",
@@ -124,6 +126,8 @@ class ConfigService(QObject):
         "flash_verify": False,  # extra byte-by-byte verify
         "flash_recent_files": [],  # 最多 10 个，时间倒序
         "flash_recent_files_mtime": {},  # path → mtime（float），用于变更提示
+        # 烧录页目标设备输入历史（最近使用 8 条），与 rtt_target_history 分开。
+        "flash_device_history": [],
         # 烧录页选定的 J-Link serial（离线时红点占位）
         "flash_jlink_serial": "",
         # 烧录页 J-Link 模式："usb" | "remote"
@@ -150,10 +154,9 @@ class ConfigService(QObject):
             Path(__file__).resolve().parent.parent / "config.json"
         )
         self._user_prefs_path = self._compute_user_prefs_path()
-        # 用户可编辑的 config.json 副本（用于扩展 chip_models / 改默认值等）
+        # 用户可编辑的 config.json 副本（用于覆盖默认值等）。
         # 优先此路径，回退 bundled。首次启动若不存在则从 bundled seed 一份
-        # —— onefile 打包模式下 bundled 在临时解压目录里，每次升级被覆盖，
-        # 必须有可写副本才能让用户加自己的 MCU 而不需要重新打包
+        # —— onefile 打包模式下 bundled 在临时解压目录里，每次升级被覆盖。
         self._user_config_path = self._user_prefs_path.parent / "config.json"
         self._data: dict[str, Any] = dict(self.DEFAULTS)
         self._bundled: dict[str, Any] = {}
@@ -320,9 +323,6 @@ class ConfigService(QObject):
                     tmp.unlink()
             except OSError:
                 pass
-
-    def get_chip_list(self) -> list[str]:
-        return list(self._bundled.get("chip_models", []))
 
     def get_default_speeds(self) -> list[int]:
         return list(self._bundled.get("speed_options_khz", []))

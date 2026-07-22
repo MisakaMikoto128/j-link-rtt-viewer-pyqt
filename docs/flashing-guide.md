@@ -25,7 +25,7 @@
 
 | 项 | 说明 |
 | --- | --- |
-| **Device** | 目标芯片名（如 `STM32H750VB`）。可下拉选择内置芯片表，也可手动输入。 |
+| **Device** | 目标芯片名（如 `STM32H750VB`）。下拉列表由当前选中的烧录器后端自动发现：J-Link 后端从 SEGGER J-Link DLL 枚举支持的 MCU；CMSIS-DAP / ST-Link 后端从 pyOCD 内置 target 与已安装 CMSIS-Pack 读取。也支持直接手动输入，后端会按各自命名约定做模糊匹配。 |
 | **Interface** | `SWD`（推荐）或 `JTAG`。 |
 | **Speed (kHz)** | 调试口速度，默认 `4000`。与 RTT 监控页一致的速度列表。 |
 

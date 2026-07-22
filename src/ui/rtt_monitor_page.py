@@ -36,7 +36,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
-    QCompleter,
     QFrame,
     QGraphicsOpacityEffect,
     QGridLayout,
@@ -82,6 +81,7 @@ from core.jlink_worker import (
     JLinkWorker,
     encode_send_payload,
 )
+from core.target_discovery import get_pylink_target_names
 
 from . import _infobar
 from .widgets.remote_host import (
@@ -91,6 +91,7 @@ from .widgets.remote_host import (
     tcp_reachable,
 )
 from .widgets.search_bar import SearchBar
+from .widgets.target_combo_box import TargetComboBox
 
 _FONT_SIZE_MIN = 8
 _FONT_SIZE_MAX = 32
@@ -850,25 +851,11 @@ class RTTMonitorPage(QWidget):
         self._lbl_target.setFixedHeight(_CTRL_H)
         row_target.addWidget(self._lbl_target)
         row_target.addStretch(1)
-        self.cb_target = EditableComboBox(inner)
-        self.cb_target.setPlaceholderText(self.tr("目标设备"))
+        self.cb_target = TargetComboBox(self._cfg, "rtt_target_history", inner)
         self.cb_target.setFixedWidth(200)
-        chip_list = self._cfg.get_chip_list()
-        self.cb_target.addItems(chip_list)
-        last_mcu = self._cfg.get("target_mcu")
-        if last_mcu:
-            # 用户上次输入的自定义 target 可能不在 chip_list 里；EditableComboBox
-            # 的 setCurrentText 对非 items 文本是 no-op，必须先 addItem。
-            if self.cb_target.findText(last_mcu) < 0:
-                self.cb_target.addItem(last_mcu)
-            self.cb_target.setCurrentText(last_mcu)
-            self.cb_target.setText(last_mcu)
-        completer = QCompleter(chip_list, self.cb_target)
-        completer.setCaseSensitivity(Qt.CaseInsensitive)
-        completer.setFilterMode(Qt.MatchContains)
-        self.cb_target.setCompleter(completer)
-        # 用户输入/选择目标设备时即时持久化
-        self.cb_target.currentTextChanged.connect(self._on_target_changed)
+        self.cb_target.set_names_provider(get_pylink_target_names)
+        self.cb_target.setPlaceholderText(self.tr("目标设备"))
+        self.cb_target.restore_text(str(self._cfg.get("target_mcu") or ""))
         row_target.addWidget(self.cb_target)
         v.addLayout(row_target)
 
@@ -1677,6 +1664,17 @@ class RTTMonitorPage(QWidget):
         if getattr(self, "_last_enum_state", None) == new_state and hasattr(
             self, "_jlink_initialized"
         ):
+            # 枚举状态没变，但处于自动重连等待态且目标 serial 已在线时，仍需触发重连。
+            prev_serial = self._serial_from_label(self.cb_jlink.currentText().strip())
+            if (
+                prev_serial
+                and prev_serial in serials
+                and prev_serial != remote_text
+                and not self._is_connected
+                and self._pending_reconnect
+            ):
+                self._pending_reconnect = False
+                self._emit_connect_request(prev_serial)
             return
         self._last_enum_state = new_state
 
@@ -1936,17 +1934,6 @@ class RTTMonitorPage(QWidget):
         self._worker.connect_remote_requested.emit(
             target, iface, speed, channel, f"{resolved}:{port}"
         )
-
-    def _on_target_changed(self, text: str) -> None:
-        """目标设备输入/选择变化时即时持久化，并确保不在 chip_list 里的自定义值也能被记住。"""
-        target = text.strip()
-        if target:
-            self._cfg.set("target_mcu", target)
-            # 如果用户输入的是新自定义 target，把它加到 items 里，避免后续 setCurrentText no-op
-            if self.cb_target.findText(target) < 0:
-                self.cb_target.blockSignals(True)
-                self.cb_target.addItem(target)
-                self.cb_target.blockSignals(False)
 
     def _apply_reset_mode_to_button(self, mode: str) -> None:
         """按 cfg.reset_mode 刷新 btn_reset 文字 + tooltip。"""

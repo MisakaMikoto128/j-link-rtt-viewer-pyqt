@@ -17,7 +17,6 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QObject, QRunnable, Qt, QThread, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
-    QCompleter,
     QFileDialog,
     QHBoxLayout,
     QProgressBar,
@@ -54,6 +53,7 @@ from core.flash_worker import (
     FlashParams,
     FlashWorker,
 )
+from core.target_discovery import get_pylink_target_names, target_names_for_burner_kind
 
 from . import _infobar
 from ._scroll_helpers import make_transparent_scroll
@@ -64,6 +64,7 @@ from .widgets.remote_host import (
     resolve_remote_host,
     tcp_reachable,
 )
+from .widgets.target_combo_box import TargetComboBox
 
 
 class _RemoteProbe(QObject):
@@ -219,19 +220,9 @@ class FlashPage(QWidget):
         row = QHBoxLayout()
         self.lbl_device = BodyLabel(self.tr("目标设备:"))
         row.addWidget(self.lbl_device)
-        self.cmb_device = EditableComboBox()
-        chip_list = self._cfg.get_chip_list() or ["STM32H750VB"]
-        self.cmb_device.addItems(chip_list)
-        # 加载上次 target：若用户输入的 target 不在 chip_list 里，先 addItem 再选。
-        saved_device = str(self._cfg.get("flash_device_name") or "").strip()
-        if saved_device and self.cmb_device.findText(saved_device) < 0:
-            self.cmb_device.addItem(saved_device)
-        self.cmb_device.setCurrentText(saved_device)
-        # 自动补全：不区分大小写、子串匹配（与 RTT 页目标设备下拉一致）
-        completer = QCompleter(chip_list, self.cmb_device)
-        completer.setCaseSensitivity(Qt.CaseInsensitive)
-        completer.setFilterMode(Qt.MatchContains)
-        self.cmb_device.setCompleter(completer)
+        self.cmb_device = TargetComboBox(self._cfg, "flash_device_history")
+        self.cmb_device.set_names_provider(get_pylink_target_names)
+        self.cmb_device.restore_text(str(self._cfg.get("flash_device_name") or ""))
         row.addWidget(self.cmb_device, 1)
         layout.addLayout(row)
 
@@ -251,6 +242,14 @@ class FlashPage(QWidget):
         row2.addStretch(1)
         layout.addLayout(row2)
         return card
+
+    def _refresh_device_combo(self) -> None:
+        """按当前烧录器 kind 刷新目标设备下拉的数据源。"""
+        if self._selected_kind and self._selected_kind != "remote":
+            kind = self._selected_kind
+        else:
+            kind = BURNER_KIND_JLINK
+        self.cmb_device.set_names_provider(lambda: list(target_names_for_burner_kind(kind)))
 
     def _build_file_card(self) -> QWidget:
         card = CardWidget()
@@ -749,6 +748,7 @@ class FlashPage(QWidget):
             self._cfg.set("flash_jlink_mode", "usb")
             if serial:
                 self._cfg.set("flash_jlink_serial", serial)
+        self._refresh_device_combo()
         self._sync_burner_status_dot()
 
     def _trigger_remote_probe(self) -> None:

@@ -707,6 +707,7 @@ def test_usb_unplug_replug_auto_reconnect(rtt_page, qtbot):
     qtbot.wait(30)
     page.cb_jlink.setCurrentIndex(1)  # 选 222
     qtbot.wait(10)
+    page.cb_target.setText("STM32F030C8")  # 显式设置目标设备（新 TargetComboBox 不会默认填充）
     page._set_connected_ui(worker.get_device_info())
     assert page._is_connected is True
 

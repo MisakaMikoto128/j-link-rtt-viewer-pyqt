@@ -1,7 +1,6 @@
 """ConfigService：默认值、节流、flush、atomic write。"""
 import json
 import time
-from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QCoreApplication
@@ -15,7 +14,6 @@ def cfg(qapp, tmp_path, monkeypatch):
     # 把 bundled config.json 放进 tmp 临时 src
     bundled = tmp_path / "bundled_config.json"
     bundled.write_text(json.dumps({
-        "chip_models": ["X", "Y"],
         "default_interface": "SWD",
         "default_speed_khz": 4000,
         "speed_options_khz": [100, 4000, 8000],
@@ -31,7 +29,6 @@ def test_default_values(cfg):
     assert cfg.get("rtt_channel") == 0
     assert cfg.get("send_history") == []
     assert cfg.get("theme") == "auto"
-    assert cfg.get_chip_list() == ["X", "Y"]
     assert cfg.get_default_speeds() == [100, 4000, 8000]
 
 
@@ -151,7 +148,6 @@ def test_flash_defaults_present(tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     bundled = tmp_path / "bundled_config.json"
     bundled.write_text(json.dumps({
-        "chip_models": ["X", "Y"],
         "default_interface": "SWD",
         "default_speed_khz": 4000,
         "speed_options_khz": [100, 4000, 8000],
@@ -176,7 +172,6 @@ def test_flash_set_persists_recent_files(tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     bundled = tmp_path / "bundled_config.json"
     bundled.write_text(json.dumps({
-        "chip_models": ["X", "Y"],
         "default_interface": "SWD",
         "default_speed_khz": 4000,
         "speed_options_khz": [100, 4000, 8000],
