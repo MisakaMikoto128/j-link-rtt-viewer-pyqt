@@ -1,8 +1,10 @@
 """RTT 监控页：控制栏 + 选项栏 + 显示区 + 搜索栏 + 发送栏。"""
+
 from __future__ import annotations
 
-from contextlib import contextmanager
+import contextlib
 import time
+from contextlib import contextmanager
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -11,9 +13,9 @@ from PySide6.QtCore import (
     QObject,
     QPoint,
     QPropertyAnimation,
+    QRunnable,
     QSize,
     Qt,
-    QRunnable,
     QThreadPool,
     QTimer,
     Signal,
@@ -41,9 +43,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -53,7 +53,6 @@ from qfluentwidgets import (
     ComboBox,
     DotInfoBadge,
     EditableComboBox,
-    FlowLayout,
     FluentIcon,
     HeaderCardWidget,
     HyperlinkButton,
@@ -65,17 +64,24 @@ from qfluentwidgets import (
     ScrollArea,
     SpinBox,
     StrongBodyLabel,
+    ToggleToolButton,
     ToolButton,
     ToolTipFilter,
     TransparentToolButton,
     isDarkTheme,
-    themeColor, PrimaryToolButton, ToggleToolButton,
+    themeColor,
 )
 
 from core.ansi_parser import AnsiAttrs, parse_ansi
 from core.config_service import ConfigService
 from core.crc_utils import CRC_ALGORITHMS, compute_crc
-from core.jlink_worker import CHANNEL_ALL, CHANNEL_DEFAULT, RESET_MODE_HALT, JLinkWorker, encode_send_payload
+from core.jlink_worker import (
+    CHANNEL_ALL,
+    CHANNEL_DEFAULT,
+    RESET_MODE_HALT,
+    JLinkWorker,
+    encode_send_payload,
+)
 
 from . import _infobar
 from .widgets.remote_host import (
@@ -85,7 +91,6 @@ from .widgets.remote_host import (
     tcp_reachable,
 )
 from .widgets.search_bar import SearchBar
-
 
 _FONT_SIZE_MIN = 8
 _FONT_SIZE_MAX = 32
@@ -148,17 +153,45 @@ _RECONNECT_COLORS: dict[str, str] = {
 
 # 编码显示名映射（权威定义在 settings_page._ENCODING_DISPLAY，此处为本地副本）
 _ENCODING_LABEL_MAP: dict[str, str] = {
-    "utf-8": "UTF-8", "gbk": "GBK", "utf-16-le": "UTF-16-LE",
-    "latin-1": "Latin-1", "ascii": "ASCII",
+    "utf-8": "UTF-8",
+    "gbk": "GBK",
+    "utf-16-le": "UTF-16-LE",
+    "latin-1": "Latin-1",
+    "ascii": "ASCII",
 }
 
 # 色盘弹窗预设色 —— 参照 Office 经典调色板
 _COLOR_GRID_PRESETS: list[str] = [
-    "#FFFFFF", "#F2F2F2", "#E7E6E6", "#BFBFBF", "#A6A6A6", "#808080",
-    "#C00000", "#FF0000", "#FFC000", "#FFFF00", "#92D050", "#00B050",
-    "#00B0F0", "#0070C0", "#002060", "#7030A0", "#FF00FF", "#FF0066",
-    "#FF6600", "#FFA500", "#FFD700", "#948A54", "#8B4513", "#A0522D",
-    "#87CEEB", "#4682B4", "#2E8B57", "#228B22", "#808000", "#556B2F",
+    "#FFFFFF",
+    "#F2F2F2",
+    "#E7E6E6",
+    "#BFBFBF",
+    "#A6A6A6",
+    "#808080",
+    "#C00000",
+    "#FF0000",
+    "#FFC000",
+    "#FFFF00",
+    "#92D050",
+    "#00B050",
+    "#00B0F0",
+    "#0070C0",
+    "#002060",
+    "#7030A0",
+    "#FF00FF",
+    "#FF0066",
+    "#FF6600",
+    "#FFA500",
+    "#FFD700",
+    "#948A54",
+    "#8B4513",
+    "#A0522D",
+    "#87CEEB",
+    "#4682B4",
+    "#2E8B57",
+    "#228B22",
+    "#808000",
+    "#556B2F",
 ]
 
 
@@ -170,13 +203,13 @@ def _section_separator(parent: QWidget) -> QFrame:
     """
     line = QFrame(parent)
     line.setFixedHeight(1)
-    line.setStyleSheet(
-        "QFrame { background-color: rgba(128,128,128,0.3); border: none; }")
+    line.setStyleSheet("QFrame { background-color: rgba(128,128,128,0.3); border: none; }")
     return line
 
 
 class _RemoteProbeHelper(QObject):
     """QThreadPool 线程向主线程回传 TCP 探测结果的信号中转对象。"""
+
     probe_done = Signal(bool)
 
 
@@ -194,7 +227,8 @@ class _TcpReachableRunnable(QRunnable):
             ok = tcp_reachable(self._ip, self._port)
         except Exception:
             ok = False
-        self._helper.probe_done.emit(ok)
+        with contextlib.suppress(RuntimeError):
+            self._helper.probe_done.emit(ok)
 
 
 class _VResizeHandle(QFrame):
@@ -478,9 +512,9 @@ class RTTMonitorPage(QWidget):
         self._last_remote_probe_ts: float = 0.0
         self._last_remote_addr = ""
         self._last_enum_state = None
+        self._jlink_products: dict[str, str] = {}
         self._remote_probe_helper = _RemoteProbeHelper()
-        self._remote_probe_helper.probe_done.connect(
-            self._on_remote_probe_done)
+        self._remote_probe_helper.probe_done.connect(self._on_remote_probe_done)
 
         # 发送字节统计缓存（跨连接累计；_update_stats 从 worker 同步）
         self._send_total_bytes = 0
@@ -495,9 +529,10 @@ class RTTMonitorPage(QWidget):
         self._all_rtt_buffer: str = ""
         self._view_channel: int = self._cfg.get("rtt_channel")
         self._send_channel: int = self._view_channel if self._view_channel >= 0 else CHANNEL_DEFAULT
-        
+
         # 自动断帧：上次接收数据的时间戳
         import time as _time_mod
+
         self._last_rx_time: float = 0.0
         self._time_mod = _time_mod
 
@@ -590,8 +625,7 @@ class RTTMonitorPage(QWidget):
         self._card_pos_anim.setEasingCurve(QEasingCurve.OutCubic)
 
         # 透明度动画：用于 fade 动画
-        self._card_opacity_anim = QPropertyAnimation(
-            self._card_opacity, b"opacity", card)
+        self._card_opacity_anim = QPropertyAnimation(self._card_opacity, b"opacity", card)
         self._card_opacity_anim.setDuration(220)
         self._card_opacity_anim.setEasingCurve(QEasingCurve.OutCubic)
         self._card_opacity_anim.finished.connect(self._on_card_anim_finished)
@@ -704,25 +738,21 @@ class RTTMonitorPage(QWidget):
         panel = QWidget(self)
         panel.setObjectName("configPanel")
         panel.setFixedWidth(280)
-        panel.setStyleSheet(
-            "QWidget#configPanel { background: transparent; }"
-        )
+        panel.setStyleSheet("QWidget#configPanel { background: transparent; }")
 
         scroll = ScrollArea(panel)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setStyleSheet(
-            "QScrollArea { background: transparent; border: none; }")
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         vp = scroll.viewport()
         vp.setObjectName("configVP")
         vp.setStyleSheet("QWidget#configVP { background: transparent; }")
 
         inner = QWidget()
         inner.setObjectName("configInner")
-        inner.setStyleSheet(
-            "QWidget#configInner { background: transparent; }")
+        inner.setStyleSheet("QWidget#configInner { background: transparent; }")
         scroll.setWidget(inner)
         # 内容硬宽度上限 = viewport 宽：根治多语言下按钮/标签文字变长撑开内容
         # 溢出 panel 右边界的问题。inner 膨胀只压缩/裁剪在 panel 内，不外溢右侧。
@@ -756,8 +786,7 @@ class RTTMonitorPage(QWidget):
         self._lbl_jlink_device.setFixedHeight(_CTRL_H)
         self._row_jlink.addWidget(self._lbl_jlink_device)
 
-        # 在线状态小红点：放在 J-Link 标签右侧。目标 J-Link 当前在接入列表里 → 隐藏；
-        # 不在线（历史占位）→ 显示。用 DotInfoBadge.setLevel(ERROR) 保持 Fluent 风格。
+        # 在线状态小红点：放在 J-Link 标签右侧。
         self._jlink_status_dot = DotInfoBadge(inner)
         self._jlink_status_dot.setLevel(InfoLevel.ERROR)
         self._jlink_status_dot.setFixedSize(8, 8)
@@ -765,15 +794,12 @@ class RTTMonitorPage(QWidget):
         self._row_jlink.addWidget(self._jlink_status_dot, alignment=Qt.AlignVCenter)
         self._row_jlink.addStretch(1)
 
-        # 显示文本即 serial 号（这台 J-Link 的唯一识别），不额外存 userData。
-        # 当前值可能是历史选择（不在 combo items 里）的离线占位，也可能是当前
-        # 在线设备的 serial。下拉列表只包含当前电脑上的可用设备。
-        # 用 EditableComboBox 而非 ComboBox：qfluentwidgets ComboBox 不允许显示
-        # 非 items 的文本；EditableComboBox.setText() 可设任意占位，再 setReadOnly
-        # 禁止用户键盘输入即可。
         self.cb_jlink = EditableComboBox(inner)
         self.cb_jlink.setFixedHeight(_CTRL_H)
-        self.cb_jlink.setFixedWidth(200)
+        self.cb_jlink.setFixedWidth(260)
+        self.cb_jlink.setMinimumWidth(260)
+        self.cb_jlink.setMaximumWidth(260)
+        self.cb_jlink.setPlaceholderText(self.tr("未检测到 J-Link"))
         self._row_jlink.addWidget(self.cb_jlink)
         v.addLayout(self._row_jlink)
 
@@ -790,8 +816,7 @@ class RTTMonitorPage(QWidget):
         row_remote_host.addWidget(self._lbl_remote_host)
         row_remote_host.addStretch(1)
         self.le_remote_host = LineEdit(inner)
-        self.le_remote_host.setPlaceholderText(
-            self.tr("IP 或域名，如 192.168.79.1"))
+        self.le_remote_host.setPlaceholderText(self.tr("IP 或域名，如 192.168.79.1"))
         self.le_remote_host.setFixedHeight(_CTRL_H)
         self.le_remote_host.setFixedWidth(200)
         row_remote_host.addWidget(self.le_remote_host)
@@ -814,10 +839,8 @@ class RTTMonitorPage(QWidget):
         self.remote_row.setVisible(False)
 
         # 从 cfg 恢复远程输入框初值（远程模式在首次枚举后切过去）
-        self.le_remote_host.setText(
-            str(self._cfg.get("last_remote_host") or ""))
-        self.le_remote_port.setText(
-            str(self._cfg.get("last_remote_port") or "19020"))
+        self.le_remote_host.setText(str(self._cfg.get("last_remote_host") or ""))
+        self.le_remote_port.setText(str(self._cfg.get("last_remote_port") or "19020"))
 
         # ---- 目标设备行 ----
         row_target = QHBoxLayout()
@@ -834,11 +857,18 @@ class RTTMonitorPage(QWidget):
         self.cb_target.addItems(chip_list)
         last_mcu = self._cfg.get("target_mcu")
         if last_mcu:
+            # 用户上次输入的自定义 target 可能不在 chip_list 里；EditableComboBox
+            # 的 setCurrentText 对非 items 文本是 no-op，必须先 addItem。
+            if self.cb_target.findText(last_mcu) < 0:
+                self.cb_target.addItem(last_mcu)
             self.cb_target.setCurrentText(last_mcu)
+            self.cb_target.setText(last_mcu)
         completer = QCompleter(chip_list, self.cb_target)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setFilterMode(Qt.MatchContains)
         self.cb_target.setCompleter(completer)
+        # 用户输入/选择目标设备时即时持久化
+        self.cb_target.currentTextChanged.connect(self._on_target_changed)
         row_target.addWidget(self.cb_target)
         v.addLayout(row_target)
 
@@ -879,8 +909,7 @@ class RTTMonitorPage(QWidget):
         row_ch.addWidget(self._lbl_rtt_channel)
         row_ch.addStretch(1)
         self.sp_channel = SpinBox(inner)
-        # -1 = 全部通道（显示为「全部通道」文本）；上限 15 是占位，连接成功后
-        # 按 MCU 实际上报通道数收紧（_update_channel_range_from_worker）
+        # -1 = 全部通道（显示为「全部通道」文本）
         self.sp_channel.setRange(CHANNEL_ALL, 15)
         self.sp_channel.setSpecialValueText(self.tr("全部通道"))
         self.sp_channel.setValue(self._cfg.get("rtt_channel"))
@@ -901,8 +930,7 @@ class RTTMonitorPage(QWidget):
         _tip(self.btn_reset, self.tr("F4 重置目标"))
         self.btn_reset.setEnabled(False)
         self.btn_reset.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.btn_reset_halt = PushButton(
-            FluentIcon.PAUSE_BOLD, self.tr("重置并暂停"), inner)
+        self.btn_reset_halt = PushButton(FluentIcon.PAUSE_BOLD, self.tr("重置并暂停"), inner)
         _tip(self.btn_reset_halt, self.tr("复位 MCU 并停在复位状态（halt）"))
         self.btn_reset_halt.setEnabled(False)
         self.btn_reset_halt.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -920,8 +948,7 @@ class RTTMonitorPage(QWidget):
         self.gb_info.setTitle(self.tr("设备信息"))
         # 标题可换行：法语「Infos appareil」等长译名不至于撑大 280px 面板
         self.gb_info.headerLabel.setWordWrap(True)
-        self.btn_info_toggle = TransparentToolButton(
-            FluentIcon.CHEVRON_DOWN_MED, self.gb_info)
+        self.btn_info_toggle = TransparentToolButton(FluentIcon.CHEVRON_DOWN_MED, self.gb_info)
         self.gb_info.headerLayout.addStretch(1)
         self.gb_info.headerLayout.addWidget(self.btn_info_toggle)
 
@@ -1005,7 +1032,8 @@ class RTTMonitorPage(QWidget):
         _lbl_ms = QLabel("ms", self.le_frame_timeout)
         _lbl_ms.setStyleSheet(
             "color: rgba(128,128,128,0.6); font-size: 11px; "
-            "background: transparent; border: none;")
+            "background: transparent; border: none;"
+        )
         self.le_frame_timeout.hBoxLayout.addWidget(_lbl_ms, 0, Qt.AlignVCenter)
         self.le_frame_timeout.setTextMargins(0, 0, 22, 0)
         self.btn_frame_help = ToolButton(FluentIcon.QUESTION, inner)
@@ -1013,14 +1041,16 @@ class RTTMonitorPage(QWidget):
         self.btn_frame_help.clicked.connect(self._on_frame_help_clicked)
         self._frame_help_title = self.tr("自动断帧")
         self._frame_help_content = (
-            self.tr("接收超时设置（1~200 毫秒），默认 20ms。") + "\n\n"
+            self.tr("接收超时设置（1~200 毫秒），默认 20ms。")
+            + "\n\n"
             + self.tr("在接收连续数据流时，如果相邻两批数据的接收时间间隔")
             + "\n"
             + self.tr("超过设定值，则判定为一帧数据结束，自动插入换行。")
             + "\n\n"
             + self.tr("自动断帧：启用后，每个数据帧显示后自动添加换行符，")
             + "\n"
-            + self.tr("便于区分不同帧。"))
+            + self.tr("便于区分不同帧。")
+        )
         _frame_group = QWidget(inner)
         _frame_group.setStyleSheet("background: transparent;")
         _fg_lay = QHBoxLayout(_frame_group)
@@ -1113,7 +1143,7 @@ class RTTMonitorPage(QWidget):
         row_timed.addStretch(1)
         row_timed.addWidget(_timed_group)
         v.addLayout(row_timed)
-        
+
         # 十六进制发送（左侧面板入口，与右侧工具栏 chk_hex 双向同步）
         self.chk_hex_left = CheckBox(self.tr("十六进制发送"))
         self.chk_hex_left.setFixedHeight(_CTRL_H)
@@ -1179,8 +1209,7 @@ class RTTMonitorPage(QWidget):
         """
         panel = QWidget(self)
         panel.setObjectName("rightPanel")
-        panel.setStyleSheet(
-            "QWidget#rightPanel { background: transparent; }")
+        panel.setStyleSheet("QWidget#rightPanel { background: transparent; }")
         v = QVBoxLayout(panel)
         v.setContentsMargins(4, 4, 4, 4)
         v.setSpacing(6)
@@ -1188,16 +1217,14 @@ class RTTMonitorPage(QWidget):
         # ---- 显示区 ----
         self.display = PlainTextEdit(panel)
         self.display.setReadOnly(True)
-        self.display.setMaximumBlockCount(
-            self._cfg.get("max_display_lines"))
+        self.display.setMaximumBlockCount(self._cfg.get("max_display_lines"))
         self.display.setLineWrapMode(PlainTextEdit.WidgetWidth)
         self.display.setMinimumHeight(120)
 
         # ---- 搜索栏（浮动在 right_panel 右上角，不随文本滚动）----
         self.search_bar = SearchBar(panel)
         self.search_bar.setVisible(False)
-        self._cfg.theme_color_changed.connect(
-            lambda _c: self.search_bar._apply_style())
+        self._cfg.theme_color_changed.connect(lambda _c: self.search_bar._apply_style())
 
         # ════════════════════════════════════════════════════════════
         # 收窄模式工具栏行（位于显示区和发送区之间，仅在左侧面板隐藏时显示）
@@ -1241,8 +1268,7 @@ class RTTMonitorPage(QWidget):
         self.btn_toolbar_pause.setFixedSize(36, 30)
         _tip(self.btn_toolbar_pause, self.tr("暂停/恢复接收"))
         self.btn_toolbar_pause.setCheckable(True)
-        self.btn_toolbar_pause.toggled.connect(
-            self._worker.set_pause_receive_requested.emit)
+        self.btn_toolbar_pause.toggled.connect(self._worker.set_pause_receive_requested.emit)
         self.btn_toolbar_pause.toggled.connect(self.chk_pause.setChecked)
         self.chk_pause.toggled.connect(self.btn_toolbar_pause.setChecked)
 
@@ -1317,7 +1343,9 @@ class RTTMonitorPage(QWidget):
         self.lbl_status_rx = BodyLabel(self.tr("接收: 0 - 0"))
         self.lbl_status_rx.setMinimumWidth(100)
         _tip(self.lbl_status_rx, self.tr("接收总数 - 上一次接收增量（字节）"))
-        self.lbl_status_duration = BodyLabel(self.tr("时长: {duration}").format(duration="00:00:00"))
+        self.lbl_status_duration = BodyLabel(
+            self.tr("时长: {duration}").format(duration="00:00:00")
+        )
         self.lbl_status_duration.setMinimumWidth(110)
         self.btn_reset_stats = HyperlinkButton()
         self.btn_reset_stats.setText(self.tr("重置计数"))
@@ -1343,7 +1371,9 @@ class RTTMonitorPage(QWidget):
         self.lbl_send_ch_hint = BodyLabel("")
         self.lbl_send_ch_hint.setStyleSheet("color: #888888; font-size: 11px;")
         self.lbl_send_ch_hint.setContentsMargins(4, 0, 4, 0)
-        self.lbl_send_ch_hint.setVisible(getattr(self, "_view_channel", CHANNEL_DEFAULT) == CHANNEL_ALL)
+        self.lbl_send_ch_hint.setVisible(
+            getattr(self, "_view_channel", CHANNEL_DEFAULT) == CHANNEL_ALL
+        )
         v.addWidget(self.lbl_send_ch_hint)
         self._update_send_ch_hint()
         v.addLayout(status_row)
@@ -1370,8 +1400,7 @@ class RTTMonitorPage(QWidget):
         /逐语言调翻译，一处声明全局生效（符合「panel 宽度彻底固定」的设计哲学）。
         实测 en 下最右按钮 x 从 437（溢出 158px）钳到 270（不溢出）。
         """
-        if (obj is getattr(self, "_config_vp", None)
-                and event.type() == QEvent.Type.Resize):
+        if obj is getattr(self, "_config_vp", None) and event.type() == QEvent.Type.Resize:
             w = event.size().width()
             if w > 0:
                 self._config_inner.setMaximumWidth(w)
@@ -1453,19 +1482,18 @@ class RTTMonitorPage(QWidget):
         self.chk_timed_send.toggled.connect(self._on_timed_send_toggled)
 
         # 发送文本框：Enter = 发送；Shift+Enter = 换行
-        _send_enter_shortcut = QShortcut(
-            QKeySequence(Qt.Key_Return | Qt.Key_Enter), self.te_send)
+        _send_enter_shortcut = QShortcut(QKeySequence(Qt.Key_Return | Qt.Key_Enter), self.te_send)
         _send_enter_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         _send_enter_shortcut.activated.connect(self._on_send_clicked)
 
         # CRC 脚本：勾选时显示红色提示条
         self.chk_crc_script.toggled.connect(self._on_crc_script_toggled)
         self.cb_crc_algo.currentIndexChanged.connect(
-            lambda idx: self._cfg.set("send_script_index", idx))
+            lambda idx: self._cfg.set("send_script_index", idx)
+        )
 
         # 发送回显色块按钮：选色后持久化到 cfg（hex str）
-        self.btn_send_color.colorChanged.connect(
-            lambda c: self._cfg.set("send_text_color", c))
+        self.btn_send_color.colorChanged.connect(lambda c: self._cfg.set("send_text_color", c))
 
         # 字号 ± 按钮：直接走 cfg.set → font_changed → _apply_font
         self.btn_font_minus.clicked.connect(lambda: self._adjust_font_size(-1))
@@ -1480,7 +1508,9 @@ class RTTMonitorPage(QWidget):
         # 「emit 调用从 native threading.Thread 发起」场景下误判 sender thread 走 DirectConnection。
         self._worker.rtt_data_received.connect(self._on_rtt_data, Qt.QueuedConnection)
         self._worker.connection_state_changed.connect(self._on_state_changed, Qt.QueuedConnection)
-        self._worker.unexpected_disconnect.connect(self._on_unexpected_disconnect, Qt.QueuedConnection)
+        self._worker.unexpected_disconnect.connect(
+            self._on_unexpected_disconnect, Qt.QueuedConnection
+        )
         self._worker.reconnect_status.connect(self._on_reconnect_status, Qt.QueuedConnection)
 
         self._cfg.font_changed.connect(self._apply_font)
@@ -1514,25 +1544,21 @@ class RTTMonitorPage(QWidget):
 
     def _on_jlink_selection_changed(self) -> None:
         """用户从下拉列表选了设备或远程项 → 持久化模式并同步红点/输入行。"""
-        current = self.cb_jlink.currentText().strip()
-        if current == self._remote_item_text:
+        current_text = self.cb_jlink.currentText().strip()
+        if current_text == self._remote_item_text:
             self._cfg.set("jlink_mode", "remote")
             self.remote_row.setVisible(True)
             self._sync_jlink_status_dot()
             return
-        # 本地 USB 模式
         self._cfg.set("jlink_mode", "usb")
         self.remote_row.setVisible(False)
-        if current:
-            self._cfg.set("last_jlink_serial", current)
+        serial = self._serial_from_label(current_text)
+        if serial:
+            self._cfg.set("last_jlink_serial", serial)
         self._sync_jlink_status_dot()
 
     def _sync_jlink_status_dot(self) -> None:
-        """按当前 currentText 是否可用，显示/隐藏红点。
-
-        本地模式：currentText 在 items 里 → 隐藏（在线）；不在 → 显示（离线占位）。
-        远程模式：TCP 可达 → 隐藏；解析失败/不可达/未探测 → 显示。
-        """
+        """按当前 currentText 是否可用，显示/隐藏红点。"""
         current = self.cb_jlink.currentText().strip()
         if not current:
             self._jlink_status_dot.hide()
@@ -1541,9 +1567,9 @@ class RTTMonitorPage(QWidget):
             self._jlink_status_dot.setVisible(self._remote_reachable is not True)
             self.cb_jlink.setReadOnly(False)
             return
-        online = self.cb_jlink.findText(current) >= 0
+        serial = self._serial_from_label(current)
+        online = self._find_jlink_index_by_serial(serial) >= 0
         self._jlink_status_dot.setVisible(not online)
-        # 在线时恢复可编辑为 False（用户只能从下拉选），离线占位只读
         self.cb_jlink.setReadOnly(not online)
 
     def _on_remote_input_changed(self, _text: str) -> None:
@@ -1573,8 +1599,7 @@ class RTTMonitorPage(QWidget):
             self._sync_jlink_status_dot()
             return
         self._remote_probe_in_flight = True
-        runnable = _TcpReachableRunnable(
-            resolved, int(port_text), self._remote_probe_helper)
+        runnable = _TcpReachableRunnable(resolved, int(port_text), self._remote_probe_helper)
         QThreadPool.globalInstance().start(runnable)
 
     def _on_remote_probe_done(self, ok: bool) -> None:
@@ -1588,8 +1613,9 @@ class RTTMonitorPage(QWidget):
         if previous is True and ok is False and self._is_connected:
             # 远程 J-Link 从可达变不可达 → 断开并进入等待重连态
             self._request_disconnect(pending_reconnect=True)
-        elif (previous is False and ok is True
-              and self._pending_reconnect and not self._is_connected):
+        elif (
+            previous is False and ok is True and self._pending_reconnect and not self._is_connected
+        ):
             # 远程 J-Link 恢复且我们在等待重连 → 自动发起连接
             host = self.le_remote_host.text().strip()
             port = self.le_remote_port.text().strip()
@@ -1606,9 +1632,7 @@ class RTTMonitorPage(QWidget):
         self._info_container.setVisible(expanded)
         self.gb_info.separator.setVisible(expanded)
         self.gb_info.view.setVisible(expanded)
-        self.btn_info_toggle.setIcon(
-            FluentIcon.UP if expanded else FluentIcon.CHEVRON_DOWN_MED
-        )
+        self.btn_info_toggle.setIcon(FluentIcon.UP if expanded else FluentIcon.CHEVRON_DOWN_MED)
 
     # ---- 快捷键路由（F2/F3/F4，由 MainWindow 的 QShortcut 调用）----
     # 用 _is_connected 真状态当 gate；按钮文字是呈现，不能当 state enum
@@ -1628,102 +1652,131 @@ class RTTMonitorPage(QWidget):
     # J-Link 设备下拉（多 J-Link 接入时选哪台；串口助手串口选择同款）
     # ------------------------------------------------------------------
     def _on_devices_enumerated(self, data: str) -> None:
-        """worker 枚举结果回来：重建下拉项 + 同步红点 + 校验当前选中是否还在线。
-
-        data 是分号分隔的 "serial|product" 列表（worker 端已清洗分隔符）。
-        可用性裁决全部在 UI 做（CLAUDE.md 多 J-Link 设计原则）：
-        - 当前选中的 serial 不在这批里 → 视为设备被拔掉，若正处于连接态立即
-          触发断开（不等 read_thread 检出 rtt_read 异常，可能滞后几秒）。
-        - 下拉列表只显示当前电脑可用设备；currentText 可以是历史选择（离线占位）。
-        - 最后一项固定为「远程连接」，不属于 USB 设备，不参与拔掉检测。
-        """
+        """worker 枚举结果：重建下拉项 + 同步红点 + 校验当前选中是否还在线。"""
         serials: list[str] = []
+        products: dict[str, str] = {}
         if data:
             for chunk in data.split(";"):
                 if not chunk:
                     continue
-                serial, _, _product = chunk.partition("|")
+                serial, _, product = chunk.partition("|")
                 serial = serial.strip()
+                product = product.strip()
                 if serial and serial.isdigit():
                     serials.append(serial)
+                    products[serial] = product
+                    self._cache_burner(serial, product)
 
         remote_text = self.tr(REMOTE_ITEM_TEXT)
         self._remote_item_text = remote_text
 
-        # 远程探测不受枚举去抖影响：内容没变也要按 400ms 节拍探（内部已节流）。
-        # 它是 200ms 枚举节拍真正的消费者；combo 重建才需要去抖。
         if self.cb_jlink.currentText().strip() == remote_text:
             self._probe_remote_reachability()
 
         new_state = (tuple(serials), remote_text)
-        if getattr(self, "_last_enum_state", None) == new_state and hasattr(self, "_jlink_initialized"):
-            return   # 内容没变：不动 combo（避免 200ms 无谓重建/闪烁）
+        if getattr(self, "_last_enum_state", None) == new_state and hasattr(
+            self, "_jlink_initialized"
+        ):
+            return
         self._last_enum_state = new_state
 
-        # 当前值：可能是用户已选设备，也可能是历史离线占位。
-        # qfluentwidgets ComboBox 不允许显示非 items 的文本，所以用 EditableComboBox：
-        # 在线选择走 setCurrentIndex；离线占位走 setText + setReadOnly(True)。
-        prev = self.cb_jlink.currentText().strip()
+        prev_text = self.cb_jlink.currentText().strip()
+        prev_serial = self._serial_from_label(prev_text)
         first_init = not hasattr(self, "_jlink_initialized")
-        # 启动后首次枚举（prev 为空）且配置里有上次选择 → 以它作为期望占位：
-        # 一会儿在线就选中它，不在线就显示红点占位。
-        if not prev and first_init:
+        if not prev_serial and first_init:
             if self._cfg.get("jlink_mode") == "remote":
-                prev = remote_text
+                prev_serial = remote_text
                 self.remote_row.setVisible(True)
-                self.le_remote_host.setText(
-                    str(self._cfg.get("last_remote_host") or ""))
-                self.le_remote_port.setText(
-                    str(self._cfg.get("last_remote_port") or "19020"))
+                self.le_remote_host.setText(str(self._cfg.get("last_remote_host") or ""))
+                self.le_remote_port.setText(str(self._cfg.get("last_remote_port") or "19020"))
             else:
-                prev = str(self._cfg.get("last_jlink_serial") or "").strip()
+                prev_serial = str(self._cfg.get("last_jlink_serial") or "").strip()
             self._jlink_initialized = True
 
         self.cb_jlink.blockSignals(True)
         self.cb_jlink.setReadOnly(False)
         try:
             self.cb_jlink.clear()
+            self._jlink_products = products
             for s in serials:
-                self.cb_jlink.addItem(s)
-            # 远程项永远放最后
+                label = self._jlink_label(s, products.get(s, ""))
+                self.cb_jlink.addItem(label, userData=s)
             self.cb_jlink.addItem(remote_text)
-            if prev and prev in serials:
-                # 保持之前的在线选择（可能是历史选择刚好在线）
-                self.cb_jlink.setCurrentText(prev)
-            elif prev == remote_text:
-                # 远程项在 items 里，用 setCurrentIndex 选中最后一项
+
+            idx = self._find_jlink_index_by_serial(prev_serial)
+            if prev_serial and idx >= 0:
+                self.cb_jlink.setCurrentIndex(idx)
+                self.cb_jlink.setText(self.cb_jlink.itemText(idx))
+            elif prev_serial == remote_text:
                 self.cb_jlink.setCurrentIndex(self.cb_jlink.count() - 1)
-            elif prev:
-                # 之前的值不在线了（或无设备但有历史）：显示为离线占位，
-                # items 是在线设备；红点由下面 _sync_jlink_status_dot 点亮。
-                self.cb_jlink.setText(prev)
+            elif prev_serial:
+                cached_product = self._get_cached_jlink_product(prev_serial)
+                self.cb_jlink.setText(self._jlink_label(prev_serial, cached_product))
                 self.cb_jlink.setReadOnly(True)
             elif serials:
-                # 之前没有值，默认选第一台
                 self.cb_jlink.setCurrentIndex(0)
             else:
-                # 无设备也无历史：清空 currentText
                 self.cb_jlink.setText("")
         finally:
             self.cb_jlink.blockSignals(False)
 
-        # 同步红点：currentText 不在 items 里 → 显示红点（离线占位）
         self._sync_jlink_status_dot()
 
-        # 拔掉检测：上次选中的 serial 没了 + 当前已连接 → 立刻断开（pending_reconnect）
-        # 远程项不是 USB 设备，跳过。
-        if (prev and prev not in serials and prev != remote_text
-                and self._is_connected):
-            _infobar.warn(self, self.tr("提示"),
-                          self.tr("当前连接的 J-Link（S/N: {sn}）已断开").format(sn=prev))
+        if (
+            prev_serial
+            and prev_serial not in serials
+            and prev_serial != remote_text
+            and self._is_connected
+        ):
+            _infobar.warn(
+                self,
+                self.tr("提示"),
+                self.tr("当前连接的 J-Link（S/N: {sn}）已断开").format(sn=prev_serial),
+            )
             self._request_disconnect(pending_reconnect=True)
             return
 
-        # 恢复检测：目标 serial 回来了 + 我们在等待自动重连 + 当前未连接
-        if (prev and prev in serials and prev != remote_text
-                and not self._is_connected and self._pending_reconnect):
+        if (
+            prev_serial
+            and prev_serial in serials
+            and prev_serial != remote_text
+            and not self._is_connected
+            and self._pending_reconnect
+        ):
             self._pending_reconnect = False
-            self._emit_connect_request(prev)
+            self._emit_connect_request(prev_serial)
+
+    def _jlink_label(self, serial: str, product: str) -> str:
+        """生成 J-Link 下拉 label；无 product 时只显示 serial。"""
+        return f"{product}: {serial}" if product else serial
+
+    def _find_jlink_index_by_serial(self, serial: str) -> int:
+        for i in range(self.cb_jlink.count()):
+            data = self.cb_jlink.itemData(i)
+            if isinstance(data, str) and data == serial:
+                return i
+        return -1
+
+    def _serial_from_label(self, text: str) -> str:
+        """从 label 文本（'product: serial' 或 'serial'）提取 serial。"""
+        if not text:
+            return ""
+        if ": " in text:
+            return text.rsplit(": ", 1)[-1].strip()
+        return text.strip()
+
+    def _cache_burner(self, serial: str, product: str) -> None:
+        """把 J-Link serial -> product 写入 cfg 缓存，供离线/重启时显示名称。"""
+        if not serial:
+            return
+        cache: dict[str, dict] = dict(self._cfg.get("flash_burner_cache") or {})
+        cache[serial] = {"kind": "jlink", "product": product}
+        self._cfg.set("flash_burner_cache", cache)
+
+    def _get_cached_jlink_product(self, serial: str) -> str:
+        cache = self._cfg.get("flash_burner_cache") or {}
+        info = cache.get(serial) or {}
+        return str(info.get("product") or "")
 
     def _request_disconnect(self, *, pending_reconnect: bool = False) -> None:
         """请求 worker 断开。pending_reconnect=True 表示这是自动检测到的断开
@@ -1737,7 +1790,9 @@ class RTTMonitorPage(QWidget):
                 self._pending_reconnect = True
                 self._append_styled_line(
                     self.tr("设备连接丢失，等待恢复后自动重连…") + "\n",
-                    _PENDING_RECONNECT_COLOR, bold=True)
+                    _PENDING_RECONNECT_COLOR,
+                    bold=True,
+                )
             else:
                 self._pending_reconnect = True  # 保持等待态
         else:
@@ -1760,19 +1815,24 @@ class RTTMonitorPage(QWidget):
                 resolved = resolve_remote_host(host)
                 if not host or resolved is None:
                     _infobar.warn(
-                        self, self.tr("提示"),
-                        self.tr('无法解析主机名 "{host}"，请检查输入').format(host=host))
+                        self,
+                        self.tr("提示"),
+                        self.tr('无法解析主机名 "{host}"，请检查输入').format(host=host),
+                    )
                     return
                 if not is_valid_port(port_text):
-                    _infobar.warn(self, self.tr("提示"),
-                                  self.tr("端口无效（1-65535）"))
+                    _infobar.warn(self, self.tr("提示"), self.tr("端口无效（1-65535）"))
                     return
                 port = int(port_text)
                 if not tcp_reachable(resolved, port, timeout=2.0):
                     addr = f"{host}:{port}"
                     _infobar.warn(
-                        self, self.tr("提示"),
-                        self.tr("无法连接远程 J-Link（{addr}），请检查 Remote Server 是否运行、IP/端口是否正确").format(addr=addr))
+                        self,
+                        self.tr("提示"),
+                        self.tr(
+                            "无法连接远程 J-Link（{addr}），请检查 Remote Server 是否运行、IP/端口是否正确"
+                        ).format(addr=addr),
+                    )
                     return
                 iface = self.cb_iface.currentText()
                 speed = int(self.cb_speed.currentText())
@@ -1789,15 +1849,16 @@ class RTTMonitorPage(QWidget):
                 self.btn_connect.setEnabled(False)
                 self.btn_connect.setText(self.tr("连接中…"))
                 self._worker.connect_remote_requested.emit(
-                    target, iface, speed, channel, f"{resolved}:{port}")
+                    target, iface, speed, channel, f"{resolved}:{port}"
+                )
                 return
 
             # 本地 USB 模式分支
-            jlink_serial = current
-            # 合并提示：combo 空 / 没设备 / 选的是离线占位，统一提示「未检测到 J-Link 设备」。
-            # 真正可以连接的唯一条件：currentText 是一个当前在线设备（出现在 items 里）。
-            if not jlink_serial or self.cb_jlink.findText(jlink_serial) < 0:
-                _infobar.warn(self, self.tr("提示"), self.tr("未检测到 J-Link 设备，请检查 USB 连接"))
+            jlink_serial = self._serial_from_label(current)
+            if not jlink_serial or self._find_jlink_index_by_serial(jlink_serial) < 0:
+                _infobar.warn(
+                    self, self.tr("提示"), self.tr("未检测到 J-Link 设备，请检查 USB 连接")
+                )
                 return
             iface = self.cb_iface.currentText()
             speed = int(self.cb_speed.currentText())
@@ -1851,8 +1912,10 @@ class RTTMonitorPage(QWidget):
         resolved = resolve_remote_host(host)
         if resolved is None:
             _infobar.warn(
-                self, self.tr("提示"),
-                self.tr('无法解析主机名 "{host}"，请检查输入').format(host=host))
+                self,
+                self.tr("提示"),
+                self.tr('无法解析主机名 "{host}"，请检查输入').format(host=host),
+            )
             return
         if not is_valid_port(port):
             _infobar.warn(self, self.tr("提示"), self.tr("端口无效（1-65535）"))
@@ -1871,7 +1934,19 @@ class RTTMonitorPage(QWidget):
         self.btn_connect.setEnabled(False)
         self.btn_connect.setText(self.tr("连接中…"))
         self._worker.connect_remote_requested.emit(
-            target, iface, speed, channel, f"{resolved}:{port}")
+            target, iface, speed, channel, f"{resolved}:{port}"
+        )
+
+    def _on_target_changed(self, text: str) -> None:
+        """目标设备输入/选择变化时即时持久化，并确保不在 chip_list 里的自定义值也能被记住。"""
+        target = text.strip()
+        if target:
+            self._cfg.set("target_mcu", target)
+            # 如果用户输入的是新自定义 target，把它加到 items 里，避免后续 setCurrentText no-op
+            if self.cb_target.findText(target) < 0:
+                self.cb_target.blockSignals(True)
+                self.cb_target.addItem(target)
+                self.cb_target.blockSignals(False)
 
     def _apply_reset_mode_to_button(self, mode: str) -> None:
         """按 cfg.reset_mode 刷新 btn_reset 文字 + tooltip。"""
@@ -1918,8 +1993,7 @@ class RTTMonitorPage(QWidget):
         """发送通道提示：「全部通道」视图时显示当前实际发送通道。"""
         if not hasattr(self, "lbl_send_ch_hint") or not hasattr(self, "_send_channel"):
             return
-        self.lbl_send_ch_hint.setText(
-            self.tr("发送通道: {ch}").format(ch=self._send_channel))
+        self.lbl_send_ch_hint.setText(self.tr("发送通道: {ch}").format(ch=self._send_channel))
         self.lbl_send_ch_hint.setVisible(self._view_channel == CHANNEL_ALL)
 
     def _update_channel_tooltip(self) -> None:
@@ -1932,15 +2006,15 @@ class RTTMonitorPage(QWidget):
             return
         if getattr(self, "_is_connected", False):
             n = max(1, int(self._worker.get_num_up_channels()))
-            _tip(self.sp_channel,
-                 self.tr("MCU 实际上报 {n} 个通道；全部 = 合并查看").format(n=n))
+            _tip(self.sp_channel, self.tr("MCU 实际上报 {n} 个通道；全部 = 合并查看").format(n=n))
         else:
-            _tip(self.sp_channel,
-                 self.tr("全部 = 合并查看所有通道；发送走最近选中的具体通道"))
+            _tip(self.sp_channel, self.tr("全部 = 合并查看所有通道；发送走最近选中的具体通道"))
 
     def _on_send_clicked(self) -> None:
         if not self._is_connected:
-            _infobar.warn(self, self.tr("未连接目标"), self.tr("请先连接 J-Link 和目标设备后再发送"))
+            _infobar.warn(
+                self, self.tr("未连接目标"), self.tr("请先连接 J-Link 和目标设备后再发送")
+            )
             return
         text = self.te_send.toPlainText().strip()
         if not text:
@@ -1953,7 +2027,7 @@ class RTTMonitorPage(QWidget):
             if script_idx >= len(CRC_ALGORITHMS):
                 # 「自动换行」：非 HEX 模式追加换行符（字符取自设置页「换行符」）
                 if not is_hex:
-                    text += self._cfg.get('send_line_ending')
+                    text += self._cfg.get("send_line_ending")
             else:
                 try:
                     _, algo_key = CRC_ALGORITHMS[script_idx]
@@ -1972,7 +2046,11 @@ class RTTMonitorPage(QWidget):
         sent_bytes = len(encode_send_payload(text, is_hex))
         self._send_total_bytes += sent_bytes
         self._send_last_bytes = sent_bytes
-        self.lbl_status_tx.setText(self.tr("发送: {total} - {last}").format(total=self._send_total_bytes, last=self._send_last_bytes))
+        self.lbl_status_tx.setText(
+            self.tr("发送: {total} - {last}").format(
+                total=self._send_total_bytes, last=self._send_last_bytes
+            )
+        )
         # 加入历史（去重 + 末尾追加）—— 存用户原始输入，不存换行符和 CRC 追加后的
         orig_text = self.te_send.toPlainText().strip()
         hist = list(self._cfg.get("send_history") or [])
@@ -1985,8 +2063,9 @@ class RTTMonitorPage(QWidget):
         if self.chk_show_send_text.isChecked():
             self._echo_sent_text(orig_text)
 
-    def _append_styled_line(self, text: str, color: str, *,
-                            bold: bool = False, force_scroll: bool = False) -> None:
+    def _append_styled_line(
+        self, text: str, color: str, *, bold: bool = False, force_scroll: bool = False
+    ) -> None:
         """在显示区末尾追加一行染色文本（自动滚动判断 + 程序性滚动围栏）。
 
         发送回显 / 会话标记 / 意外断开红字提示 三处同形态：都是把一段带颜色的
@@ -2093,6 +2172,7 @@ class RTTMonitorPage(QWidget):
             TeachingTipTailPosition,
             TeachingTipView,
         )
+
         view = TeachingTipView(
             title=self.tr("自动断帧"),
             content=self._frame_help_content,
@@ -2128,7 +2208,9 @@ class RTTMonitorPage(QWidget):
         self.btn_timed_unit.setEnabled(not checked)
         if checked:
             if not self._is_connected:
-                _infobar.warn(self, self.tr("提示"), self.tr("未连接目标，定时发送将在连接后自动启动"))
+                _infobar.warn(
+                    self, self.tr("提示"), self.tr("未连接目标，定时发送将在连接后自动启动")
+                )
                 self._timed_send_pending = True
                 return
             self._start_timed_send_timer()
@@ -2166,6 +2248,7 @@ class RTTMonitorPage(QWidget):
 
     def _on_state_changed(self, connected: bool) -> None:
         from datetime import datetime
+
         if connected:
             # 成功连接：取消等待重连态
             self._pending_reconnect = False
@@ -2176,7 +2259,9 @@ class RTTMonitorPage(QWidget):
             if self._cfg.get("auto_mark_on_connect"):
                 target = info.get("target_device", "—")
                 ts = datetime.now().strftime("%H:%M:%S")
-                self._insert_mark_text(self.tr("已连接 {target} @ {ts}").format(target=target, ts=ts))
+                self._insert_mark_text(
+                    self.tr("已连接 {target} @ {ts}").format(target=target, ts=ts)
+                )
         else:
             prev_info = self._worker.get_device_info()
             self._set_disconnected_ui()
@@ -2185,7 +2270,8 @@ class RTTMonitorPage(QWidget):
                 remote_addr = prev_info.get("remote_addr", "")
                 if remote_addr:
                     self._insert_mark_text(
-                        self.tr("已断开远程 J-Link {addr} @ {ts}").format(addr=remote_addr, ts=ts))
+                        self.tr("已断开远程 J-Link {addr} @ {ts}").format(addr=remote_addr, ts=ts)
+                    )
                 else:
                     self._insert_mark_text(self.tr("已断开 @ {ts}").format(ts=ts))
 
@@ -2203,7 +2289,7 @@ class RTTMonitorPage(QWidget):
         self.sp_channel.blockSignals(True)
         try:
             self.sp_channel.setRange(CHANNEL_ALL, max_ch)
-            clamped = self.sp_channel.value()   # setRange 可能已静默 clamp 显示值
+            clamped = self.sp_channel.value()  # setRange 可能已静默 clamp 显示值
         finally:
             self.sp_channel.blockSignals(False)
         # setRange 静默 clamp 不发 valueChanged（Qt 实测：clamp 后 setValue(同值) 也是
@@ -2222,6 +2308,7 @@ class RTTMonitorPage(QWidget):
         （pending_reconnect=True）进入等待恢复态。
         """
         from datetime import datetime
+
         now = datetime.now()
         ts = f"{now.year}/{now.month}/{now.day} {now.hour:02d}:{now.minute:02d}:{now.second:02d}"
         if self._last_remote_addr:
@@ -2248,6 +2335,7 @@ class RTTMonitorPage(QWidget):
               success(detail=次数) / failed(detail=次数) / cancelled(detail=空)。
         """
         from datetime import datetime
+
         now = datetime.now()
         ts = f"{now.year}/{now.month}/{now.day} {now.hour:02d}:{now.minute:02d}:{now.second:02d}"
         if kind == "disconnect_reconnecting":
@@ -2262,7 +2350,9 @@ class RTTMonitorPage(QWidget):
             line = self.tr("自动重连已取消")
         else:
             return
-        self._append_styled_line(f"{ts} -> {line}\n", _RECONNECT_COLORS.get(kind, "#888888"), bold=True)
+        self._append_styled_line(
+            f"{ts} -> {line}\n", _RECONNECT_COLORS.get(kind, "#888888"), bold=True
+        )
 
     def set_flash_busy(self, busy: bool) -> None:
         """FlashPage 在烧录期间锁定/解锁连接按钮。"""
@@ -2309,13 +2399,16 @@ class RTTMonitorPage(QWidget):
         if remote_addr:
             self._append_styled_line(
                 f"──── {self.tr('已连接远程 J-Link {addr} (S/N: {sn})').format(addr=remote_addr, sn=info.get('jlink_serial', '-'))} ────\n",
-                _REMOTE_MARK_COLOR, bold=True, force_scroll=True)
+                _REMOTE_MARK_COLOR,
+                bold=True,
+                force_scroll=True,
+            )
 
         # 烧录期间保持锁定（烧录页已断开的场景）
         if self._flash_busy:
             self.btn_connect.setEnabled(False)
 
-    def     _set_disconnected_ui(self) -> None:
+    def _set_disconnected_ui(self) -> None:
         self._is_connected = False
         self.btn_connect.setEnabled(True)
         self.btn_connect.setText(self.tr("连接"))
@@ -2345,7 +2438,6 @@ class RTTMonitorPage(QWidget):
         if self._flash_busy:
             self.btn_connect.setEnabled(False)
 
-
     def _update_stats(self) -> None:
         """1s 一次：从 worker 同步收发计数与连接时长并刷新状态栏。
 
@@ -2359,14 +2451,20 @@ class RTTMonitorPage(QWidget):
         # 接收：总数 - 上一次接收增量（自上次轮询起的新增字节）
         delta_b = max(0, total_b - self._stats_prev_bytes)
         self._stats_prev_bytes = total_b
-        self.lbl_status_rx.setText(self.tr("接收: {total} - {last}").format(total=total_b, last=delta_b))
+        self.lbl_status_rx.setText(
+            self.tr("接收: {total} - {last}").format(total=total_b, last=delta_b)
+        )
         # 会话时长：断开（start_ts=0）显示占位，连接态自连接起累计
         if start_ts == 0:
-            self.lbl_status_duration.setText(self.tr("时长: {duration}").format(duration="00:00:00"))
+            self.lbl_status_duration.setText(
+                self.tr("时长: {duration}").format(duration="00:00:00")
+            )
             return
         secs = int(self._time_mod.time() - start_ts)
         hh, mm, ss = secs // 3600, (secs % 3600) // 60, secs % 60
-        self.lbl_status_duration.setText(self.tr("时长: {duration}").format(duration=f"{hh:02d}:{mm:02d}:{ss:02d}"))
+        self.lbl_status_duration.setText(
+            self.tr("时长: {duration}").format(duration=f"{hh:02d}:{mm:02d}:{ss:02d}")
+        )
 
     def _update_encoding_label(self, encoding: str) -> None:
         if hasattr(self, "lbl_status_encoding"):
@@ -2401,10 +2499,12 @@ class RTTMonitorPage(QWidget):
         # 3) 实时渲染（当前视图通道的数据）
         # 自动断帧：仅「非全部通道」视图启用——多通道合并视图里时间间隙没有帧语义
         now = self._time_mod.time()
-        if (self._view_channel != CHANNEL_ALL
-                and self.chk_auto_frame.isChecked()
-                and self._last_rx_time > 0
-                and (now - self._last_rx_time) * 1000 > self._get_frame_timeout_ms()):
+        if (
+            self._view_channel != CHANNEL_ALL
+            and self.chk_auto_frame.isChecked()
+            and self._last_rx_time > 0
+            and (now - self._last_rx_time) * 1000 > self._get_frame_timeout_ms()
+        ):
             # 插入换行分隔不同帧
             sb_pre = self.display.verticalScrollBar()
             at_b = sb_pre.value() >= sb_pre.maximum() - 4
@@ -2428,8 +2528,7 @@ class RTTMonitorPage(QWidget):
             if self.chk_hex_display.isChecked():
                 # HEX 显示：将文本编码为字节，每字节大写 HEX + 空格
                 try:
-                    raw = text.encode(self._cfg.get("rtt_encoding") or "utf-8",
-                                      errors="replace")
+                    raw = text.encode(self._cfg.get("rtt_encoding") or "utf-8", errors="replace")
                 except LookupError:
                     raw = text.encode("utf-8", errors="replace")
                 hex_str = " ".join(f"{b:02X}" for b in raw)
@@ -2576,6 +2675,7 @@ class RTTMonitorPage(QWidget):
     def _on_log_recording_toggled(self, checked: bool) -> None:
         if checked:
             from core.logger import get_log_dir
+
             log_dir = self._cfg.get("log_dir") or str(get_log_dir())
             self._worker.start_log_recording_requested.emit(log_dir)
         else:
@@ -2584,9 +2684,13 @@ class RTTMonitorPage(QWidget):
     def _on_save_clicked(self) -> None:
         from datetime import datetime
         from pathlib import Path
+
         from PySide6.QtWidgets import QFileDialog
+
         default_name = f"rtt_snapshot_{datetime.now():%Y%m%d_%H%M%S}.log"
-        path, _ = QFileDialog.getSaveFileName(self, self.tr("保存当前显示"), default_name, self.tr("Log files (*.log);;All files (*)"))
+        path, _ = QFileDialog.getSaveFileName(
+            self, self.tr("保存当前显示"), default_name, self.tr("Log files (*.log);;All files (*)")
+        )
         if not path:
             return
         try:
@@ -2633,6 +2737,7 @@ class RTTMonitorPage(QWidget):
     def _build_regex(self, pattern: str, whole_word: bool, regex: bool, case_sensitive: bool):
         """构建编译好的正则表达式。返回 re.Pattern 或 None（模式无效时）。"""
         import re
+
         if regex:
             try:
                 flags = 0 if case_sensitive else re.IGNORECASE
@@ -2647,8 +2752,9 @@ class RTTMonitorPage(QWidget):
             expr = f"\\b{expr}\\b"
         return re.compile(expr, flags)
 
-    def _do_search(self, text: str, backward: bool,
-                   case_sensitive: bool, whole_word: bool, regex: bool) -> None:
+    def _do_search(
+        self, text: str, backward: bool, case_sensitive: bool, whole_word: bool, regex: bool
+    ) -> None:
         pat = self._build_regex(text, whole_word, regex, case_sensitive)
         if pat is None:
             self.search_bar.set_match_label(self.tr("无效正则"))
@@ -2656,7 +2762,7 @@ class RTTMonitorPage(QWidget):
         full = self.display.toPlainText()
         matches = list(pat.finditer(full))
         if not matches:
-            self.search_bar.set_match_label(f"0/0")
+            self.search_bar.set_match_label("0/0")
             self.display.setExtraSelections([])
             return
         # 找当前光标后/前的下一个匹配
@@ -2686,8 +2792,15 @@ class RTTMonitorPage(QWidget):
         self.display.ensureCursorVisible()
         self._update_match_position(text)
 
-    def _do_replace(self, text: str, replacement: str, replace_all: bool,
-                    case_sensitive: bool, whole_word: bool, regex: bool) -> None:
+    def _do_replace(
+        self,
+        text: str,
+        replacement: str,
+        replace_all: bool,
+        case_sensitive: bool,
+        whole_word: bool,
+        regex: bool,
+    ) -> None:
         pat = self._build_regex(text, whole_word, regex, case_sensitive)
         if pat is None:
             self.search_bar.set_match_label(self.tr("无效正则"))
@@ -2736,9 +2849,11 @@ class RTTMonitorPage(QWidget):
             self.display.setExtraSelections([])
             return
         pat = self._build_regex(
-            text, self.search_bar.whole_word(),
+            text,
+            self.search_bar.whole_word(),
             self.search_bar.regex_enabled(),
-            self.search_bar.case_sensitive())
+            self.search_bar.case_sensitive(),
+        )
         if pat is None:
             self.search_bar.set_match_label(self.tr("无效正则"))
             self.display.setExtraSelections([])
@@ -2747,7 +2862,7 @@ class RTTMonitorPage(QWidget):
         matches = list(pat.finditer(full))
         cnt = len(matches)
         if cnt == 0:
-            self.search_bar.set_match_label(f"0/0")
+            self.search_bar.set_match_label("0/0")
             self.display.setExtraSelections([])
             return
         # 当前光标在哪个匹配中
@@ -2772,6 +2887,7 @@ class RTTMonitorPage(QWidget):
     def _highlight_matches(self, matches: list, limit: int = 500) -> None:
         """匹配位置叠浅黄色背景。超过 limit 截断。"""
         from PySide6.QtWidgets import QTextEdit
+
         fmt = QTextCharFormat()
         fmt.setBackground(QColor(255, 235, 100, 140))
         selections: list = []
@@ -2844,8 +2960,7 @@ class RTTMonitorPage(QWidget):
         # 远程连接输入区
         self._lbl_remote_host.setText(self.tr("远程主机:"))
         self._lbl_remote_port.setText(self.tr("端口:"))
-        self.le_remote_host.setPlaceholderText(
-            self.tr("IP 或域名，如 192.168.79.1"))
+        self.le_remote_host.setPlaceholderText(self.tr("IP 或域名，如 192.168.79.1"))
         # 更新下拉中「远程连接」项的文本
         new_remote_text = self.tr(REMOTE_ITEM_TEXT)
         for i in range(self.cb_jlink.count()):
@@ -2863,8 +2978,7 @@ class RTTMonitorPage(QWidget):
             self.btn_connect.setEnabled(False)
             self.btn_connect.setText(self.tr("烧录中…"))
         elif self.btn_connect.isEnabled():
-            self.btn_connect.setText(
-                self.tr("断开") if self._is_connected else self.tr("连接"))
+            self.btn_connect.setText(self.tr("断开") if self._is_connected else self.tr("连接"))
         _tip(self.btn_connect, self.tr("F2 连接 / F3 断开"))
         # btn_reset 文字 + tooltip 由 _apply_reset_mode_to_button 维护，
         # 直接调用一次刷新即可
@@ -2892,14 +3006,16 @@ class RTTMonitorPage(QWidget):
         # 自动断帧帮助内容
         self._frame_help_title = self.tr("自动断帧")
         self._frame_help_content = (
-            self.tr("接收超时设置（1~200 毫秒），默认 20ms。") + "\n\n"
+            self.tr("接收超时设置（1~200 毫秒），默认 20ms。")
+            + "\n\n"
             + self.tr("在接收连续数据流时，如果相邻两批数据的接收时间间隔")
             + "\n"
             + self.tr("超过设定值，则判定为一帧数据结束，自动插入换行。")
             + "\n\n"
             + self.tr("自动断帧：启用后，每个数据帧显示后自动添加换行符，")
             + "\n"
-            + self.tr("便于区分不同帧。"))
+            + self.tr("便于区分不同帧。")
+        )
 
         # 标记 / 清除 / 保存
         self.le_mark.setPlaceholderText(self.tr("会话标记文本…"))
@@ -2943,10 +3059,16 @@ class RTTMonitorPage(QWidget):
         _tip(self.lbl_status_rx, self.tr("接收总数 - 上一次接收增量（字节）"))
         # 发送：保留计数数值，仅刷新语言前缀
         _tip(self.lbl_status_tx, self.tr("发送总数 - 上一次发送（字节）"))
-        self.lbl_status_tx.setText(self.tr("发送: {total} - {last}").format(total=self._send_total_bytes, last=self._send_last_bytes))
+        self.lbl_status_tx.setText(
+            self.tr("发送: {total} - {last}").format(
+                total=self._send_total_bytes, last=self._send_last_bytes
+            )
+        )
         # 连接状态：按当前态重设（连接态含 target）
         if self._is_connected:
-            self.lbl_status_state.setText(self.tr("● 已连接 {target}").format(target=self._connected_target))
+            self.lbl_status_state.setText(
+                self.tr("● 已连接 {target}").format(target=self._connected_target)
+            )
             self.lbl_status_state.setStyleSheet("color: #2ecc71;")
         else:
             self.lbl_status_state.setText(self.tr("● 未连接"))

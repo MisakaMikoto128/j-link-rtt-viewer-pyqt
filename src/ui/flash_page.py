@@ -8,6 +8,7 @@ UI 布局（4 个 Card，透明 ScrollArea 整页包裹）：
 
 参数持久化：cfg.flash_*。
 """
+
 from __future__ import annotations
 
 import os
@@ -120,6 +121,7 @@ class FlashPage(QWidget):
         # ST-Link / CMSIS-DAP 来自 worker.pyocd_probes_enumerated（pyOCD）。
         # _rebuild_burner_combo 合并两源按类型分组重建。
         self._jlink_serials: list[str] = []
+        self._jlink_products: dict[str, str] = {}
         self._pyocd_probes: list[tuple[str, str, str]] = []  # (kind, serial, product)
         self._last_burner_enum_state: tuple | None = None
         self._burner_initialized = False
@@ -130,6 +132,7 @@ class FlashPage(QWidget):
         # _current_burner() 在 combo 状态不可靠时回退到它。
         self._selected_serial: str = ""
         self._selected_kind: str = ""
+        self._selected_product: str = ""
 
         # 独立 worker + 独立 QThread（和 JLinkWorker 完全无关）
         self._thread = QThread(self)
@@ -219,6 +222,11 @@ class FlashPage(QWidget):
         self.cmb_device = EditableComboBox()
         chip_list = self._cfg.get_chip_list() or ["STM32H750VB"]
         self.cmb_device.addItems(chip_list)
+        # 加载上次 target：若用户输入的 target 不在 chip_list 里，先 addItem 再选。
+        saved_device = str(self._cfg.get("flash_device_name") or "").strip()
+        if saved_device and self.cmb_device.findText(saved_device) < 0:
+            self.cmb_device.addItem(saved_device)
+        self.cmb_device.setCurrentText(saved_device)
         # 自动补全：不区分大小写、子串匹配（与 RTT 页目标设备下拉一致）
         completer = QCompleter(chip_list, self.cmb_device)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
@@ -361,7 +369,10 @@ class FlashPage(QWidget):
 
     # ---- 加载偏好到控件 ----
     def _load_prefs_into_controls(self) -> None:
-        self.cmb_device.setCurrentText(self._cfg.get("flash_device_name"))
+        saved_device = str(self._cfg.get("flash_device_name") or "").strip()
+        if saved_device and self.cmb_device.findText(saved_device) < 0:
+            self.cmb_device.addItem(saved_device)
+        self.cmb_device.setCurrentText(saved_device)
         iface = self._cfg.get("flash_interface")
         self.rb_swd.setChecked(iface == "SWD")
         self.rb_jtag.setChecked(iface == "JTAG")
@@ -405,21 +416,20 @@ class FlashPage(QWidget):
     # ---- 信号连接 ----
     def _connect_signals(self) -> None:
         # 持久化
-        self.cmb_device.currentTextChanged.connect(
-            lambda s: self._cfg.set("flash_device_name", s))
-        self.rb_swd.toggled.connect(
-            lambda on: on and self._cfg.set("flash_interface", "SWD"))
-        self.rb_jtag.toggled.connect(
-            lambda on: on and self._cfg.set("flash_interface", "JTAG"))
+        self.cmb_device.currentTextChanged.connect(lambda s: self._cfg.set("flash_device_name", s))
+        self.rb_swd.toggled.connect(lambda on: on and self._cfg.set("flash_interface", "SWD"))
+        self.rb_jtag.toggled.connect(lambda on: on and self._cfg.set("flash_interface", "JTAG"))
         self.cmb_speed.currentTextChanged.connect(
-            lambda s: self._cfg.set("flash_speed", int(s)) if s.strip() else None)
+            lambda s: self._cfg.set("flash_speed", int(s)) if s.strip() else None
+        )
         self.edit_bin_addr.editingFinished.connect(self._on_bin_addr_changed)
         self.cmb_erase.currentIndexChanged.connect(
-            lambda i: self._cfg.set("flash_erase_mode", _ERASE_LABELS[i][1]))
+            lambda i: self._cfg.set("flash_erase_mode", _ERASE_LABELS[i][1])
+        )
         self.cmb_post.currentIndexChanged.connect(
-            lambda i: self._cfg.set("flash_post_action", _POST_LABELS[i][1]))
-        self.chk_verify.toggled.connect(
-            lambda v: self._cfg.set("flash_verify", bool(v)))
+            lambda i: self._cfg.set("flash_post_action", _POST_LABELS[i][1])
+        )
+        self.chk_verify.toggled.connect(lambda v: self._cfg.set("flash_verify", bool(v)))
 
         # 文件
         self.btn_browse.clicked.connect(self._on_browse)
@@ -434,12 +444,15 @@ class FlashPage(QWidget):
         self.le_remote_port.textChanged.connect(self._trigger_remote_probe)
         if self._rtt_worker is not None:
             self._rtt_worker.devices_enumerated.connect(
-                self._on_jlink_burners_enumerated, _Qt.QueuedConnection)
+                self._on_jlink_burners_enumerated, _Qt.QueuedConnection
+            )
             self._rtt_worker.connection_state_changed.connect(
-                self._on_rtt_state_for_flash, _Qt.QueuedConnection)
+                self._on_rtt_state_for_flash, _Qt.QueuedConnection
+            )
         # pyOCD 烧录器枚举（非 J-Link，FlashWorker worker 线程 1s tick）
         self._worker.pyocd_probes_enumerated.connect(
-            self._on_pyocd_burners_enumerated, _Qt.QueuedConnection)
+            self._on_pyocd_burners_enumerated, _Qt.QueuedConnection
+        )
 
         # 详情折叠
         self.btn_toggle_log.clicked.connect(self._toggle_log)
@@ -447,38 +460,35 @@ class FlashPage(QWidget):
 
         # worker → ui（QueuedConnection 显式声明：CLAUDE.md 跨线程信号约定）
         self.btn_flash.clicked.connect(self._on_start_flash)
-        self._worker.flash_started.connect(
-            self._on_flash_started, _Qt.QueuedConnection)
-        self._worker.flash_stage_changed.connect(
-            self._on_stage_changed, _Qt.QueuedConnection)
-        self._worker.flash_progress.connect(
-            self._on_progress, _Qt.QueuedConnection)
-        self._worker.flash_log.connect(
-            self._on_log, _Qt.QueuedConnection)
-        self._worker.flash_finished.connect(
-            self._on_flash_finished, _Qt.QueuedConnection)
+        self._worker.flash_started.connect(self._on_flash_started, _Qt.QueuedConnection)
+        self._worker.flash_stage_changed.connect(self._on_stage_changed, _Qt.QueuedConnection)
+        self._worker.flash_progress.connect(self._on_progress, _Qt.QueuedConnection)
+        self._worker.flash_log.connect(self._on_log, _Qt.QueuedConnection)
+        self._worker.flash_finished.connect(self._on_flash_finished, _Qt.QueuedConnection)
 
         # RTT 断开等待兜底 timer（单次 5s）
         self._rtt_disconnect_timeout_timer = QTimer(self)
         self._rtt_disconnect_timeout_timer.setSingleShot(True)
         self._rtt_disconnect_timeout_timer.setInterval(5000)
-        self._rtt_disconnect_timeout_timer.timeout.connect(
-            self._on_rtt_disconnect_timeout)
+        self._rtt_disconnect_timeout_timer.timeout.connect(self._on_rtt_disconnect_timeout)
 
     def _on_rtt_disconnect_timeout(self) -> None:
         """5s 内 RTT 没断干净也继续烧。"""
         if self._rtt_pending_disconnect:
             self._rtt_pending_disconnect = False
             self._worker.flash_requested.emit()
-            _infobar.warn(self, self.tr("提示"),
-                          self.tr("等待 RTT 断开超时，直接烧录"))
+            _infobar.warn(self, self.tr("提示"), self.tr("等待 RTT 断开超时，直接烧录"))
 
     def _on_bin_addr_changed(self) -> None:
         txt = self.edit_bin_addr.text().strip()
         try:
             v = int(txt, 0) if txt else 0
         except ValueError:
-            _infobar.warn(self, self.tr("Bin 起始地址格式错误"), self.tr("无法解析为整数：{txt}").format(txt=txt))
+            _infobar.warn(
+                self,
+                self.tr("Bin 起始地址格式错误"),
+                self.tr("无法解析为整数：{txt}").format(txt=txt),
+            )
             return
         self._cfg.set("flash_bin_address", int(v))
         # 重解析当前文件以更新 range 显示
@@ -490,21 +500,26 @@ class FlashPage(QWidget):
     # 烧录器选择（与 RTT 页同形态：下拉 + 红点 + 离线占位）
     # ------------------------------------------------------------------
     def _on_jlink_burners_enumerated(self, data: str) -> None:
-        """RTT worker 枚举的 J-Link serials（pylink）。data: 'serial|product;...'。"""
+        """data: 'serial|product;...'。"""
         serials: list[str] = []
+        products: dict[str, str] = {}
         if data:
             for chunk in data.split(";"):
                 if not chunk:
                     continue
-                serial, _, _product = chunk.partition("|")
+                serial, _, product = chunk.partition("|")
                 serial = serial.strip()
+                product = product.strip()
                 if serial and serial.isdigit():
                     serials.append(serial)
+                    products[serial] = product
+                    self._cache_burner(BURNER_KIND_JLINK, serial, product)
         self._jlink_serials = serials
+        self._jlink_products = products
         self._rebuild_burner_combo()
 
     def _on_pyocd_burners_enumerated(self, data: str) -> None:
-        """FlashWorker 枚举的非 J-Link probe（pyOCD）。data: 'kind|serial|product;...'。"""
+        """data: 'kind|serial|product;...'。"""
         probes: list[tuple[str, str, str]] = []
         if data:
             for chunk in data.split(";"):
@@ -518,15 +533,26 @@ class FlashPage(QWidget):
                 product = parts[2].strip() if len(parts) > 2 else ""
                 if kind and serial:
                     probes.append((kind, serial, product))
+                    self._cache_burner(kind, serial, product)
         self._pyocd_probes = probes
         self._rebuild_burner_combo()
 
-    def _rebuild_burner_combo(self) -> None:
-        """合并 J-Link + pyOCD 两源重建 burner 下拉，按类型分组。
+    def _cache_burner(self, kind: str, serial: str, product: str) -> None:
+        """把 (serial -> kind/product) 写入 cfg 缓存，供离线/重启时生成 label。"""
+        if not serial:
+            return
+        cache: dict[str, dict] = dict(self._cfg.get("flash_burner_cache") or {})
+        cache[serial] = {"kind": kind, "product": product}
+        self._cfg.set("flash_burner_cache", cache)
 
-        每项 setData(UserRole)=kind, setData(UserRole+1)=serial；分组分隔项不可选。
-        diff guard 避免无谓重建（200ms / 1s tick 下）。
-        """
+    def _get_cached_burner(self, serial: str) -> tuple[str, str]:
+        """按 serial 读缓存，返回 (kind, product)；无缓存返回 ('', '')。"""
+        cache = self._cfg.get("flash_burner_cache") or {}
+        info = cache.get(serial) or {}
+        return (str(info.get("kind") or ""), str(info.get("product") or ""))
+
+    def _rebuild_burner_combo(self) -> None:
+        """合并 J-Link + pyOCD 两源重建 burner 下拉，按类型分组。"""
         new_state = (tuple(self._jlink_serials), tuple(self._pyocd_probes))
         if self._last_burner_enum_state == new_state and self._burner_initialized:
             self._sync_remote_mode_from_selection()
@@ -534,8 +560,7 @@ class FlashPage(QWidget):
             return
         self._last_burner_enum_state = new_state
 
-        # 记录当前选中 serial（跨重建恢复），首次从 cfg 读
-        prev_serial = self._current_burner()[1]
+        prev_serial = self._selected_serial
         if not prev_serial and not self._burner_initialized:
             prev_serial = str(self._cfg.get("flash_jlink_serial") or "").strip()
             self._burner_initialized = True
@@ -550,14 +575,20 @@ class FlashPage(QWidget):
             if self._jlink_serials:
                 self._add_separator_item(self.tr("── J-Link ──"))
                 for s in self._jlink_serials:
-                    self._add_burner_item("jlink", s, f"J-Link: {s}")
-            # ST-Link / CMSIS-DAP 分组
-            if self._pyocd_probes:
-                self._add_separator_item(self.tr("── ST-Link / CMSIS-DAP ──"))
-                for kind, serial, _product in self._pyocd_probes:
-                    label = (f"CMSIS-DAP: {serial}" if kind == "cmsisdap"
-                             else f"ST-Link: {serial}")
-                    self._add_burner_item(kind, serial, label)
+                    label = self._burner_label("jlink", s, self._jlink_products.get(s, ""))
+                    self._add_burner_item("jlink", s, label)
+            # ST-Link 分组
+            stlink_probes = [p for p in self._pyocd_probes if p[0] == "stlink"]
+            if stlink_probes:
+                self._add_separator_item(self.tr("── ST-Link ──"))
+                for kind, serial, product in stlink_probes:
+                    self._add_burner_item(kind, serial, self._burner_label(kind, serial, product))
+            # CMSIS-DAP 分组
+            dap_probes = [p for p in self._pyocd_probes if p[0] == "cmsisdap"]
+            if dap_probes:
+                self._add_separator_item(self.tr("── CMSIS-DAP ──"))
+                for kind, serial, product in dap_probes:
+                    self._add_burner_item(kind, serial, self._burner_label(kind, serial, product))
             # 远程连接尾项
             self.cmb_burner.addItem(REMOTE_ITEM_TEXT)
 
@@ -566,49 +597,42 @@ class FlashPage(QWidget):
                 self.cmb_burner.setCurrentText(REMOTE_ITEM_TEXT)
                 self._selected_serial = ""
                 self._selected_kind = "remote"
+                self._selected_product = ""
             elif prev_serial:
                 idx = self._find_burner_index_by_serial(prev_serial)
                 if idx >= 0:
                     self.cmb_burner.setCurrentIndex(idx)
-                    # 强制 lineEdit 同步：qfluent EditableComboBox 的 setCurrentIndex
-                    # 后 currentText 偶发滞后（CLAUDE.md），仅靠它显示会停留在占位文本。
                     self.cmb_burner.setText(self.cmb_burner.itemText(idx))
                     self._selected_serial = prev_serial
                     self._selected_kind = self._lookup_burner_kind(prev_serial)
-                elif self._jlink_serials or self._pyocd_probes:
-                    # prev_serial 不在当前在线设备中，但存在其它在线设备 ->
-                    # 选中第一个在线设备（index 1，跳过 index 0 的分组分隔项）。
-                    # 不变量：只要存在在线设备，combo 当前选中项必然指向某个在线设备。
-                    self.cmb_burner.setCurrentIndex(1)
-                    self.cmb_burner.setText(self.cmb_burner.itemText(1))
-                    d = self.cmb_burner.itemData(1)
-                    if isinstance(d, tuple) and len(d) == 2:
-                        self._selected_serial = d[1] or ""
-                        self._selected_kind = d[0] or ""
-                    else:
-                        self._selected_serial = ""
-                        self._selected_kind = ""
+                    self._selected_product = self._lookup_burner_product(prev_serial)
                 else:
-                    # 无任何在线设备：占位 + 只读 + 红点（等用户插上 prev 指定的设备）
-                    self.cmb_burner.setText(prev_serial)
+                    cached_kind, cached_product = self._get_cached_burner(prev_serial)
+                    self._selected_kind = cached_kind
+                    self._selected_product = cached_product
+                    self.cmb_burner.setCurrentIndex(-1)
+                    self.cmb_burner.setText(
+                        self._burner_label(self._selected_kind, prev_serial, self._selected_product)
+                    )
                     self.cmb_burner.setReadOnly(True)
                     self._selected_serial = prev_serial
-                    self._selected_kind = self._lookup_burner_kind(prev_serial)
             elif self._jlink_serials or self._pyocd_probes:
-                # 默认选第一个真实设备（index 1，跳过 index 0 的分隔项）
                 self.cmb_burner.setCurrentIndex(1)
                 self.cmb_burner.setText(self.cmb_burner.itemText(1))
                 d = self.cmb_burner.itemData(1)
                 if isinstance(d, tuple) and len(d) == 2:
                     self._selected_serial = d[1] or ""
                     self._selected_kind = d[0] or ""
+                    self._selected_product = self._lookup_burner_product(d[1] or "")
                 else:
                     self._selected_serial = ""
                     self._selected_kind = ""
+                    self._selected_product = ""
             else:
                 self.cmb_burner.setCurrentText(REMOTE_ITEM_TEXT)
                 self._selected_serial = ""
                 self._selected_kind = "remote"
+                self._selected_product = ""
         finally:
             self.cmb_burner.blockSignals(False)
 
@@ -619,42 +643,58 @@ class FlashPage(QWidget):
         """加不可选的分组分隔项。"""
         self.cmb_burner.addItem(text)
         self.cmb_burner.setItemEnabled(self.cmb_burner.count() - 1, False)
+
     def _add_burner_item(self, kind: str, serial: str, label: str) -> None:
         self.cmb_burner.addItem(label, userData=(kind, serial))
+
     def _find_burner_index_by_serial(self, serial: str) -> int:
         for i in range(self.cmb_burner.count()):
             data = self.cmb_burner.itemData(i)
             if isinstance(data, tuple) and len(data) == 2 and data[1] == serial:
                 return i
         return -1
+
     def _lookup_burner_kind(self, serial: str) -> str:
-        """按 serial 反查 burner kind（jlink / cmsisdap / stlink）；离线返回 ""。"""
+        """按 serial 反查 burner kind；离线时回退缓存。"""
         if serial in self._jlink_serials:
             return BURNER_KIND_JLINK
         for kind, s, _product in self._pyocd_probes:
             if s == serial:
                 return kind
-        return ""
-    def _current_burner(self) -> tuple[str, str]:
-        """返回当前选中烧录器 (kind, serial)。远程项 -> ("remote", "")。
+        kind, _ = self._get_cached_burner(serial)
+        return kind
 
-        currentIndex 命中真实 item 时读 combo itemData（用户点选后此路径可靠）；
-        否则回退 self._selected_serial/_selected_kind（programmatic 真源）。
-        回退原因：qfluentwidgets EditableComboBox 在 clear + setCurrentIndex
-        重建后 currentIndex/currentText 偶发不同步（CLAUDE.md）。
-        """
-        text = self.cmb_burner.currentText().strip()
-        if text == REMOTE_ITEM_TEXT:
+    def _lookup_burner_product(self, serial: str) -> str:
+        """按 serial 反查 product；离线时回退缓存。"""
+        for _kind, s, product in self._pyocd_probes:
+            if s == serial:
+                return product
+        if serial in self._jlink_products:
+            return self._jlink_products[serial]
+        _kind, product = self._get_cached_burner(serial)
+        return product
+
+    def _burner_label(self, kind: str, serial: str, product: str = "") -> str:
+        """生成 burner 显示 label（单点真源：在线 items / 离线占位共用）。"""
+        if kind == "jlink":
+            name = product if product else "J-Link"
+            return f"{name}: {serial}"
+        if kind == "cmsisdap":
+            prod = f" ({product})" if product else ""
+            return f"CMSIS-DAP{prod}: {serial}"
+        if kind == "stlink":
+            prod = f" ({product})" if product else ""
+            return f"ST-Link{prod}: {serial}"
+        return serial
+
+    def _current_burner(self) -> tuple[str, str]:
+        """返回当前选中烧录器 (kind, serial)。只读真源（_selected_*）。"""
+        if self._selected_kind == "remote":
             return ("remote", "")
-        idx = self.cmb_burner.currentIndex()
-        if idx >= 0:
-            data = self.cmb_burner.itemData(idx)
-            if isinstance(data, tuple) and len(data) == 2 and data[1]:
-                return (data[0] or "", data[1] or "")
-        # combo 状态不可靠（programmatic setCurrentIndex 未同步 currentIndex）-> 回退真源
         if self._selected_serial:
             return (self._selected_kind or "", self._selected_serial)
         return ("", "")
+
     def _sync_remote_mode_from_selection(self) -> None:
         self._remote_mode = self._current_burner()[0] == "remote"
         self.remote_row.setVisible(self._remote_mode)
@@ -677,16 +717,29 @@ class FlashPage(QWidget):
             self.cmb_burner.setReadOnly(False)
             return
 
-        online = serial in self._jlink_serials or any(
-            p[1] == serial for p in self._pyocd_probes)
+        online = serial in self._jlink_serials or any(p[1] == serial for p in self._pyocd_probes)
         self._burner_status_dot.setVisible(not online)
         self.cmb_burner.setReadOnly(not online)
+
     def _on_burner_selection_changed(self) -> None:
-        """用户选了真实设备 -> 持久化 + 同步红点 + 更新真源。"""
-        kind, serial = self._current_burner()
+        """combo 文本改变 -> 用 currentText 反查 item 同步真源 + 持久化 + 同步红点。"""
+        text = self.cmb_burner.currentText().strip()
+        if text == REMOTE_ITEM_TEXT:
+            kind, serial = "remote", ""
+        else:
+            idx = -1
+            for i in range(self.cmb_burner.count()):
+                if self.cmb_burner.itemText(i).strip() == text:
+                    idx = i
+                    break
+            data = self.cmb_burner.itemData(idx) if idx >= 0 else None
+            if not (isinstance(data, tuple) and len(data) == 2 and data[1]):
+                return
+            kind, serial = data[0] or "", data[1] or ""
         self._selected_kind = kind
         self._selected_serial = serial
-        self._remote_mode = (kind == "remote")
+        self._selected_product = self._lookup_burner_product(serial) if serial else ""
+        self._remote_mode = kind == "remote"
         self.remote_row.setVisible(self._remote_mode)
 
         if self._remote_mode:
@@ -697,6 +750,7 @@ class FlashPage(QWidget):
             if serial:
                 self._cfg.set("flash_jlink_serial", serial)
         self._sync_burner_status_dot()
+
     def _trigger_remote_probe(self) -> None:
         """异步探测远程主机 TCP 可达性；有在飞探测时跳过。"""
         if self._remote_probe_in_flight:
@@ -722,8 +776,11 @@ class FlashPage(QWidget):
         cur = self.cmb_file.currentText().strip()
         start_dir = str(Path(cur).parent) if cur else ""
         path, _ = QFileDialog.getOpenFileName(
-            self, self.tr("选择固件文件"), start_dir,
-            self.tr("固件文件 (*.axf *.elf *.hex *.bin);;所有文件 (*.*)"))
+            self,
+            self.tr("选择固件文件"),
+            start_dir,
+            self.tr("固件文件 (*.axf *.elf *.hex *.bin);;所有文件 (*.*)"),
+        )
         if not path:
             return
         self._select_file(path)
@@ -741,8 +798,8 @@ class FlashPage(QWidget):
         stem = Path(src).stem
         start_dir = str(Path(src).with_name(stem + ".bin"))
         dst, sel = QFileDialog.getSaveFileName(
-            self, self.tr("固件另存为"), start_dir,
-            "Binary (*.bin);;Intel HEX (*.hex)")
+            self, self.tr("固件另存为"), start_dir, "Binary (*.bin);;Intel HEX (*.hex)"
+        )
         if not dst:
             return
         # 用户没敲后缀时按所选过滤器补全
@@ -755,6 +812,7 @@ class FlashPage(QWidget):
             bin_addr = int(self._cfg.get("flash_bin_address"))
 
         from core import flash_file_parser as fp
+
         try:
             fp.convert_file(src, dst, bin_start_addr=bin_addr)
         except fp.FileParseError as e:
@@ -821,6 +879,7 @@ class FlashPage(QWidget):
             return
 
         from core import flash_file_parser as fp
+
         # bin addr 取页面当前值
         try:
             bin_addr = int(self.edit_bin_addr.text().strip(), 0)
@@ -843,7 +902,8 @@ class FlashPage(QWidget):
         self.lbl_format.setText(info.fmt.upper())
         self.lbl_range.setText(
             f"0x{info.addr_start:08X} – 0x{info.addr_end:08X} "
-            f"({info.total_bytes} B, {info.notes})")
+            f"({info.total_bytes} B, {info.notes})"
+        )
         # bin 模式才允许编辑 bin_addr
         self.edit_bin_addr.setEnabled(info.fmt == FORMAT_BIN)
 
@@ -877,6 +937,7 @@ class FlashPage(QWidget):
         import PySide6
 
         from ui.about_page import APP_VERSION
+
         header = (
             f"J-Link RTT Viewer / Flash log\n"
             f"App version: {APP_VERSION}\n"
@@ -886,6 +947,7 @@ class FlashPage(QWidget):
             f"---\n"
         )
         from PySide6.QtWidgets import QApplication
+
         QApplication.clipboard().setText(header + self.txt_log.toPlainText())
         _infobar.info(self, self.tr("已复制日志到剪贴板"), "")
 
@@ -902,6 +964,7 @@ class FlashPage(QWidget):
             return
 
         from core import flash_file_parser as fp
+
         try:
             fmt = fp.detect_format(path)
         except fp.FileParseError as e:
@@ -915,7 +978,9 @@ class FlashPage(QWidget):
 
         device = self.cmb_device.currentText().strip()
         if not device:
-            _infobar.warn(self, self.tr("未填 Device"), self.tr("请填写目标设备名（如 STM32H750VB）"))
+            _infobar.warn(
+                self, self.tr("未填 Device"), self.tr("请填写目标设备名（如 STM32H750VB）")
+            )
             return
 
         iface = "SWD" if self.rb_swd.isChecked() else "JTAG"
@@ -933,8 +998,11 @@ class FlashPage(QWidget):
             port_text = self.le_remote_port.text().strip()
             resolved = resolve_remote_host(host)
             if resolved is None:
-                _infobar.warn(self, self.tr("提示"),
-                              self.tr('无法解析主机名 "{host}"，请检查输入').format(host=host))
+                _infobar.warn(
+                    self,
+                    self.tr("提示"),
+                    self.tr('无法解析主机名 "{host}"，请检查输入').format(host=host),
+                )
                 return
             if not is_valid_port(port_text):
                 _infobar.warn(self, self.tr("提示"), self.tr("端口无效（1-65535）"))
@@ -945,22 +1013,31 @@ class FlashPage(QWidget):
         else:
             burner_kind, burner_serial = self._current_burner()
             if not burner_serial:
-                _infobar.warn(self, self.tr("提示"),
-                              self.tr("未检测到烧录器，请检查 USB 连接"))
+                _infobar.warn(self, self.tr("提示"), self.tr("未检测到烧录器，请检查 USB 连接"))
                 return
             # 离线占位检查（serial 不在可见列表）
-            if not (burner_serial in self._jlink_serials
-                    or any(p[1] == burner_serial for p in self._pyocd_probes)):
-                _infobar.warn(self, self.tr("提示"),
-                              self.tr("选中的烧录器不在线，请刷新设备列表或重新选择"))
+            if not (
+                burner_serial in self._jlink_serials
+                or any(p[1] == burner_serial for p in self._pyocd_probes)
+            ):
+                _infobar.warn(
+                    self, self.tr("提示"), self.tr("选中的烧录器不在线，请刷新设备列表或重新选择")
+                )
                 return
 
         params = FlashParams(
-            file_path=path, file_format=fmt, bin_start_addr=bin_addr,
-            device_name=device, interface=iface, speed_khz=speed,
-            erase_mode=erase_mode, post_action=post_action,
-            extra_verify=verify, jlink_serial=burner_serial,
-            remote_addr=remote_addr, burner_kind=burner_kind,
+            file_path=path,
+            file_format=fmt,
+            bin_start_addr=bin_addr,
+            device_name=device,
+            interface=iface,
+            speed_khz=speed,
+            erase_mode=erase_mode,
+            post_action=post_action,
+            extra_verify=verify,
+            jlink_serial=burner_serial,
+            remote_addr=remote_addr,
+            burner_kind=burner_kind,
         )
         self._worker.set_pending_params(params)
 
@@ -975,13 +1052,13 @@ class FlashPage(QWidget):
             rtt_remote_addr = str(rtt_info.get("remote_addr", "") or "")
             same_device = False
             if self._remote_mode:
-                same_device = (rtt_state == "CONNECTED"
-                               and rtt_remote_addr == remote_addr
-                               and remote_addr)
+                same_device = (
+                    rtt_state == "CONNECTED" and rtt_remote_addr == remote_addr and remote_addr
+                )
             elif burner_kind == BURNER_KIND_JLINK:
-                same_device = (rtt_state == "CONNECTED"
-                               and rtt_serial == burner_serial
-                               and burner_serial)
+                same_device = (
+                    rtt_state == "CONNECTED" and rtt_serial == burner_serial and burner_serial
+                )
             if same_device:
                 self._resume_rtt_after_flash = True
                 self._rtt_pending_disconnect = True
@@ -992,6 +1069,7 @@ class FlashPage(QWidget):
 
         self._resume_rtt_after_flash = False
         self._worker.flash_requested.emit()
+
     def _on_flash_started(self) -> None:
         self._is_running = True
         self._stage_key = "preparing"
@@ -1022,6 +1100,7 @@ class FlashPage(QWidget):
 
     def _on_log(self, level: str, msg: str) -> None:
         from datetime import datetime
+
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         prefix = {"info": "", "warn": "⚠ ", "error": "✖ "}.get(level, "")
         self.txt_log.appendPlainText(f"[{ts}] {prefix}{msg}")
@@ -1042,12 +1121,14 @@ class FlashPage(QWidget):
             if target:
                 if self._rtt_resume_remote_addr:
                     self._rtt_worker.connect_remote_requested.emit(
-                        target, iface, speed, channel, self._rtt_resume_remote_addr)
+                        target, iface, speed, channel, self._rtt_resume_remote_addr
+                    )
                 else:
                     burner_serial = self._current_burner()[1]
                     if burner_serial:
                         self._rtt_worker.connect_requested.emit(
-                            target, iface, speed, channel, burner_serial)
+                            target, iface, speed, channel, burner_serial
+                        )
             self._rtt_resume_remote_addr = ""
         if ok:
             self.lbl_stage.setText(self.tr("完成 ✓"))
@@ -1059,14 +1140,27 @@ class FlashPage(QWidget):
             if not self.txt_log.isVisible():
                 self._toggle_log()
             self.txt_log.appendPlainText(
-                self.tr("⚠ Flash 已部分擦除/写入，建议下次用「整片擦除」重烧"))
+                self.tr("⚠ Flash 已部分擦除/写入，建议下次用「整片擦除」重烧")
+            )
             _infobar.error(self, self.tr("烧录失败"), summary)
+
     def _set_inputs_enabled(self, enabled: bool) -> None:
-        for w in (self.cmb_device, self.rb_swd, self.rb_jtag, self.cmb_speed,
-                  self.cmb_file, self.btn_browse, self.btn_save_as,
-                  self.edit_bin_addr,
-                  self.cmb_erase, self.cmb_post, self.chk_verify,
-                  self.cmb_burner, self.le_remote_host, self.le_remote_port):
+        for w in (
+            self.cmb_device,
+            self.rb_swd,
+            self.rb_jtag,
+            self.cmb_speed,
+            self.cmb_file,
+            self.btn_browse,
+            self.btn_save_as,
+            self.edit_bin_addr,
+            self.cmb_erase,
+            self.cmb_post,
+            self.chk_verify,
+            self.cmb_burner,
+            self.le_remote_host,
+            self.le_remote_port,
+        ):
             w.setEnabled(enabled)
         self.btn_flash.setEnabled(enabled)
 

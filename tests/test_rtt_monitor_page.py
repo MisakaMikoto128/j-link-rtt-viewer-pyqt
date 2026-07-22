@@ -3,6 +3,7 @@
 worker 用一个轻量 QObject 替身，只暴露 RTTMonitorPage 实际连接的信号 + 方法。
 这样可以脱离真 JLinkWorker / pylink / QThread，让单页测试稳定快速。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -11,6 +12,7 @@ from PySide6.QtCore import QObject, Signal
 
 class FakeWorker(QObject):
     """与 JLinkWorker 同形的信号 stub。RTTMonitorPage 只需要这些通道。"""
+
     connect_requested = Signal(str, str, int, int, str)
     connect_remote_requested = Signal(str, str, int, int, str)
     disconnect_requested = Signal()
@@ -43,8 +45,7 @@ class FakeWorker(QObject):
         }
         self._sent: list[tuple[str, bool]] = []
         self._resets: list[str] = []
-        self.send_data_requested.connect(
-            lambda t, h: self._sent.append((t, h)))
+        self.send_data_requested.connect(lambda t, h: self._sent.append((t, h)))
         self.reset_requested.connect(lambda m: self._resets.append(m))
 
     def get_device_info(self) -> dict:
@@ -68,6 +69,7 @@ def rtt_page(qtbot, isolated_appdata):
     """RTTMonitorPage + FakeWorker；APPDATA 走 tmp 不污染真实配置。"""
     from core.config_service import ConfigService
     from ui.rtt_monitor_page import RTTMonitorPage
+
     cfg = ConfigService()
     worker = FakeWorker()
     page = RTTMonitorPage(worker, cfg)
@@ -113,7 +115,7 @@ def test_send_history_dedups_existing_entries(rtt_page, qtbot):
 
 def test_empty_text_does_not_send(rtt_page, qtbot):
     """空文本点发送应 no-op。"""
-    page, worker, cfg = rtt_page
+    page, worker, _cfg = rtt_page
     page._set_connected_ui(worker.get_device_info())
     page.te_send.setPlainText("")
     page.btn_send.click()
@@ -201,7 +203,7 @@ def test_programmatic_scroll_guard_blocks_auto_scroll_uncheck(rtt_page, qtbot):
     assert page.chk_auto_scroll.isChecked()
     sb = page.display.verticalScrollBar()
     with page._programmatic_scroll_guard():
-        sb.setValue(0)        # 模拟程序性回滚到顶部
+        sb.setValue(0)  # 模拟程序性回滚到顶部
     qtbot.wait(20)
     # 仍勾选 — guard 内的滚动事件被 _on_display_scrolled 忽略
     assert page.chk_auto_scroll.isChecked()
@@ -297,6 +299,7 @@ def test_shortcut_find_fills_selected_text(rtt_page, qtbot):
     page.display.setPlainText("hello world")
     # 模拟选中 "world"
     from PySide6.QtGui import QTextCursor
+
     tc = page.display.textCursor()
     tc.setPosition(6)
     tc.setPosition(11, QTextCursor.MoveMode.KeepAnchor)
@@ -353,7 +356,9 @@ def test_left_panel_no_inflate_and_title_stays_short(rtt_page, qtbot):
       + 法语用更短同义译名），即任何控件内容变化都不反向撑开/挤压面板。
     """
     from PySide6.QtWidgets import QApplication, QScrollArea
+
     from core.i18n_service import JsonTranslator
+
     page, worker, _ = rtt_page
     # 注入长固件版本串，覆盖展开卡片时的最长值
     worker._device_info["jlink_firmware"] = "J-Link V11 compiled May 17 2024 16:31:23"
@@ -446,7 +451,7 @@ def test_channel_switch_renders_per_channel_history(rtt_page, qtbot):
 def test_all_channels_view_merges_and_send_hint(rtt_page, qtbot):
     """-1 全部通道：合并显示 + 发送通道提示可见 + 发送通道保持最近具体通道。"""
     page, worker, _ = rtt_page
-    page.sp_channel.setValue(1)   # 先选具体通道 1（成为发送通道）
+    page.sp_channel.setValue(1)  # 先选具体通道 1（成为发送通道）
     qtbot.wait(20)
     assert page._send_channel == 1
 
@@ -496,8 +501,8 @@ def test_overflow_channel_pulled_back_on_connect(rtt_page, qtbot):
     显示空 + SpinBox 显示值与实际视图脱节。修复后超出时主动 setValue(上限)。
     """
     page, worker, _ = rtt_page
-    worker._num_up = 1   # MCU 只有通道 0
-    page.sp_channel.setValue(4)   # 用户故意选 4
+    worker._num_up = 1  # MCU 只有通道 0
+    page.sp_channel.setValue(4)  # 用户故意选 4
     qtbot.wait(20)
     assert page._view_channel == 4
 
@@ -519,7 +524,7 @@ def test_all_channel_not_pulled_back_on_connect(rtt_page, qtbot):
     """「全部通道」(-1) 在连接收紧上限时不应被拉回具体通道。"""
     page, worker, _ = rtt_page
     worker._num_up = 1
-    page.sp_channel.setValue(-1)   # 全部通道
+    page.sp_channel.setValue(-1)  # 全部通道
     qtbot.wait(20)
     worker.connection_state_changed.emit(True)
     qtbot.wait(30)
@@ -535,11 +540,11 @@ def test_devices_enumerated_populates_combo(rtt_page, qtbot):
     page, worker, _ = rtt_page
     worker.devices_enumerated.emit("12345678|J-Link PLUS;87654321|J-Link EDU")
     qtbot.wait(30)
-    # 2 个 serial + 1 个远程项
+    # 2 个 serial + 1 个远程项；在线项显示 product: serial
     assert page.cb_jlink.count() == 3
-    assert page.cb_jlink.itemText(0) == "12345678"
-    assert page.cb_jlink.itemText(1) == "87654321"
-    assert page.cb_jlink.currentText() == "12345678"
+    assert page.cb_jlink.itemText(0) == "J-Link PLUS: 12345678"
+    assert page.cb_jlink.itemText(1) == "J-Link EDU: 87654321"
+    assert page.cb_jlink.currentText() == "J-Link PLUS: 12345678"
 
 
 def test_devices_enumerated_keeps_previous_selection_if_present(rtt_page, qtbot):
@@ -547,11 +552,11 @@ def test_devices_enumerated_keeps_previous_selection_if_present(rtt_page, qtbot)
     page, worker, _ = rtt_page
     worker.devices_enumerated.emit("111|A;222|B")
     qtbot.wait(30)
-    page.cb_jlink.setCurrentIndex(1)   # 选 222
+    page.cb_jlink.setCurrentIndex(1)  # 选 222
     qtbot.wait(10)
     worker.devices_enumerated.emit("111|A;222|B;333|C")
     qtbot.wait(30)
-    assert page.cb_jlink.currentText() == "222"
+    assert page.cb_jlink.currentText() == "B: 222"
     assert page.cb_jlink.count() == 4
 
 
@@ -565,12 +570,12 @@ def test_devices_enumerated_keeps_offline_placeholder(rtt_page, qtbot):
     qtbot.wait(50)
     page.cb_jlink.setCurrentIndex(1)
     qtbot.wait(20)
-    assert page.cb_jlink.currentText() == "222"
+    assert page.cb_jlink.currentText() == "B: 222"
     assert not page._jlink_status_dot.isVisible(), "222 在线时红点隐藏"
     # 刷新后 222 不在线
     worker.devices_enumerated.emit("111|A;333|C")
     qtbot.wait(50)
-    assert page.cb_jlink.currentText() == "222", "离线占位应保持显示"
+    assert page.cb_jlink.currentText() == "B: 222", "离线占位应保持显示"
     assert page.cb_jlink.count() == 3
     assert page._jlink_status_dot.isVisible(), "222 离线时红点显示"
 
@@ -596,14 +601,62 @@ def test_devices_enumerated_empty_keeps_history_placeholder(rtt_page, qtbot):
     qtbot.wait(50)
     page.cb_jlink.setCurrentIndex(0)
     qtbot.wait(20)
-    assert page.cb_jlink.currentText() == "111"
+    assert page.cb_jlink.currentText() == "A: 111"
     assert not page._jlink_status_dot.isVisible()
 
     worker.devices_enumerated.emit("")
     qtbot.wait(50)
     assert page.cb_jlink.count() == 1
-    assert page.cb_jlink.currentText() == "111", "历史选择应作为离线占位保留"
+    assert page.cb_jlink.currentText() == "A: 111", "历史选择应作为离线占位保留"
     assert page._jlink_status_dot.isVisible(), "无设备且历史占位应显示红点"
+
+
+def test_custom_target_persists_even_not_in_chip_list(rtt_page, qtbot):
+    """用户输入的自定义 target 不在 chip_list 里也要记住。"""
+    page, worker, cfg = rtt_page
+    page.cb_target.setText("MY_CUSTOM_MCU")
+    page.cb_iface.setCurrentText("SWD")
+    page.cb_speed.setCurrentText("4000")
+    page.sp_channel.setValue(0)
+    worker.devices_enumerated.emit("111|A")
+    qtbot.wait(30)
+    page.cb_jlink.setCurrentIndex(0)
+    qtbot.wait(10)
+    page._on_connect_clicked()
+    qtbot.wait(10)
+    assert cfg.get("target_mcu") == "MY_CUSTOM_MCU"
+    # 重建页面应能恢复自定义 target
+    cfg.flush()
+    from ui.rtt_monitor_page import RTTMonitorPage
+
+    page2 = RTTMonitorPage(worker, cfg)
+    qtbot.addWidget(page2)
+    assert page2.cb_target.currentText() == "MY_CUSTOM_MCU"
+
+
+def test_jlink_label_uses_product_and_cache_survives_reboot(rtt_page, qtbot):
+    """J-Link 下拉显示 product:serial；离线重启后仍从缓存显示 product。"""
+    page, worker, cfg = rtt_page
+    worker.devices_enumerated.emit("111|J-Link PLUS")
+    qtbot.wait(30)
+    assert page.cb_jlink.itemText(0) == "J-Link PLUS: 111"
+    assert page.cb_jlink.currentText() == "J-Link PLUS: 111"
+
+    # 模拟关闭软件后重启：设备不在线，但缓存已有 product
+    cfg.flush()
+    cfg.set("last_jlink_serial", "111")
+    cfg.set("jlink_mode", "usb")
+    cfg.set("flash_burner_cache", {"111": {"kind": "jlink", "product": "J-Link PLUS"}})
+    from ui.rtt_monitor_page import RTTMonitorPage
+
+    page2 = RTTMonitorPage(worker, cfg)
+    qtbot.addWidget(page2)
+    page2.show()
+    qtbot.wait(20)
+    worker.devices_enumerated.emit("")
+    qtbot.wait(30)
+    assert page2.cb_jlink.currentText() == "J-Link PLUS: 111"
+    assert page2._jlink_status_dot.isVisible()
 
 
 def test_connect_warns_when_no_online_jlink(rtt_page, qtbot):
@@ -618,7 +671,7 @@ def test_connect_warns_when_no_online_jlink(rtt_page, qtbot):
     # 拔掉 111，currentText 保持离线占位
     worker.devices_enumerated.emit("")
     qtbot.wait(30)
-    assert page.cb_jlink.currentText() == "111"
+    assert page.cb_jlink.currentText() == "A: 111"
 
     connects = []
     worker.connect_requested.connect(lambda *args: connects.append(args))
@@ -632,7 +685,7 @@ def test_disconnect_when_connected_jlink_removed(rtt_page, qtbot):
     page, worker, _ = rtt_page
     worker.devices_enumerated.emit("111|A;222|B")
     qtbot.wait(30)
-    page.cb_jlink.setCurrentIndex(1)   # 选 222
+    page.cb_jlink.setCurrentIndex(1)  # 选 222
     qtbot.wait(10)
     page._set_connected_ui(worker.get_device_info())
     assert page._is_connected is True
@@ -652,7 +705,7 @@ def test_usb_unplug_replug_auto_reconnect(rtt_page, qtbot):
     cfg.set("auto_reconnect", True)
     worker.devices_enumerated.emit("111|A;222|B")
     qtbot.wait(30)
-    page.cb_jlink.setCurrentIndex(1)   # 选 222
+    page.cb_jlink.setCurrentIndex(1)  # 选 222
     qtbot.wait(10)
     page._set_connected_ui(worker.get_device_info())
     assert page._is_connected is True
@@ -708,11 +761,10 @@ def test_selecting_remote_item_shows_remote_row(rtt_page, qtbot):
 def test_connect_remote_unresolvable_host_warns(rtt_page, qtbot, monkeypatch):
     """远程模式点击连接，主机名无法解析时应弹警告且不发 connect_remote_requested。"""
     import ui.rtt_monitor_page as rtt_mod
+
     page, worker, _ = rtt_page
     warnings: list[tuple] = []
-    monkeypatch.setattr(
-        rtt_mod._infobar, "warn",
-        lambda *args, **kwargs: warnings.append(args))
+    monkeypatch.setattr(rtt_mod._infobar, "warn", lambda *args, **kwargs: warnings.append(args))
     emitted: list[tuple] = []
     worker.connect_remote_requested.connect(lambda *args: emitted.append(args))
 
@@ -731,10 +783,9 @@ def test_connect_remote_unresolvable_host_warns(rtt_page, qtbot, monkeypatch):
 def test_connect_remote_emits_connect_remote_requested(rtt_page, qtbot, monkeypatch):
     """远程模式 TCP 预检通过，应 emit connect_remote_requested(ip:port)。"""
     import ui.rtt_monitor_page as rtt_mod
+
     page, worker, _ = rtt_page
-    monkeypatch.setattr(
-        rtt_mod, "tcp_reachable",
-        lambda _ip, _port, timeout=2.0: True)
+    monkeypatch.setattr(rtt_mod, "tcp_reachable", lambda _ip, _port, timeout=2.0: True)
     emitted: list[tuple] = []
     worker.connect_remote_requested.connect(lambda *args: emitted.append(args))
 
@@ -773,7 +824,7 @@ def test_remote_dot_reflects_reachability(rtt_page, qtbot):
 
 def test_remote_probe_reconnect_driven_by_ui(rtt_page, qtbot, monkeypatch):
     """自动重连开启时：远程探测 False→True 边沿触发 connect_remote_requested。"""
-    import ui.rtt_monitor_page as rtt_mod
+
     page, worker, cfg = rtt_page
     cfg.set("auto_reconnect", True)
     worker.devices_enumerated.emit("111|A")
@@ -818,6 +869,7 @@ def test_remote_probe_reconnect_driven_by_ui(rtt_page, qtbot, monkeypatch):
 def test_set_connected_ui_shows_remote_mark(rtt_page, qtbot):
     """_set_connected_ui 收到 remote_addr 时，显示区应追加蓝色远程连接提示行。"""
     import ui.rtt_monitor_page as rtt_mod
+
     page, worker, _ = rtt_page
     info = worker.get_device_info()
     info["remote_addr"] = "192.168.79.1:19020"
@@ -835,6 +887,7 @@ def test_startup_restore_remote_mode(isolated_appdata, qtbot):
     """cfg jlink_mode=remote 时，首次枚举后应恢复远程输入框并选中远程项。"""
     from core.config_service import ConfigService
     from ui.rtt_monitor_page import RTTMonitorPage
+
     cfg = ConfigService()
     cfg.set("jlink_mode", "remote")
     cfg.set("last_remote_host", "jlink.local")
@@ -898,7 +951,8 @@ def test_devices_enumerated_skips_rebuild_when_unchanged(rtt_page, qtbot):
 def test_probe_remote_reachability_throttled(rtt_page, qtbot):
     """400ms 内重复调用 _probe_remote_reachability 应被节流。"""
     import time
-    page, worker, _ = rtt_page
+
+    page, _worker, _ = rtt_page
     page.le_remote_host.setText("127.0.0.1")
     page.le_remote_port.setText("19020")
     page._last_remote_probe_ts = time.monotonic()
@@ -945,7 +999,6 @@ def test_conn_panel_controls_aligned_fixed_width(rtt_page, qtbot):
     qtbot.wait(20)
 
     controls = [
-        page.cb_jlink,
         page.cb_target,
         page.le_remote_host,
         page.le_remote_port,
@@ -956,6 +1009,10 @@ def test_conn_panel_controls_aligned_fixed_width(rtt_page, qtbot):
         assert w.width() == 200, f"{w.objectName()} width={w.width()} != 200"
         assert w.minimumWidth() == 200, f"{w.objectName()} minWidth != 200"
         assert w.maximumWidth() == 200, f"{w.objectName()} maxWidth != 200"
+    # cb_jlink 因显示 product:serial 放宽到 260
+    assert page.cb_jlink.width() == 260, f"cb_jlink width={page.cb_jlink.width()} != 260"
+    assert page.cb_jlink.minimumWidth() == 260
+    assert page.cb_jlink.maximumWidth() == 260
 
     assert page._lbl_target.text() == page.tr("目标设备:")
     assert page._jlink_status_dot.parentWidget() is not page.cb_jlink

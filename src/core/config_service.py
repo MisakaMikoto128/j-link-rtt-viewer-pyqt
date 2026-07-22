@@ -6,6 +6,7 @@
 3. 写入用 atomic replace（写 .tmp + os.replace）
 4. theme/theme_color/font 改动 emit 信号，UI 热应用
 """
+
 from __future__ import annotations
 
 import json
@@ -21,17 +22,19 @@ from .logger import get_logger
 
 
 class ConfigService(QObject):
-    theme_changed = Signal(str)             # "light" / "dark" / "auto"
-    theme_color_changed = Signal(str)       # hex e.g. "#28afe9"
-    font_changed = Signal(str, int)         # (family, size) — RTT 显示区字体
+    theme_changed = Signal(str)  # "light" / "dark" / "auto"
+    theme_color_changed = Signal(str)  # hex e.g. "#28afe9"
+    font_changed = Signal(str, int)  # (family, size) — RTT 显示区字体
     memory_font_size_changed = Signal(int)  # 内存页 hex dump 字号（family 与 RTT 共用 font_family）
-    ui_font_size_changed = Signal(int)       # 全局界面字号（按钮/标签/发送框等非等宽区；RTT/内存显示区各自覆盖）
-    ui_font_family_changed = Signal(str)    # 全局界面字体 family（同上覆盖范围）
-    max_display_lines_changed = Signal(int) # new max block count for QPlainTextEdit
-    rtt_poll_interval_changed = Signal(int) # poll timer interval in ms
-    rtt_encoding_changed = Signal(str)      # RTT 解码编码（utf-8 / gbk / utf-16-le / latin-1 / ascii）
-    reset_mode_changed = Signal(str)        # "normal" / "auto_reconnect" — RTT 页用来更新按钮文字
-    language_changed = Signal(str)          # "zh_CN" / "zh_TW" / "ja" / "ko" / "en" / "fr"
+    ui_font_size_changed = Signal(
+        int
+    )  # 全局界面字号（按钮/标签/发送框等非等宽区；RTT/内存显示区各自覆盖）
+    ui_font_family_changed = Signal(str)  # 全局界面字体 family（同上覆盖范围）
+    max_display_lines_changed = Signal(int)  # new max block count for QPlainTextEdit
+    rtt_poll_interval_changed = Signal(int)  # poll timer interval in ms
+    rtt_encoding_changed = Signal(str)  # RTT 解码编码（utf-8 / gbk / utf-16-le / latin-1 / ascii）
+    reset_mode_changed = Signal(str)  # "normal" / "auto_reconnect" — RTT 页用来更新按钮文字
+    language_changed = Signal(str)  # "zh_CN" / "zh_TW" / "ja" / "ko" / "en" / "fr"
     background_image_path_changed = Signal(str)
     background_opacity_changed = Signal(float)
     background_fill_mode_changed = Signal(str)
@@ -40,12 +43,12 @@ class ConfigService(QObject):
         "target_mcu": "",
         "interface": "SWD",
         "speed_khz": 4000,
-        "rtt_channel": 0,            # -1 = 全部通道视图（UI 显示为「全部通道」）；>=0 = 具体通道
+        "rtt_channel": 0,  # -1 = 全部通道视图（UI 显示为「全部通道」）；>=0 = 具体通道
         "rtt_channel_history_chars": 200000,  # 每通道历史缓存上限（字符数），超出丢弃最旧
         "send_history": [],
-        "theme": "auto",            # light / dark / auto
+        "theme": "auto",  # light / dark / auto
         "theme_color": "#28afe9",
-        "language": "zh_CN",        # zh_CN / zh_TW / ja / ko / en / fr
+        "language": "zh_CN",  # zh_CN / zh_TW / ja / ko / en / fr
         "font_family": "Consolas",
         "font_size": 13,
         # 内存页 hex dump 字号（family 沿用 font_family）
@@ -57,14 +60,14 @@ class ConfigService(QObject):
         # 覆盖范围同 ui_font_size（_custom_font 标记的 RTT/内存显示区不受影响）。
         "ui_font_family": "",
         "max_display_lines": 10000,
-        "rtt_poll_interval_ms": 100,   # RTT 轮询间隔（ms）—— 旧版叫 rx_timeout_ms，已迁移
-        "rtt_encoding": "utf-8",       # RTT 解码编码：utf-8 / gbk / utf-16-le / latin-1 / ascii
+        "rtt_poll_interval_ms": 100,  # RTT 轮询间隔（ms）—— 旧版叫 rx_timeout_ms，已迁移
+        "rtt_encoding": "utf-8",  # RTT 解码编码：utf-8 / gbk / utf-16-le / latin-1 / ascii
         # 换行符（系统级：发送「自动换行」追加字符 + 接收断行识别）：\r\n (CRLF) / \n (LF) / \r (CR)
         "send_line_ending": "\r\n",
         "send_script_index": 1,  # 脚本下拉框选中项（cb_crc_algo：CRC 算法索引 或 末项自动换行）
         "keep_screen_on": False,  # 保持屏幕常亮（防息屏）
-        "log_dir": "",              # 空 → 用默认 %APPDATA%/JLinkRTTViewer/logs
-        "window_geometry": "",      # base64 of QByteArray
+        "log_dir": "",  # 空 → 用默认 %APPDATA%/JLinkRTTViewer/logs
+        "window_geometry": "",  # base64 of QByteArray
         "hex_send_mode": False,
         "auto_scroll": True,
         "power_output": False,
@@ -115,27 +118,32 @@ class ConfigService(QObject):
         "flash_device_name": "STM32H750VB",
         "flash_interface": "SWD",
         "flash_speed": 4000,
-        "flash_bin_address": 0x08000000,        # bin 模式的起始地址
-        "flash_erase_mode": "sector",           # "sector" | "chip"
-        "flash_post_action": "reset_run",       # "none" | "reset" | "reset_run"
-        "flash_verify": False,                  # extra byte-by-byte verify
-        "flash_recent_files": [],               # 最多 10 个，时间倒序
-        "flash_recent_files_mtime": {},         # path → mtime（float），用于变更提示
+        "flash_bin_address": 0x08000000,  # bin 模式的起始地址
+        "flash_erase_mode": "sector",  # "sector" | "chip"
+        "flash_post_action": "reset_run",  # "none" | "reset" | "reset_run"
+        "flash_verify": False,  # extra byte-by-byte verify
+        "flash_recent_files": [],  # 最多 10 个，时间倒序
+        "flash_recent_files_mtime": {},  # path → mtime（float），用于变更提示
         # 烧录页选定的 J-Link serial（离线时红点占位）
         "flash_jlink_serial": "",
         # 烧录页 J-Link 模式："usb" | "remote"
         "flash_jlink_mode": "usb",
         "flash_remote_host": "",
         "flash_remote_port": "",
+        # 烧录器信息缓存：serial -> {"kind": str, "product": str}
+        # 用于离线/未识别时仍能显示上次见过的 kind+product，避免 label 退化为裸 serial。
+        "flash_burner_cache": {},
         # === 背景图片（v0.3.0 新增）===
-        "background_image_path": "",      # 空串 = 未启用，使用默认 Fluent 背景
-        "background_opacity": 0.3,       # 0.0 ~ 1.0
+        "background_image_path": "",  # 空串 = 未启用，使用默认 Fluent 背景
+        "background_opacity": 0.3,  # 0.0 ~ 1.0
         "background_fill_mode": "cover",  # stretch / cover / center / tile
     }
 
     SEND_HISTORY_MAX = 50
 
-    def __init__(self, bundled_config_path: Path | None = None, throttle_ms: int = 200, parent=None):
+    def __init__(
+        self, bundled_config_path: Path | None = None, throttle_ms: int = 200, parent=None
+    ):
         super().__init__(parent)
         self._logger = get_logger()
         self._bundled_path = bundled_config_path or (
@@ -252,7 +260,7 @@ class ConfigService(QObject):
             )
             return
         if key == "send_history":
-            value = [str(x) for x in value][-self.SEND_HISTORY_MAX:]
+            value = [str(x) for x in value][-self.SEND_HISTORY_MAX :]
 
         if self._data.get(key) == value:
             return  # 值未变：什么都不做（既不写盘也不发信号，避免双向绑定无限递归）

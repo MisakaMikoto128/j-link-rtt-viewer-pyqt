@@ -890,29 +890,68 @@ self.btn_reset_halt.setText(self.tr("重置并暂停"))
 
 ---
 
-## 烧录器下拉：cfg serial 与在线设备不匹配时必须自动选在线设备，不能卡在离线占位
+## 烧录器下拉：cfg serial 与在线设备不匹配时保持离线占位 + 红点（已订正）
 
-**现象**：CMSIS-DAP 明明插着，打开软件下拉里也显示「CMSIS-DAP: 0037...」，但状态红点不灭、烧录被"不在线"拦截，必须手动点开下拉重选一次才好。只在重新打开软件后出现，烧录中途拔插正常。
+**现象（订正前）**：CMSIS-DAP 明明插着，打开软件下拉里也显示「CMSIS-DAP: 0037...」，但状态红点不灭、烧录被"不在线"拦截，必须手动点开下拉重选一次才好。只在重新打开软件后出现，烧录中途拔插正常。
 
-**原因**：`_rebuild_burner_combo` 恢复选中时，`prev_serial`（cfg 存的 `flash_jlink_serial`）若不在 items（`_find_burner_index_by_serial` 返回 -1），原实现一律走"离线占位"分支：`setText(prev_serial)` + readOnly + 红点。但 app 是 J-Link RTT Viewer，`flash_jlink_serial` 很可能存的是 **J-Link** 的 serial（RTT / 上次烧 J-Link 留下），用户改用 CMSIS-DAP（不同 serial）时，cfg serial 永远不在 `_pyocd_probes` 里 -> 离线占位永久卡住，红点不灭。设备其实在线（下拉里有），只是被 cfg 的旧 serial "劫持"了。`_selected_serial` 真源（上一条）修了 combo 解析，但没修这个"cfg serial 与在线设备不匹配"的语义。
+**原因（订正前）**：两层问题叠在一起。根因层：`_rebuild_burner_combo` 重建后 programmatic `setCurrentIndex` 偶发不同步 `currentIndex()`/`currentText()`，`_current_burner()` 回退 `("jlink", currentText())` 拿到整条 label 而非裸 serial，label 匹配不上 `_pyocd_probes` -> `online=False` -> 红点不灭 + 烧录拦截。行为层：`prev_serial`（cfg 存的 `flash_jlink_serial`）不在 items 时原走"离线占位"，但 app 是 J-Link RTT Viewer，`flash_jlink_serial` 常存 J-Link serial，用户改用 CMSIS-DAP（不同 serial）时 cfg serial 永不在 `_pyocd_probes` -> 离线占位永久卡住。
 
-**处理**：`_rebuild_burner_combo` 的 `elif prev_serial:` 分支，`idx < 0`（cfg serial 不在线）时**先看有没有在线设备**：
+**处理（订正 2026-07-21）**：根因层不变（详见上一条「programmatic setCurrentIndex 后别靠 combo 状态解析」）--选中状态用显式真源 `self._selected_serial` / `self._selected_kind`，`_current_burner()` 优先读 combo `itemData(currentIndex)` 不可靠时回退真源，`setCurrentIndex(idx)` 后补 `setText(itemText(idx))` 强制 lineEdit 同步。行为层**改为统一保持选中**：`elif prev_serial:` 内 `idx<0`（不在线）时一律走离线占位，删除"存在其它在线设备则自动选第一个"的子分支。
 ```python
 elif prev_serial:
     idx = self._find_burner_index_by_serial(prev_serial)
     if idx >= 0:
-        # cfg serial 在线 -> 选中它
-        ...
-    elif self._jlink_serials or self._pyocd_probes:
-        # cfg serial 不在线，但有其它在线设备 -> 自动选第一个（index 1）
-        setCurrentIndex(1) + setText(itemText(1)) + _selected_serial=itemData(1)[1]
+        # 在线 -> 选中（重插后由此分支自动选中回来）
+        setCurrentIndex(idx) + setText(itemText(idx)) + _selected_serial=prev_serial
     else:
-        # 无任何在线设备 -> 离线占位（等用户插上 prev 指定的设备）
+        # 不在线 -> 保持 prev_serial 占位 + 只读 + 红点（不切换到其它在线设备）
         setText(prev_serial) + readOnly + _selected_serial=prev_serial
 ```
-判别：用户报"设备在下拉里但红点不灭、必须手点"，且只在重启后出现 -> 查 cfg serial 是否与当前设备匹配；不匹配就走自动选在线设备。诊断方法：写 scratch repro（stub `enumerate_pyocd_probes` 返回设备 + cfg 存不同 serial），跑真实 MainWindow 3s 看 `_selected_serial` / `_burner_status_dot` 状态--`scratch/repro_bug1.py`。
+不变量：用户 / cfg 已确定的选中不被"存在其它在线设备"覆盖；设备拔掉后红点提示离线，重插后自动选中回来。重启后 cfg serial 不在线也同理保持占位（用户"哪怕重启也显示刚刚选中的设备"）。
 
-参考：`src/ui/flash_page.py` `_rebuild_burner_combo` `elif prev_serial:` 三分支、`tests/test_flash_page.py` `test_stale_cfg_serial_auto_selects_online_device`、`scratch/repro_bug1.py`。
+判别：用户报"选中某设备后拔掉，combo 自动切到别的烧录器"-> 查 `elif prev_serial:` 的 `idx<0` 分支是否还残留"自动选第一个"子分支，有则删。原始的"红点不灭 + 必须手点"现象由根因层（真源字段）修复，与行为层无关。
+
+参考：`src/ui/flash_page.py` `_rebuild_burner_combo` `elif prev_serial:` 分支、`tests/test_flash_page.py` `test_offline_cfg_holds_placeholder_when_other_devices_online` / `test_selected_device_disconnected_holds_placeholder`、`scratch/repro_bug1.py`。
+
+---
+
+## 烧录器下拉 label：单点真源 + 离线占位保留 kind/product 前缀
+
+**现象**：用户选中 ST-Link 后拔掉，combo 显示从 `ST-Link (STLinkV3): ST_SN` 退化成裸 serial `ST_SN`（前缀全丢）。
+
+**原因**：离线占位分支 `setText(prev_serial)` 用裸 serial；且 `self._selected_kind = self._lookup_burner_kind(prev_serial)` 把断开前记录的 kind 覆盖成空（离线查不到）。label 生成逻辑还散落在在线 items 构建处（`f"CMSIS-DAP: {serial}"` / `f"ST-Link: {serial}"`）和离线占位两处。
+
+**处理**：
+1. 抽 `_burner_label(kind, serial, product)` 单点真源，在线 items 和离线占位共用。在线带 product 后缀（`CMSIS-DAP (DAPLink): serial` / `ST-Link (STLinkV3): serial`）。
+2. 离线占位用 `_selected_kind` / `_selected_product`（断开前记录）重建 label，**不覆盖**（`_lookup_*` 离线返回空会丢真实值）。
+3. 新增 `_selected_product` 字段，在各选中路径（`_on_burner_selection_changed` / 在线 idx>=0 / 默认选第一个 / remote）同步。
+
+不变量：在线 label = `_burner_label(kind, serial, product)`；离线占位 label = `_burner_label(_selected_kind, prev_serial, _selected_product)`，拔掉前后 label 一致。cfg 恢复阶段（`_selected_kind` 仍空）离线占位退化为裸 serial--无 kind 信息源，属可接受边界（运行中选中 / cfg 在线恢复后断开均带前缀）。
+
+判别：凡"label 在某状态下退化为裸 serial"-> 查是否用了裸 serial setText，或覆盖了 kind/product 真源。
+
+参考：`src/ui/flash_page.py` `_burner_label` / `_lookup_burner_product` / `_rebuild_burner_combo` 离线占位分支、`tests/test_flash_page.py` `test_selected_device_disconnected_holds_placeholder`。
+
+---
+
+## 烧录器下拉：单向数据流（combo 显示 / 真源 选中），_current_burner() 只读真源
+
+**现象**：用户选中 ST-Link 后拔掉它（其它烧录器仍在线），combo 偶发自动切到 DAPLink/J-Link，不总是触发。曾用 `setCurrentIndex(-1)` + `currentText` 校验"双重保险"兜底，但仍偶发--说明根因未定位。
+
+**原因（订正）**：combo 有两个真源--combo 的 `currentIndex`/`currentText`（QComboBox 内部状态）和 `self._selected_*`（Python 真源）。`_current_burner()` 在两者间选择（优先 combo `itemData`，回退真源），这个"选择"动作是 bug 源。`clear` + 重建时 combo 的 `currentIndex` 偶发 stale（qfluentwidgets 偶发不同步，CLAUDE.md 另有条目），`_current_burner()` 读它就误命中别的设备（旧 index 恰好命中新 combo 同位置的在线设备，如 ST-Link 原在 index 3、拔掉后 DAPLink 升到 index 3）。"双重保险"只是在选错后打补丁，没消除"选"的动作。
+
+**处理（重新设计为单向数据流）**：
+- combo 只负责显示 + 捕获用户点选。
+- `_selected_kind`/`_selected_serial`/`_selected_product` 是选中状态的唯一真源。
+- `_on_burner_selection_changed`（用户点选触发，`blockSignals` 拦截重建）是**唯一**的 combo -> 真源同步点：直接读 combo `itemData`（用户点选时 combo 状态可靠，非 programmatic）同步真源。
+- `_rebuild_burner_combo` 是真源 -> combo 的同步点：按真源恢复显示，`prev_serial` 直接读 `self._selected_serial`（不经 `_current_burner()`）。
+- `_current_burner()` **只读真源**，完全不碰 combo `currentIndex`/`itemData`。
+
+不变量：combo 的 `currentIndex` stale 不影响任何逻辑判断（`_current_burner()` 不读它），偶发切换根除，无需任何"保险"。`setCurrentIndex(-1)` 在离线占位保留，仅为 combo 下拉高亮正确（显示层），非逻辑依赖。
+
+判别：凡"combo 选中状态有两个真源、`_current_burner()` 在 combo/真源间选"-> 改单向数据流：`_current_burner()` 只读真源，combo -> 真源 只在用户点选槽同步。"双重保险"/"兜底"是设计错误的信号，应重构而非加补丁。
+
+参考：`src/ui/flash_page.py` `_current_burner`（只读真源）/ `_on_burner_selection_changed`（combo -> 真源）/ `_rebuild_burner_combo`（真源 -> combo）、`tests/test_flash_page.py` `test_current_burner_reads_truth_source_not_combo`。
 
 ---
 
