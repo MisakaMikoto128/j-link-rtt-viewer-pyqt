@@ -72,6 +72,7 @@ class FlashParams:
     jlink_serial: str = ""  # 指定烧录器 serial；空/"0" 表示未指定
     remote_addr: str = ""  # 远程模式 "ip:port"；空 = 本地 USB
     burner_kind: str = BURNER_KIND_JLINK  # 烧录器类型，见 probe.base.BURNER_KIND_*
+    erase_only: bool = False  # True = 只整片擦除不烧录（复用完整连接/断开流程）
 
 
 class FlashWorker(QObject):
@@ -178,12 +179,11 @@ class FlashWorker(QObject):
     def _run_flash_impl(self, p: FlashParams) -> None:
         self.flash_started.emit()
         self._t_start = time.time()
-        self.flash_log.emit("info", "=== Flash session ===")
-        self.flash_log.emit("info", f"File: {p.file_path} ({p.file_format})")
+        erase_only = p.erase_only
+        self.flash_log.emit("info", "=== Flash session ===" + ("（仅整片擦除）" if erase_only else ""))
+        if not erase_only:
+            self.flash_log.emit("info", f"File: {p.file_path} ({p.file_format})")
         self.flash_log.emit("info", f"Device: {p.device_name} | {p.interface} @ {p.speed_khz} kHz")
-        self.flash_log.emit(
-            "info", f"Options: erase={p.erase_mode} post={p.post_action} verify={p.extra_verify}"
-        )
         backend = None
         try:
             backend = make_backend(p.burner_kind, self._log)
@@ -200,38 +200,45 @@ class FlashWorker(QObject):
                 extra_verify=p.extra_verify,
                 serial=p.jlink_serial,
                 remote_addr=p.remote_addr,
+                erase_only=erase_only,
             )
 
             self.flash_stage_changed.emit(STAGE_CONNECT)
             backend.connect(probe_params)
 
-            if p.erase_mode == ERASE_MODE_CHIP:
+            if erase_only:
+                # 只整片擦除不烧录：复用完整 连接→断开 流程，跳过 program/verify/reset。
                 self.flash_stage_changed.emit(STAGE_ERASE)
-                backend.erase(p.erase_mode)
+                backend.erase(ERASE_MODE_CHIP)
                 self.flash_log.emit("info", "chip erase OK")
+            else:
+                if p.erase_mode == ERASE_MODE_CHIP:
+                    self.flash_stage_changed.emit(STAGE_ERASE)
+                    backend.erase(p.erase_mode)
+                    self.flash_log.emit("info", "chip erase OK")
 
-            self.flash_stage_changed.emit(STAGE_PROGRAM)
-            backend.program(on_progress=self._on_progress)
-            self.flash_log.emit("info", "program OK")
+                self.flash_stage_changed.emit(STAGE_PROGRAM)
+                backend.program(on_progress=self._on_progress)
+                self.flash_log.emit("info", "program OK")
 
-            if p.extra_verify:
-                self.flash_stage_changed.emit(STAGE_VERIFY)
-                backend.verify()
-                self.flash_log.emit("info", "extra verify OK")
+                if p.extra_verify:
+                    self.flash_stage_changed.emit(STAGE_VERIFY)
+                    backend.verify()
+                    self.flash_log.emit("info", "extra verify OK")
 
-            if p.post_action in (POST_ACTION_RESET, POST_ACTION_RESET_RUN):
-                self.flash_stage_changed.emit(STAGE_RESET)
-                backend.reset(
-                    halt=(p.post_action == POST_ACTION_RESET),
-                    run=(p.post_action == POST_ACTION_RESET_RUN),
-                )
+                if p.post_action in (POST_ACTION_RESET, POST_ACTION_RESET_RUN):
+                    self.flash_stage_changed.emit(STAGE_RESET)
+                    backend.reset(
+                        halt=(p.post_action == POST_ACTION_RESET),
+                        run=(p.post_action == POST_ACTION_RESET_RUN),
+                    )
 
             self.flash_stage_changed.emit(STAGE_DISCONNECT)
             backend.close()
 
             elapsed = time.time() - self._t_start
             self.flash_log.emit("info", f"=== Done ({elapsed:.1f}s) ===")
-            self.flash_finished.emit(True, "烧录成功")
+            self.flash_finished.emit(True, "整片擦除完成" if erase_only else "烧录成功")
 
         except Exception as e:
             self.flash_log.emit("error", f"{type(e).__name__}: {e}")

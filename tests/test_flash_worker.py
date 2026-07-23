@@ -121,6 +121,23 @@ def test_run_flash_success_elf_sector_reset_run(monkeypatch, qapp):
     assert log[-1] == ("finished", True, "烧录成功")
 
 
+def test_run_flash_erase_only_skips_program(monkeypatch, qapp):
+    """erase_only=True：连接 -> 整片擦除 -> 断开，跳过 program/verify/reset。"""
+    fake_jlink = MagicMock()
+    fake_jlink.opened.return_value = True
+    w = _make_worker(monkeypatch, fake_jlink)
+    log = _collect_signals(w)
+    w._run_flash(_params_default(erase_only=True))
+    qapp.processEvents()
+    stages = [e[1] for e in log if e[0] == "stage"]
+    assert stages == [STAGE_CONNECT, STAGE_ERASE, STAGE_DISCONNECT]
+    fake_jlink.erase.assert_called_once()          # 整片擦除
+    fake_jlink.flash_file.assert_not_called()      # 不烧录
+    fake_jlink.reset.assert_not_called()
+    fake_jlink.restart.assert_not_called()
+    assert log[-1] == ("finished", True, "整片擦除完成")
+
+
 def test_run_flash_bin_uses_bin_start_addr(monkeypatch, qapp):
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True

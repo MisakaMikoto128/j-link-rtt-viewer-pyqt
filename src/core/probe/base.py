@@ -106,6 +106,7 @@ class ProbeParams:
     extra_verify: bool
     serial: str = ""          # USB serial；空/"0" = 未指定
     remote_addr: str = ""     # 远程 "ip:port"；空 = 本地 USB
+    erase_only: bool = False  # True = 只整片擦除不烧录（复用完整连接/断开流程）
 
 
 # ============================================================

@@ -33,6 +33,7 @@ from qfluentwidgets import (
     EditableComboBox,
     InfoLevel,
     LineEdit,
+    MessageBox,
     PlainTextEdit,
     PrimaryPushButton,
     PushButton,
@@ -161,9 +162,8 @@ class FlashPage(QWidget):
         v.setContentsMargins(12, 12, 12, 12)
         v.setSpacing(12)
 
-        v.addWidget(self._build_conn_card())
+        v.addWidget(self._build_conn_options_row())
         v.addWidget(self._build_file_card())
-        v.addWidget(self._build_options_card())
         v.addWidget(self._build_run_card())
         v.addWidget(self._build_symbol_card())
         v.addStretch(1)
@@ -174,6 +174,21 @@ class FlashPage(QWidget):
         self._on_target_device_changed(self.cmb_device.currentText())
 
     # ---- card builders (占位，下一 Task 填实) ----
+    def _build_conn_options_row(self) -> QWidget:
+        """「连接参数」+「烧录选项」两卡片同一行，等高（取较高者），不合并卡片。"""
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(12)
+        conn = self._build_conn_card()
+        opts = self._build_options_card()
+        # 内容少的卡片加 stretch 撑高，使两卡片视觉等高
+        conn.layout().addStretch(1)
+        opts.layout().addStretch(1)
+        h.addWidget(conn, 1)
+        h.addWidget(opts, 1)
+        return row
+
     def _build_conn_card(self) -> QWidget:
         card = CardWidget()
         layout = QVBoxLayout(card)
@@ -360,6 +375,11 @@ class FlashPage(QWidget):
         self.btn_flash.setMinimumHeight(36)
         layout.addWidget(self.btn_flash)
 
+        # 全片擦除：复用烧录完整流程（连接→RTT协调→整片擦除→断开），不烧录。
+        self.btn_erase_chip = PushButton(self.tr("全片擦除"))
+        self.btn_erase_chip.setMinimumHeight(32)
+        layout.addWidget(self.btn_erase_chip)
+
         row = QHBoxLayout()
         self.lbl_stage = BodyLabel(self.tr("待命"))
         row.addWidget(self.lbl_stage)
@@ -381,6 +401,8 @@ class FlashPage(QWidget):
         self.txt_log = PlainTextEdit()
         self.txt_log.setReadOnly(True)
         self.txt_log.setMaximumBlockCount(1000)
+        # 详情文本框高度翻倍（默认约 6 行 ~100px -> 200px）
+        self.txt_log.setMinimumHeight(200)
         self.txt_log.setVisible(False)
         layout.addWidget(self.txt_log)
         return card
@@ -487,7 +509,8 @@ class FlashPage(QWidget):
         self.btn_copy_log.clicked.connect(self._copy_log)
 
         # worker → ui（QueuedConnection 显式声明：CLAUDE.md 跨线程信号约定）
-        self.btn_flash.clicked.connect(self._on_start_flash)
+        self.btn_flash.clicked.connect(lambda: self._on_start_flash(False))
+        self.btn_erase_chip.clicked.connect(self._on_erase_chip_clicked)
         self._worker.flash_started.connect(self._on_flash_started, _Qt.QueuedConnection)
         self._worker.flash_stage_changed.connect(self._on_stage_changed, _Qt.QueuedConnection)
         self._worker.flash_progress.connect(self._on_progress, _Qt.QueuedConnection)
@@ -994,22 +1017,45 @@ class FlashPage(QWidget):
         QApplication.clipboard().setText(header + self.txt_log.toPlainText())
         _infobar.info(self, self.tr("已复制日志到剪贴板"), "")
 
-    def _on_start_flash(self) -> None:
+    def _on_erase_chip_clicked(self) -> None:
+        """全片擦除按钮：先弹确认框防误点，确认后走烧录流程（erase_only=True）。"""
+        if self._is_running:
+            return
+        device = self.cmb_device.currentText().strip() or self.tr("（未填设备）")
+        box = MessageBox(
+            self.tr("确认全片擦除"),
+            self.tr("将擦除 {device} 的整个 Flash，此操作不可恢复。\n确定继续吗？").format(
+                device=device
+            ),
+            self.window(),
+        )
+        box.yesButton.setText(self.tr("擦除"))
+        box.cancelButton.setText(self.tr("取消"))
+        if box.exec():
+            self._on_start_flash(erase_only=True)
+
+    def _on_start_flash(self, erase_only: bool = False) -> None:
+        """开始烧录 / 全片擦除。
+
+        erase_only=True 时复用完整流程（连接 → RTT 同设备协调 → 整片擦除 → 断开），
+        只是固定 chip 擦除且不烧录。无需固件文件。
+        """
         if self._is_running:
             return
 
         path = self.cmb_file.currentText().strip()
-        if not path:
-            _infobar.warn(self, self.tr("未选择文件"), self.tr("请先选择 .axf/.elf/.hex/.bin 文件"))
-            return
-        if not os.path.exists(path):
-            _infobar.warn(self, self.tr("文件不存在"), path)
-            return
+        if not erase_only:
+            if not path:
+                _infobar.warn(self, self.tr("未选择文件"), self.tr("请先选择 .axf/.elf/.hex/.bin 文件"))
+                return
+            if not os.path.exists(path):
+                _infobar.warn(self, self.tr("文件不存在"), path)
+                return
 
         from core import flash_file_parser as fp
 
         try:
-            fmt = fp.detect_format(path)
+            fmt = fp.detect_format(path) if path else FORMAT_BIN
         except fp.FileParseError as e:
             _infobar.error(self, self.tr("格式不支持"), str(e))
             return
@@ -1031,6 +1077,11 @@ class FlashPage(QWidget):
         erase_mode = _ERASE_LABELS[self.cmb_erase.currentIndex()][1]
         post_action = _POST_LABELS[self.cmb_post.currentIndex()][1]
         verify = self.chk_verify.isChecked()
+        if erase_only:
+            # 全片擦除：固定 chip 擦除，不做烧录后动作/校验
+            erase_mode = ERASE_MODE_CHIP
+            post_action = POST_ACTION_NONE
+            verify = False
 
         # ---- 本地 / 远程 烧录器参数分支 ----
         remote_addr = ""
@@ -1081,6 +1132,7 @@ class FlashPage(QWidget):
             jlink_serial=burner_serial,
             remote_addr=remote_addr,
             burner_kind=burner_kind,
+            erase_only=erase_only,
         )
         self._worker.set_pending_params(params)
 
@@ -1153,6 +1205,7 @@ class FlashPage(QWidget):
         self._stage_key = "done" if ok else "failed"
         self._set_inputs_enabled(True)
         self.btn_flash.setText(self.tr("开始烧录"))
+        self.btn_erase_chip.setText(self.tr("全片擦除"))
         self._set_rtt_busy(False)
 
         if self._resume_rtt_after_flash:
@@ -1176,7 +1229,7 @@ class FlashPage(QWidget):
         if ok:
             self.lbl_stage.setText(self.tr("完成 ✓"))
             self.progress.setValue(100)
-            _infobar.success(self, self.tr("烧录成功"), summary)
+            _infobar.success(self, self.tr("操作成功"), summary)
         else:
             self.lbl_stage.setText(self.tr("失败 ✖"))
             # 失败时自动展开详情 + 写固定建议文案
@@ -1185,7 +1238,7 @@ class FlashPage(QWidget):
             self.txt_log.appendPlainText(
                 self.tr("⚠ Flash 已部分擦除/写入，建议下次用「整片擦除」重烧")
             )
-            _infobar.error(self, self.tr("烧录失败"), summary)
+            _infobar.error(self, self.tr("操作失败"), summary)
 
     def _set_inputs_enabled(self, enabled: bool) -> None:
         for w in (
@@ -1206,6 +1259,7 @@ class FlashPage(QWidget):
         ):
             w.setEnabled(enabled)
         self.btn_flash.setEnabled(enabled)
+        self.btn_erase_chip.setEnabled(enabled)
 
     # ---- i18n ----
     def changeEvent(self, event: QEvent) -> None:
@@ -1242,6 +1296,7 @@ class FlashPage(QWidget):
             self.btn_flash.setText(self.tr("烧录中…"))
         else:
             self.btn_flash.setText(self.tr("开始烧录"))
+        self.btn_erase_chip.setText(self.tr("全片擦除"))
         vis_log = self.txt_log.isVisible()
         self.btn_toggle_log.setText(self.tr("▼ 详情") if vis_log else self.tr("▶ 详情"))
 

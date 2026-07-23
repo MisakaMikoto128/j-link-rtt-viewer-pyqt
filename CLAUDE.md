@@ -1032,3 +1032,17 @@ class _SignalSpy(QObject):
 **已知边界**：最大区域规则对「内部小 Flash + 外部大 QSPI」的型号（如 STM32H750VB 内部 128KB + 外部 256MB @0x90000000）会选外部 QSPI。若要"内部 Flash"语义需另加规则，本条只修 legacy 字段垃圾的问题。
 
 参考：`src/core/target_discovery.py` `_pick_main_region` / `get_pylink_target_infos`、`tests/test_target_discovery.py` `test_pick_main_region_*`。
+
+---
+
+## 全片擦除复用烧录流程：加 `erase_only` 标记贯穿，而不是另写一套
+
+**需求**：全片擦除按钮 = 完整烧录流程（连接 → RTT 同设备协调 → 整片擦除 → 断开），只是固定 chip 擦除且不烧录；不同烧录器自然对应 pylink/pyOCD；自动断开/回连 RTT。
+
+**处理**：不另起编排，给 `FlashParams` + `ProbeParams` 加 `erase_only: bool = False`，贯穿已有链路：
+- UI `_on_start_flash(erase_only=False)`：仅 `erase_only=False` 时校验固件文件存在；`erase_only=True` 时强制 `erase_mode=chip / post_action=none / extra_verify=False`、`file_path=""`。RTT 同设备协调（disconnect/resume）完全复用，无需改。
+- worker `_run_flash_impl`：`erase_only` 分支只 `connect → erase(chip) → close`，跳过 program/verify/reset，完成信号文案「整片擦除完成」。backend 按 `burner_kind` 由 `make_backend` 派发，pylink/pyOCD 自然各走各的。
+
+**判别**：凡「某操作 = 已有流程的子集/变体」，优先加一个贯穿标记复用主流程，别复制编排（复制会漏掉 RTT 协调这类隐性步骤）。确认对话框（防误点）放按钮 handler，不进 `_on_start_flash`——保持流程函数可编程调用、可测。
+
+参考：`src/core/flash_worker.py` `FlashParams.erase_only` / `_run_flash_impl`、`src/ui/flash_page.py` `_on_erase_chip_clicked` / `_on_start_flash`、`src/core/probe/base.py` `ProbeParams.erase_only`。

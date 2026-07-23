@@ -509,3 +509,56 @@ def test_start_flash_after_replug_emits_flash_requested(flash_page, fixtures_dir
     flash_page.btn_flash.click()
     _process()
     assert spy.count == 1  # 在线 -> 发 flash_requested
+
+
+# ------------------------------------------------------------------
+# 全片擦除（erase_only）
+# ------------------------------------------------------------------
+
+
+def test_erase_only_params_forced_chip_no_program(flash_page):
+    """erase_only：固定 chip 擦除 + 无烧录后动作/校验，且无需固件文件。"""
+    flash_page.cmb_device.setText("STM32F030C8")
+    flash_page._jlink_serials.append("111")
+    flash_page._selected_kind = "jlink"
+    flash_page._selected_serial = "111"
+    # 不选固件文件（erase_only 不需要）
+    flash_page._on_start_flash(erase_only=True)
+    pp = flash_page._worker._pending_params
+    assert pp is not None
+    assert pp.erase_only is True
+    assert pp.erase_mode == "chip"
+    assert pp.post_action == "none"
+    assert pp.extra_verify is False
+    assert pp.file_path == ""
+
+
+def test_start_flash_normal_requires_file(flash_page):
+    """正常烧录（erase_only=False）未选文件时拦截，不发 flash_requested。"""
+    flash_page.cmb_device.setText("STM32F030C8")
+    spy = _SignalSpy(flash_page._worker.flash_requested)
+    flash_page._on_start_flash(False)
+    _process()
+    assert spy.count == 0
+    assert flash_page._worker._pending_params is None
+
+
+def test_conn_and_options_cards_same_row_equal_height(flash_page):
+    """「连接参数」+「烧录选项」两卡片同一行、不合并、等高。"""
+    conn = flash_page.lbl_conn_title.parentWidget()
+    opts = flash_page.lbl_options_title.parentWidget()
+    assert conn is not opts  # 不合并卡片
+    assert conn.parentWidget() is opts.parentWidget()  # 同一行容器
+    # 等高：父 row 用同一 stretch + 各卡片 addStretch 撑高
+    assert conn.sizePolicy().verticalPolicy() == opts.sizePolicy().verticalPolicy()
+
+
+def test_detail_log_height_doubled(flash_page):
+    """烧录详情文本框最小高度翻倍（200px）。"""
+    assert flash_page.txt_log.minimumHeight() >= 200
+
+
+def test_erase_chip_button_present(flash_page):
+    """开始烧录按钮下方有「全片擦除」按钮。"""
+    assert flash_page.btn_erase_chip is not None
+    assert flash_page.btn_erase_chip.text() == flash_page.tr("全片擦除")
