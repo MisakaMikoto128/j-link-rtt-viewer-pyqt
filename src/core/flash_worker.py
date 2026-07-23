@@ -99,6 +99,11 @@ class FlashWorker(QObject):
         self._pending_params: FlashParams | None = None
         self._params_lock = threading.Lock()
         self._t_start: float = 0.0
+        # worker 线程内串行访问：_run_flash 进行中置 True。UI 已用 _set_inputs_enabled
+        # 挡住重复点烧录；此处是双保险——多余的 flash_requested 立即拒绝 emit
+        # flash_finished(False)，不排队等前一次烧完（远程 connect 卡 3s DLL 时
+        # 排队会拖长测试 teardown）。
+        self._busy = False
 
     def set_pending_params(self, params: FlashParams) -> None:
         """UI 线程调；GIL+lock 保护，不走 Qt 信号 marshalling。"""
@@ -151,6 +156,10 @@ class FlashWorker(QObject):
 
     @Slot()
     def _on_flash_requested(self) -> None:
+        if self._busy:
+            self.flash_log.emit("warn", "烧录进行中，忽略多余的 flash_requested")
+            self.flash_finished.emit(False, "busy")
+            return
         with self._params_lock:
             params = self._pending_params
             self._pending_params = None
@@ -160,6 +169,13 @@ class FlashWorker(QObject):
         self._run_flash(params)
 
     def _run_flash(self, p: FlashParams) -> None:
+        self._busy = True
+        try:
+            self._run_flash_impl(p)
+        finally:
+            self._busy = False
+
+    def _run_flash_impl(self, p: FlashParams) -> None:
         self.flash_started.emit()
         self._t_start = time.time()
         self.flash_log.emit("info", "=== Flash session ===")

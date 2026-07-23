@@ -995,3 +995,40 @@ class _SignalSpy(QObject):
 判别：spy 计数和实际 emit 对不上（尤其被测信号 owner 在 worker 线程）-> 换 QObject bound-method 槽。单测里被测信号 owner 在主线程时裸 lambda 也能用，但统一用 bound-method 槽最稳。
 
 参考：`tests/test_flash_page.py` `_SignalSpy`、`scratch/diag_bug1_flash.py`（同信号 QObject 槽 count=1、裸 lambda count=0 的对照实证）。
+
+---
+
+## pytestqt segfault：UI 测试别让真实 FlashWorker 碰 J-Link/pyOCD DLL，stub `make_backend`
+
+**现象**：`tests/test_flash_page.py` + `tests/test_flash_coordination.py` 连跑在 teardown 阶段 `Windows fatal exception: access violation`（EXIT=139），时好时坏；faulthandler 抓到栈在 `pylink/jlink.py:744 JLINKARM_OpenEx`（`jlink_backend.connect` -> `flash_worker._run_flash`）。
+
+**原因**：`test_remote_same_addr_disconnects_rtt_before_flash` 点烧录后，真实 `FlashWorker`（独立 QThread）走 `PylinkBackend.connect` 远程分支，`JLINKARM_OpenEx` 对不可达主机 `192.168.79.1:19020` 是约 3s 的阻塞 TCP connect。测试 teardown 只 `stop_requested.emit() + thread.wait(3000)`——worker 线程卡在 DLL ctypes 调用里处理不了 quit 事件，3s 超时后被 `terminate()` 或随解释器退出；Python 退出阶段卸载 DLL 状态时线程仍在 DLL 内 -> access violation。根因是**测试隔离缺失**：UI 级测试本不该碰真实 DLL。
+
+**处理**（两层）：
+1. **conftest autouse `stub_make_backend`**：`monkeypatch.setattr("core.flash_worker.make_backend", lambda kind, log: MagicMock())`，所有 UI 级测试（真实 FlashWorker + QThread 的 fixture）烧录立即走通 emit `flash_finished(True)`，不碰 DLL。直接测 `_run_flash` 的单测（`test_flash_worker.py`）需真实 `make_backend` 走自己注入的 mock pylink/pyOCD，用 `@pytest.mark.real_make_backend` 退出 stub（fixture 里 `request.node.get_closest_marker` 判）。
+2. **`FlashWorker._busy` 快拒**：`_on_flash_requested` 在 `_run_flash` 进行中收到多余请求立即 `flash_finished.emit(False, "busy")` 返回，不排队等前一次烧完（远程 connect 卡 3s 时排队会拖长 teardown）。UI 已用 `_set_inputs_enabled` 挡重复点烧录，这是双保险。
+
+附带：`_ReachabilityRunnable.run` 的 `probe_done.emit` 包 try/except RuntimeError——页面对象已销毁时池化线程后到的 emit 抛 `RuntimeError: Signal source has been deleted`，静默丢弃。
+
+**判别**：pytest UI 测试在 teardown/退出阶段 access violation，faulthandler 栈落在 ctypes/DLL（pylink/pyOCD）-> 是测试碰了真实硬件 DLL + 线程卡在 DLL 里随解释器退出。修法是 stub 掉碰 DLL 的边界（`make_backend`），不是加 `wait`/`drain`（治标）。
+
+参考：`tests/conftest.py` `stub_make_backend`、`src/core/flash_worker.py` `_busy` / `_on_flash_requested`、`src/ui/flash_page.py` `_ReachabilityRunnable.run`。
+
+---
+
+## pylink `supported_device()` 的 legacy `FlashAddr`/`FlashSize` 不可信，要用 `aFlashArea` 主区域
+
+**现象**：Flash 占用条算 STM32F030C8 的 Flash 是 65552B、起始地址 0x06000000——明显错误（应为 64KB @ 0x08000000）。
+
+**原因**：`get_pylink_target_infos` 直接读 `supported_device()` 返回结构的顶层 `FlashAddr`/`FlashSize`（legacy 字段）。首个命中的「STM32F030C8 (allow opt. bytes)」变体这两个字段是**选项字节区垃圾**（0x06000000 / 65552），stripped 注释后归并到基础名 STM32F030C8，于是基础名也带上错误数据。真实主 Flash/RAM 在结构的 `aFlashArea` / `aRAMArea` 数组里（该变体 area[0]=16B 选项字节、area[1]=64KB 主 Flash）。
+
+**处理**：新增 `_pick_main_region(areas, legacy_addr, legacy_size)`——
+1. 数组里有 Size>0 的区域取 **Size 最大** 者（主 Flash，滤掉选项字节/配置小区域）；
+2. 数组全空才回退 legacy 顶层字段。
+`get_pylink_target_infos` 的 flash/ram 都改走这个 helper。
+
+**判别**：pylink 设备元数据的 Flash/RAM 地址或大小看着不对（尤其带括号注释的变体）-> 别信顶层 legacy 字段，用 `aFlashArea`/`aRAMArea` 里 Size 最大的区域。
+
+**已知边界**：最大区域规则对「内部小 Flash + 外部大 QSPI」的型号（如 STM32H750VB 内部 128KB + 外部 256MB @0x90000000）会选外部 QSPI。若要"内部 Flash"语义需另加规则，本条只修 legacy 字段垃圾的问题。
+
+参考：`src/core/target_discovery.py` `_pick_main_region` / `get_pylink_target_infos`、`tests/test_target_discovery.py` `test_pick_main_region_*`。

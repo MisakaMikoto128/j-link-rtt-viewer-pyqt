@@ -29,6 +29,10 @@ from core.flash_worker import (
     FlashWorker,
 )
 
+# 本文件直接测 _run_flash，需要真实 make_backend 走注入的 mock pylink/pyOCD，
+# 退出 conftest 的全局 make_backend stub。
+pytestmark = pytest.mark.real_make_backend
+
 
 def test_constants_exposed():
     assert ERASE_MODE_SECTOR == "sector"

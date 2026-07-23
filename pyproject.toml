@@ -20,3 +20,6 @@ ignore = ["E501", "B008"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+    "real_make_backend: 退出 conftest 的 make_backend stub，用真实 make_backend（直接测 _run_flash 的单测用）",
+]

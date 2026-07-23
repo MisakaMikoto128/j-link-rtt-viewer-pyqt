@@ -53,11 +53,11 @@ from core.flash_worker import (
     FlashParams,
     FlashWorker,
 )
-from core.target_discovery import get_pylink_target_names, target_names_for_burner_kind
+from core.target_discovery import TargetDeviceInfo, target_infos_for_burner_kind
 
 from . import _infobar
 from ._scroll_helpers import make_transparent_scroll
-from .firmware_analysis_view import FirmwareAnalysisView
+from .firmware_analysis_view import FirmwareAnalysisView, FlashOccupancyBar
 from .widgets.remote_host import (
     REMOTE_ITEM_TEXT,
     is_valid_port,
@@ -80,7 +80,12 @@ class _ReachabilityRunnable(QRunnable):
 
     def run(self) -> None:
         ok = tcp_reachable(self._ip, self._port)
-        self._probe.probe_done.emit(ok)
+        try:
+            self._probe.probe_done.emit(ok)
+        except RuntimeError:
+            # 页面对象已销毁（测试 teardown / 关窗）时 probe 随之删除，
+            # 池化线程后到的 emit 抛 RuntimeError，静默丢弃即可。
+            pass
 
 
 _ERASE_LABELS = [
@@ -165,6 +170,8 @@ class FlashPage(QWidget):
 
         self._connect_signals()
         self._load_prefs_into_controls()
+        # 初始化 Flash 占用条的 device info（prefs 已回填 cmb_device）
+        self._on_target_device_changed(self.cmb_device.currentText())
 
     # ---- card builders (占位，下一 Task 填实) ----
     def _build_conn_card(self) -> QWidget:
@@ -221,8 +228,12 @@ class FlashPage(QWidget):
         self.lbl_device = BodyLabel(self.tr("目标设备:"))
         row.addWidget(self.lbl_device)
         self.cmb_device = TargetComboBox(self._cfg, "flash_device_history")
-        self.cmb_device.set_names_provider(get_pylink_target_names)
+        self.cmb_device.set_names_provider(
+            lambda: [info.name for info in target_infos_for_burner_kind(BURNER_KIND_JLINK)]
+        )
+        self.cmb_device.set_target_info_lookup(self._lookup_target_info)
         self.cmb_device.restore_text(str(self._cfg.get("flash_device_name") or ""))
+        self.cmb_device.textChanged.connect(self._on_target_device_changed)
         row.addWidget(self.cmb_device, 1)
         layout.addLayout(row)
 
@@ -243,13 +254,26 @@ class FlashPage(QWidget):
         layout.addLayout(row2)
         return card
 
+    def _lookup_target_info(self, name: str) -> TargetDeviceInfo | None:
+        """按名称从当前烧录器 kind 对应的设备库查询 TargetDeviceInfo。"""
+        name = name.strip().upper()
+        if not name:
+            return None
+        kind = self._selected_kind if self._selected_kind and self._selected_kind != "remote" else BURNER_KIND_JLINK
+        for info in target_infos_for_burner_kind(kind):
+            if info.name == name:
+                return info
+        return None
+
     def _refresh_device_combo(self) -> None:
         """按当前烧录器 kind 刷新目标设备下拉的数据源。"""
-        if self._selected_kind and self._selected_kind != "remote":
-            kind = self._selected_kind
-        else:
-            kind = BURNER_KIND_JLINK
-        self.cmb_device.set_names_provider(lambda: list(target_names_for_burner_kind(kind)))
+        kind = self._selected_kind if self._selected_kind and self._selected_kind != "remote" else BURNER_KIND_JLINK
+        self.cmb_device.set_names_provider(
+            lambda: [info.name for info in target_infos_for_burner_kind(kind)]
+        )
+        self.cmb_device.refresh_tooltip()
+        # kind 变化可能换设备库 -> 重查当前设备的 Flash 容量
+        self._on_target_device_changed(self.cmb_device.currentText())
 
     def _build_file_card(self) -> QWidget:
         card = CardWidget()
@@ -293,6 +317,11 @@ class FlashPage(QWidget):
         row3.addWidget(self.edit_bin_addr)
         row3.addStretch(1)
         layout.addLayout(row3)
+
+        # Flash 占用条：加载固件（任意格式）后显示其在目标 Flash 中的位置/占比，
+        # 占用区颜色跟随主题色；无固件时无占用区。
+        self.flash_bar = FlashOccupancyBar()
+        layout.addWidget(self.flash_bar)
         return card
 
     def _build_options_card(self) -> QWidget:
@@ -749,6 +778,7 @@ class FlashPage(QWidget):
             if serial:
                 self._cfg.set("flash_jlink_serial", serial)
         self._refresh_device_combo()
+        self.cmb_device.refresh_tooltip()
         self._sync_burner_status_dot()
 
     def _trigger_remote_probe(self) -> None:
@@ -771,6 +801,12 @@ class FlashPage(QWidget):
         self._remote_probe_in_flight = False
         self._remote_reachable = reachable
         self._sync_burner_status_dot()
+
+    def _on_target_device_changed(self, _text: str) -> None:
+        """目标设备名变化：刷新 Flash 占用图所需 device info。"""
+        info = self._lookup_target_info(self.cmb_device.currentText())
+        self.analysis_view.set_device_info(info)
+        self.flash_bar.set_device_info(info)
 
     def _on_browse(self) -> None:
         cur = self.cmb_file.currentText().strip()
@@ -864,6 +900,7 @@ class FlashPage(QWidget):
                 self.lbl_range.setText(self.tr("(无)"))
                 self.lbl_mtime_flag.setText("")
                 self.analysis_view.clear()
+                self.flash_bar.clear()
                 self.symbol_card.setVisible(False)
             return
         self._parse_and_show(text, silent=True)
@@ -892,6 +929,7 @@ class FlashPage(QWidget):
             self.lbl_format.setText(self.tr("(解析失败)"))
             self.lbl_range.setText("")
             self.analysis_view.clear()
+            self.flash_bar.clear()
             self.symbol_card.setVisible(False)
             if not silent:
                 _infobar.error(self, self.tr("文件解析失败"), str(e))
@@ -907,12 +945,17 @@ class FlashPage(QWidget):
         # bin 模式才允许编辑 bin_addr
         self.edit_bin_addr.setEnabled(info.fmt == FORMAT_BIN)
 
-        # 符号表：仅 ELF/axf 显示
+        # 更新 Flash 占用图（所有格式）
+        self.analysis_view.set_firmware_range(info.addr_start, info.addr_end)
+        self.flash_bar.set_firmware_range(info.addr_start, info.addr_end)
+
+        # 符号表：仅 ELF/axf 显示；非 ELF 仍要保留 Flash 占用图，所以只清 symbols/sections
         if info.fmt == FORMAT_ELF:
             self.analysis_view.load(path)
             self.symbol_card.setVisible(True)
         else:
-            self.analysis_view.clear()
+            self.analysis_view.symbols.clear()
+            self.analysis_view.sections.clear()
             self.symbol_card.setVisible(False)
 
         # mtime 比对
@@ -1269,8 +1312,17 @@ class FlashPage(QWidget):
             self._rtt_page_ref.set_flash_busy(busy)
 
     def shutdown(self) -> None:
-        """主窗口 closeEvent 调；干净关掉 worker 线程。"""
+        """主窗口 closeEvent 调；干净关掉 worker 线程。
+
+        必须 drain 事件循环：worker._on_stop 里对 timer 做 deleteLater，
+        若线程已退出而 deleteLater 事件没来得及处理，主线程析构 timer
+        会跨线程 killTimer，触发 Qt assertion/segfault（CLAUDE.md）。
+        """
         self._worker.stop_requested.emit()
         if not self._thread.wait(3000):
             self._thread.terminate()
             self._thread.wait(1000)
+        # 处理 worker 线程 quit 前排入的 deleteLater 事件
+        from PySide6.QtCore import QCoreApplication, QEvent
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()

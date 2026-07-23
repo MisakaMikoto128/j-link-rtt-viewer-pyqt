@@ -46,6 +46,30 @@ def fixtures_dir():
 
 
 @pytest.fixture(autouse=True)
+def stub_make_backend(request, monkeypatch):
+    """UI 级测试（FlashPage 等真实 FlashWorker + QThread 的 fixture）默认 stub 掉
+    make_backend -> MagicMock backend，烧录流程立即走通并 emit
+    flash_finished(True, "烧录成功")。
+
+    防 pytestqt segfault：真实 PylinkBackend/PyOCDBackend 会碰 J-Link/pyOCD DLL
+    （ctypes），远程 open 对不可达主机约 3s 才返回。测试 teardown 时 worker 线程
+    若仍卡在 DLL 调用里，Python 解释器退出阶段卸载 DLL 状态 -> access violation。
+
+    直接测 _run_flash 的单元测试（test_flash_worker.py）需要真实 make_backend
+    走自己注入的 mock pylink/pyOCD，用 @pytest.mark.real_make_backend 退出本 stub。
+    """
+    if request.node.get_closest_marker("real_make_backend"):
+        return None
+    from unittest.mock import MagicMock
+
+    backend = MagicMock()
+    backend.connected_serial.return_value = ""
+    monkeypatch.setattr(
+        "core.flash_worker.make_backend", lambda kind, log: backend)
+    return backend
+
+
+@pytest.fixture(autouse=True)
 def stub_pyocd_enumerator(monkeypatch):
     """隔离测试与真机 + 防 pytestqt segfault：
 

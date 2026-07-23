@@ -63,7 +63,8 @@ def _process():
 
 def test_burner_combo_rebuilt_on_enumeration(flash_coord):
     page, worker, _cfg, _fd = flash_coord
-    worker.devices_enumerated.emit("111|A;222|B")
+    # 空 product 时 J-Link label 回退为 "J-Link: serial"
+    worker.devices_enumerated.emit("111|;222|")
     _process()
     # 新分组下拉：["── J-Link ──", "J-Link: 111", "J-Link: 222", "远程连接"]
     assert page.cmb_burner.count() == 4
@@ -145,10 +146,10 @@ def test_different_serial_flashes_directly(flash_coord, qtbot):
     page, worker, _cfg, fixtures_dir = flash_coord
     worker._state = "CONNECTED"
     worker._serial = "111"
-    worker.devices_enumerated.emit("111|A;222|B")
+    worker.devices_enumerated.emit("111|;222|")
     _process()
-    # 新分组下拉里 "J-Link: 222" 是 index 2
-    page.cmb_burner.setCurrentIndex(page.cmb_burner.findText("J-Link: 222"))
+    # 空 product 下 "J-Link: 222" 在 index 2
+    page.cmb_burner.setCurrentIndex(2)
     _process()
 
     page._select_file(str(fixtures_dir / "blink.bin"))

@@ -14,9 +14,10 @@ from collections.abc import Callable, Sequence
 
 from PySide6.QtCore import QStringListModel, Qt
 from PySide6.QtWidgets import QCompleter, QWidget
-from qfluentwidgets import EditableComboBox
+from qfluentwidgets import EditableComboBox, ToolTipFilter
 
 from core.config_service import ConfigService
+from core.target_discovery import TargetDeviceInfo
 
 
 class TargetComboBox(EditableComboBox):
@@ -41,6 +42,7 @@ class TargetComboBox(EditableComboBox):
         self._cfg = cfg
         self._history_key = history_key
         self._names_provider: Callable[[], Sequence[str]] | None = None
+        self._target_info_lookup: Callable[[str], TargetDeviceInfo | None] | None = None
         self._updating = False
 
         # 初始化历史（保证是列表）
@@ -57,6 +59,11 @@ class TargetComboBox(EditableComboBox):
         self.textChanged.connect(self._on_text_changed)
         self.activated.connect(self._on_activated)
         self.editingFinished.connect(self._on_editing_finished)
+        self.textChanged.connect(self._update_tooltip)
+
+        # Fluent 风格 hover tooltip（动态读取 toolTip()，只装一次）
+        self.setToolTip("")
+        self.installEventFilter(ToolTipFilter(self, 300))
 
     def restore_text(self, text: str) -> None:
         """外部恢复上次保存的文本；若 saved 为空但有历史，默认显示历史第一项。"""
@@ -66,11 +73,21 @@ class TargetComboBox(EditableComboBox):
         self.setText(t)
         self._refresh_dropdown(t)
         # 恢复文本不记录历史（避免把旧值重复写入队首）
+
     def set_names_provider(self, provider: Callable[[], Sequence[str]]) -> None:
         """设置完整设备名来源。Flash 页切烧录器 kind 时调用。"""
         self._names_provider = provider
         self._refresh_completer()
         self._refresh_dropdown(self.currentText())
+
+    def set_target_info_lookup(self, lookup: Callable[[str], TargetDeviceInfo | None]) -> None:
+        """设置目标设备信息查询函数，用于 hover tooltip 显示厂商/Flash/RAM。"""
+        self._target_info_lookup = lookup
+        self._update_tooltip(self.currentText())
+
+    def refresh_tooltip(self) -> None:
+        """外部在底层数据源变化时刷新当前 tooltip（如 Flash 页切换烧录器 kind）。"""
+        self._update_tooltip(self.currentText())
 
     # ------------------------------------------------------------------
     # 历史读写
@@ -142,6 +159,56 @@ class TargetComboBox(EditableComboBox):
             self.blockSignals(False)
         finally:
             self._updating = False
+
+    # ------------------------------------------------------------------
+    # Tooltip
+    # ------------------------------------------------------------------
+    def _update_tooltip(self, text: str) -> None:
+        """按当前输入查询设备信息并更新 tooltip。"""
+        name = text.strip().upper()
+        if not name or self._target_info_lookup is None:
+            self.setToolTip("")
+            return
+        info = self._target_info_lookup(name)
+        if info is None:
+            self.setToolTip(name)
+        else:
+            self.setToolTip(self._format_tooltip(info))
+
+    def _format_tooltip(self, info: TargetDeviceInfo) -> str:
+        """把 TargetDeviceInfo 格式化为多行 tooltip 文本。"""
+        lines = [info.name]
+        if info.vendor:
+            lines.append(self.tr("厂商: {vendor}").format(vendor=info.vendor))
+        if info.flash_addr is not None and info.flash_size:
+            start = info.flash_addr
+            end = start + info.flash_size - 1
+            lines.append(
+                self.tr("Flash: 0x{start:08X} - 0x{end:08X} ({size})").format(
+                    start=start,
+                    end=end,
+                    size=self._format_size(info.flash_size),
+                )
+            )
+        if info.ram_addr is not None and info.ram_size:
+            start = info.ram_addr
+            end = start + info.ram_size - 1
+            lines.append(
+                self.tr("RAM: 0x{start:08X} - 0x{end:08X} ({size})").format(
+                    start=start,
+                    end=end,
+                    size=self._format_size(info.ram_size),
+                )
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_size(size: int) -> str:
+        if size >= 1024 * 1024 and size % (1024 * 1024) == 0:
+            return f"{size // (1024 * 1024)} MB"
+        if size >= 1024 and size % 1024 == 0:
+            return f"{size // 1024} KB"
+        return f"{size} B"
 
     # ------------------------------------------------------------------
     # 槽

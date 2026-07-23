@@ -1010,10 +1010,10 @@ def test_conn_panel_controls_aligned_fixed_width(rtt_page, qtbot):
         assert w.width() == 200, f"{w.objectName()} width={w.width()} != 200"
         assert w.minimumWidth() == 200, f"{w.objectName()} minWidth != 200"
         assert w.maximumWidth() == 200, f"{w.objectName()} maxWidth != 200"
-    # cb_jlink 因显示 product:serial 放宽到 260
-    assert page.cb_jlink.width() == 260, f"cb_jlink width={page.cb_jlink.width()} != 260"
-    assert page.cb_jlink.minimumWidth() == 260
-    assert page.cb_jlink.maximumWidth() == 260
+    # cb_jlink 与其它控件一致固定 200（setFixedWidth 已隐含 min=max=200）
+    assert page.cb_jlink.width() == 200, f"cb_jlink width={page.cb_jlink.width()} != 200"
+    assert page.cb_jlink.minimumWidth() == 200
+    assert page.cb_jlink.maximumWidth() == 200
 
     assert page._lbl_target.text() == page.tr("目标设备:")
     assert page._jlink_status_dot.parentWidget() is not page.cb_jlink

@@ -14,8 +14,12 @@ from core.probe.base import (
     BURNER_KIND_STLINK,
 )
 from core.target_discovery import (
+    TargetDeviceInfo,
+    get_pylink_target_infos,
     get_pylink_target_names,
+    get_pyocd_target_infos,
     get_pyocd_target_names,
+    target_infos_for_burner_kind,
     target_names_for_burner_kind,
 )
 
@@ -59,7 +63,17 @@ def test_pyocd_target_names_returns_sorted_uppercase():
 ])
 def test_target_names_for_burner_kind_routes_correctly(kind, expected):
     """target_names_for_burner_kind delegates to the correct source."""
-    assert target_names_for_burner_kind(kind) is expected()
+    assert target_names_for_burner_kind(kind) == expected()
+
+
+@pytest.mark.parametrize("kind, expected", [
+    (BURNER_KIND_JLINK, get_pylink_target_infos),
+    (BURNER_KIND_CMSIS_DAP, get_pyocd_target_infos),
+    (BURNER_KIND_STLINK, get_pyocd_target_infos),
+])
+def test_target_infos_for_burner_kind_routes_correctly(kind, expected):
+    """target_infos_for_burner_kind delegates to the correct source."""
+    assert target_infos_for_burner_kind(kind) == expected()
 
 
 def test_get_pylink_target_names_cached():
@@ -76,3 +90,88 @@ def test_target_discovery_no_config_chip_models_dependency(isolated_appdata):
 
     assert isinstance(names, tuple)
     assert all(isinstance(name, str) for name in names)
+
+
+def test_pylink_target_infos_returns_sorted_uppercase():
+    """get_pylink_target_infos returns TargetDeviceInfo tuple, uppercase and sorted."""
+    infos = get_pylink_target_infos()
+
+    assert isinstance(infos, tuple)
+    assert len(infos) > 0
+    assert all(isinstance(info, TargetDeviceInfo) for info in infos)
+    assert all(info.name == info.name.upper() for info in infos)
+    assert [info.name for info in infos] == sorted(info.name for info in infos)
+
+
+def test_pylink_target_infos_contain_stm32f030c8_metadata():
+    """STM32F030C8 entry carries vendor and correct main-flash addr/size.
+
+    回归：首个命中的「STM32F030C8 (allow opt. bytes)」变体的 legacy FlashAddr/
+    FlashSize 是选项字节垃圾（0x06000000 / 65552）。修复后必须从 aFlashArea 主
+    区域取到 0x08000000 / 65536。
+    """
+    infos = get_pylink_target_infos()
+    info = next((i for i in infos if i.name == "STM32F030C8"), None)
+
+    assert info is not None
+    assert info.vendor == "ST"
+    assert info.flash_addr == 0x08000000
+    assert info.flash_size == 65536  # 64 KB 主 Flash，不是 65552
+    assert info.ram_addr == 0x20000000
+    assert info.ram_size == 8192
+
+
+def test_pick_main_region_prefers_largest_area():
+    """_pick_main_region 取 Size 最大的区域，滤掉选项字节小区域。"""
+    from core.target_discovery import _pick_main_region
+
+    class _Area:
+        def __init__(self, addr, size):
+            self.Addr = addr
+            self.Size = size
+
+    # STM32F030C8 (allow opt. bytes)：area[0]=16B 选项字节，area[1]=64KB 主 Flash
+    areas = [_Area(0x06000000, 16), _Area(0x08000000, 65536), _Area(0, 0)]
+    addr, size = _pick_main_region(areas, 0x06000000, 65552)
+    assert (addr, size) == (0x08000000, 65536)
+
+
+def test_pick_main_region_falls_back_to_legacy_when_array_empty():
+    """aFlashArea 全空时回退 legacy 顶层字段。"""
+    from core.target_discovery import _pick_main_region
+
+    class _Area:
+        def __init__(self, addr, size):
+            self.Addr = addr
+            self.Size = size
+
+    addr, size = _pick_main_region([_Area(0, 0), _Area(0, 0)], 0x08000000, 65536)
+    assert (addr, size) == (0x08000000, 65536)
+    # legacy 也非法 -> None
+    assert _pick_main_region([], None, None) == (None, None)
+
+
+def test_pyocd_target_infos_returns_sorted_uppercase():
+    """get_pyocd_target_infos returns TargetDeviceInfo tuple, uppercase and sorted."""
+    infos = get_pyocd_target_infos()
+
+    assert isinstance(infos, tuple)
+    assert all(isinstance(info, TargetDeviceInfo) for info in infos)
+    assert all(info.name == info.name.upper() for info in infos)
+    assert [info.name for info in infos] == sorted(info.name for info in infos)
+
+
+def test_pyocd_target_infos_have_memory_or_none():
+    """pyOCD TargetDeviceInfo entries have valid memory fields or None."""
+    infos = get_pyocd_target_infos()
+    assert len(infos) > 0
+    for info in infos:
+        assert isinstance(info.name, str) and info.name
+        if info.flash_addr is not None:
+            assert isinstance(info.flash_addr, int)
+        if info.flash_size is not None:
+            assert isinstance(info.flash_size, int) and info.flash_size >= 0
+        if info.ram_addr is not None:
+            assert isinstance(info.ram_addr, int)
+        if info.ram_size is not None:
+            assert isinstance(info.ram_size, int) and info.ram_size >= 0
