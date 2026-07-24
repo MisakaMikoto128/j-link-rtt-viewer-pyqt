@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
     QHeaderView,
+    QSizePolicy,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -149,13 +150,13 @@ class PackManagerPage(QWidget):
         v.setSpacing(12)
 
         v.addWidget(self._build_path_card())
-        # 已安装 + 下载 两卡片左右并排，等分水平宽度（stretch=1 各占一半）
+        # 已安装 + 下载 两卡片左右并排，等分水平宽度（stretch=1 各占一半）；
+        # cards_row stretch=1 撑满垂直剩余空间，卡片 SizePolicy 垂直 Expanding
         cards_row = QHBoxLayout()
         cards_row.setSpacing(12)
         cards_row.addWidget(self._build_installed_card(), 1)
         cards_row.addWidget(self._build_download_card(), 1)
-        v.addLayout(cards_row)
-        v.addStretch(1)
+        v.addLayout(cards_row, 1)
 
     def _build_path_card(self) -> CardWidget:
         card = CardWidget(self)
@@ -186,6 +187,7 @@ class PackManagerPage(QWidget):
 
     def _build_installed_card(self) -> CardWidget:
         card = CardWidget(self)
+        card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         lay = QVBoxLayout(card)
         self._lbl_installed_title = SubtitleLabel(self.tr("已安装 CMSIS-Pack"))
         lay.addWidget(self._lbl_installed_title)
@@ -223,6 +225,7 @@ class PackManagerPage(QWidget):
 
     def _build_download_card(self) -> CardWidget:
         card = CardWidget(self)
+        card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         lay = QVBoxLayout(card)
         self._lbl_download_title = SubtitleLabel(self.tr("下载 CMSIS-Pack"))
         lay.addWidget(self._lbl_download_title)
