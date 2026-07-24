@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import time
 from contextlib import contextmanager
 from typing import ClassVar
@@ -26,38 +25,29 @@ from PySide6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
     QEvent,
-    QObject,
     QPoint,
     QPropertyAnimation,
-    QRunnable,
     QSize,
     Qt,
     QThreadPool,
     QTimer,
-    Signal,
 )
 from PySide6.QtGui import (
     QColor,
-    QEnterEvent,
     QFont,
     QFontDatabase,
     QKeySequence,
-    QMouseEvent,
-    QPainter,
-    QPaintEvent,
     QResizeEvent,
     QShortcut,
     QTextCharFormat,
     QTextCursor,
 )
 from PySide6.QtWidgets import (
-    QApplication,
     QFrame,
     QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -81,10 +71,8 @@ from qfluentwidgets import (
     StrongBodyLabel,
     ToggleToolButton,
     ToolButton,
-    ToolTipFilter,
     TransparentToolButton,
     isDarkTheme,
-    themeColor,
 )
 
 from core.ansi_parser import AnsiAttrs, parse_ansi
@@ -100,380 +88,31 @@ from core.jlink_worker import (
 from core.target_discovery import read_cached_target_names
 
 from . import _infobar
+from ._rtt_colors import (
+    ANSI_QCOLORS,
+    DEFAULT_BG_QCOLOR,
+    DEFAULT_FG_QCOLOR,
+    DEFAULT_SEND_ECHO_COLOR,
+    DISCONNECT_ALERT_COLOR,
+    ENCODING_LABEL_MAP,
+    PENDING_RECONNECT_COLOR,
+    RECONNECT_COLORS,
+    REMOTE_MARK_COLOR,
+)
+from ._ui_helpers import section_separator, tip
+from .widgets.color_picker import ColorComboButton
 from .widgets.remote_host import (
     REMOTE_ITEM_TEXT,
     is_valid_port,
     resolve_remote_host,
     tcp_reachable,
 )
+from .widgets.remote_probe import RemoteProbeHelper, TcpReachableRunnable
 from .widgets.search_bar import SearchBar
 from .widgets.target_combo_box import TargetComboBox
 
 _FONT_SIZE_MIN = 8
 _FONT_SIZE_MAX = 32
-
-
-def _tip(widget: QWidget, text: str, duration: int = 300) -> None:
-    """设置 QFluentWidgets 风格 tooltip：setToolTip 提供文本，ToolTipFilter
-    拦截原生 tooltip 事件改用 Fluent 圆角气泡。
-
-    ToolTipFilter 仅安装一次（动态属性 _fluent_tip_installed 标记）。本函数在
-    构造与语言重翻译时都会被调用，重复安装会叠加多个 filter，悬停时每个
-    filter 各弹一个气泡产生重影。ToolTipFilter 在 showToolTip 时动态读取
-    widget.toolTip()，故后续调用只需 setToolTip 即可刷新文本。
-    """
-    widget.setToolTip(text)
-    if not widget.property("_fluent_tip_installed"):
-        widget.installEventFilter(ToolTipFilter(widget, duration))
-        widget.setProperty("_fluent_tip_installed", True)
-
-
-_ANSI_COLOR_MAP = {
-    "black": "#000000",
-    "red": "#cc0000",
-    "green": "#00aa00",
-    "yellow": "#cc9900",
-    "blue": "#3366cc",
-    "magenta": "#aa00aa",
-    "cyan": "#00aaaa",
-    "white": "#dddddd",
-    "bright_black": "#666666",
-    "bright_red": "#ff5555",
-    "bright_green": "#55ff55",
-    "bright_yellow": "#ffff55",
-    "bright_blue": "#5599ff",
-    "bright_magenta": "#ff55ff",
-    "bright_cyan": "#55ffff",
-    "bright_white": "#ffffff",
-}
-
-# 预构造 QColor：_fmt 在 RTT 高吞吐场景下每段都调，QColor(hex_string) 每次都要解析
-# 字符串 + 申请对象。模块加载时一次性把 16 个调色板色 + 两个默认色都建好，热路径只查 dict。
-_ANSI_QCOLORS: dict[str, QColor] = {k: QColor(v) for k, v in _ANSI_COLOR_MAP.items()}
-_DEFAULT_FG_QCOLOR = QColor("#dddddd")
-_DEFAULT_BG_QCOLOR = QColor("#222222")
-
-_DEFAULT_SEND_ECHO_COLOR = "#FFA500"  # 发送回显默认色（橙色）
-_REMOTE_MARK_COLOR = "#5599ff"  # 远程连接标记色（蓝）
-_DISCONNECT_ALERT_COLOR = "#cc0000"  # 意外断开红字提示色（与 ANSI red 一致）
-_PENDING_RECONNECT_COLOR = "#ff8c00"  # 等待自动重连提示色（橙）
-
-# 自动重连各阶段提示色：disconnect=橙红（告警）、attempt=琥珀（进行中）、
-# success=绿、failed=红、cancelled=灰。
-_RECONNECT_COLORS: dict[str, str] = {
-    "disconnect_reconnecting": "#cc6600",
-    "attempt": "#b8860b",
-    "success": "#2e7d32",
-    "failed": "#cc0000",
-    "cancelled": "#888888",
-}
-
-# 编码显示名映射（权威定义在 settings_page._ENCODING_DISPLAY，此处为本地副本）
-_ENCODING_LABEL_MAP: dict[str, str] = {
-    "utf-8": "UTF-8",
-    "gbk": "GBK",
-    "utf-16-le": "UTF-16-LE",
-    "latin-1": "Latin-1",
-    "ascii": "ASCII",
-}
-
-# 色盘弹窗预设色 —— 参照 Office 经典调色板
-_COLOR_GRID_PRESETS: list[str] = [
-    "#FFFFFF",
-    "#F2F2F2",
-    "#E7E6E6",
-    "#BFBFBF",
-    "#A6A6A6",
-    "#808080",
-    "#C00000",
-    "#FF0000",
-    "#FFC000",
-    "#FFFF00",
-    "#92D050",
-    "#00B050",
-    "#00B0F0",
-    "#0070C0",
-    "#002060",
-    "#7030A0",
-    "#FF00FF",
-    "#FF0066",
-    "#FF6600",
-    "#FFA500",
-    "#FFD700",
-    "#948A54",
-    "#8B4513",
-    "#A0522D",
-    "#87CEEB",
-    "#4682B4",
-    "#2E8B57",
-    "#228B22",
-    "#808000",
-    "#556B2F",
-]
-
-
-def _section_separator(parent: QWidget) -> QFrame:
-    """创建一条水平分隔线，用于左侧面板区域划分。
-
-    不用 QFrame.HLine + Sunken —— 那种 frame 在 1px 高度下不渲染
-    （需要 2px 才能画上下两条线）。直接用背景色填一个 1px 高的 bar。
-    """
-    line = QFrame(parent)
-    line.setFixedHeight(1)
-    line.setStyleSheet("QFrame { background-color: rgba(128,128,128,0.3); border: none; }")
-    return line
-
-
-class _RemoteProbeHelper(QObject):
-    """QThreadPool 线程向主线程回传 TCP 探测结果的信号中转对象。"""
-
-    probe_done = Signal(bool)
-
-
-class _TcpReachableRunnable(QRunnable):
-    """在线程池中执行 tcp_reachable，完成后通过 helper 发信号回 UI 线程。"""
-
-    def __init__(self, ip: str, port: int, helper: _RemoteProbeHelper) -> None:
-        super().__init__()
-        self._ip = ip
-        self._port = port
-        self._helper = helper
-
-    def run(self) -> None:
-        try:
-            ok = tcp_reachable(self._ip, self._port)
-        except Exception:
-            ok = False
-        with contextlib.suppress(RuntimeError):
-            self._helper.probe_done.emit(ok)
-
-
-class _VResizeHandle(QFrame):
-    """display 下方的水平拖动条 —— 极简观感，跟随主题色。
-
-    6px 命中区（够大好抓）+ 1px 中央细灰线（默认几乎不可见）；hover/拖动
-    时变 2px 主题色线（用 qfluentwidgets.themeColor()，自动跟用户偏好）。
-
-    为什么不用 QSplitter：splitter 在 QScrollArea 里只能在 viewport 内
-    分配 children，display 永远拖不到比 viewport 大 —— 无法触发整页滚。
-    """
-
-    heightChanged = Signal(int)  # 拖动结束 emit 最终高度（持久化用）
-
-    _MIN_TARGET_H = 120
-
-    def __init__(self, target: QWidget, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._target = target
-        self._dragging = False
-        self._hover = False
-        self._start_y = 0.0
-        self._start_h = 0
-        self.setFixedHeight(6)
-        self.setCursor(Qt.SizeVerCursor)
-        # 用 paintEvent 自绘，stylesheet 留空避免 QSS 引擎干扰 paint
-
-    def enterEvent(self, e: QEnterEvent) -> None:
-        self._hover = True
-        self.update()
-        super().enterEvent(e)
-
-    def leaveEvent(self, e: QEvent) -> None:
-        self._hover = False
-        self.update()
-        super().leaveEvent(e)
-
-    def paintEvent(self, _e: QPaintEvent) -> None:
-        p = QPainter(self)
-        w, h = self.width(), self.height()
-        if self._dragging or self._hover:
-            color = QColor(themeColor())
-            color.setAlpha(220 if self._dragging else 150)
-            thickness = 2
-        else:
-            color = QColor(128, 128, 128, 45)
-            thickness = 1
-        y = (h - thickness) // 2
-        p.fillRect(0, y, w, thickness, color)
-
-    def mousePressEvent(self, e: QMouseEvent) -> None:
-        if e.button() == Qt.LeftButton:
-            self._dragging = True
-            self._start_y = e.globalPosition().y()
-            self._start_h = self._target.height()
-            self.update()
-            e.accept()
-
-    def mouseMoveEvent(self, e: QMouseEvent) -> None:
-        if self._dragging:
-            dy = int(e.globalPosition().y() - self._start_y)
-            new_h = max(self._MIN_TARGET_H, self._start_h + dy)
-            self._target.setFixedHeight(new_h)
-            e.accept()
-
-    def mouseReleaseEvent(self, e: QMouseEvent) -> None:
-        if self._dragging:
-            self._dragging = False
-            self.heightChanged.emit(self._target.height())
-            self.update()
-            e.accept()
-
-
-class _ColorComboButton(QPushButton):
-    """模仿 ComboBox 外观的颜色按钮：内部实心色块 + 右侧下拉箭头 ▼。
-
-    点击弹出 _ColorGridPopup 网格色盘。外观像标准 ComboBox 但内容是纯色矩形。
-    用 QPushButton + 自绘，避免 QComboBox 的弹出列表限制（ComboBox 只能显示
-    纵向列表，无法直接做网格色盘）。
-    """
-
-    colorChanged = Signal(str)  # hex 色值字符串
-
-    def __init__(self, color_hex: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._color = QColor(color_hex)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(84, 30)
-        self.clicked.connect(self._show_popup)
-
-    def set_color(self, color_hex: str) -> None:
-        """外部设置颜色（不触发 colorChanged）。"""
-        self._color = QColor(color_hex)
-        self.update()
-
-    def paintEvent(self, _e: QPaintEvent) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-
-        # ComboBox 风格背景：白底 + 灰色圆角边框（深浅主题自适应）
-        dark = isDarkTheme()
-        bg = QColor(56, 56, 56) if dark else QColor(255, 255, 255)
-        border_c = QColor(75, 75, 75) if dark else QColor(192, 192, 192)
-        p.setPen(Qt.NoPen)
-        p.setBrush(bg)
-        p.drawRoundedRect(0, 0, w, h, 5, 5)
-
-        # 边框线
-        p.setPen(border_c)
-        p.setBrush(Qt.NoBrush)
-        p.drawRoundedRect(0, 0, w - 1, h - 1, 5, 5)
-
-        # 内部色块矩形，高度为可用空间的 3/4，垂直居中
-        margin = 5
-        swatch_w = w - 28  # 右侧留出箭头 + 间距
-        full_h = h - 2 * margin
-        swatch_h = full_h * 3 // 4
-        swatch_y = margin + (full_h - swatch_h) // 2
-        p.setPen(Qt.NoPen)
-        p.setBrush(self._color)
-        p.drawRoundedRect(margin, swatch_y, swatch_w, swatch_h, 3, 3)
-
-        # 下拉箭头 ▼
-        arrow_c = QColor(160, 160, 160) if dark else QColor(100, 100, 100)
-        p.setPen(arrow_c)
-        p.setBrush(Qt.NoBrush)
-        ax = w - 16
-        ay = h // 2 - 3
-        s = 4
-        p.drawLine(ax, ay, ax + s, ay + s)
-        p.drawLine(ax + s, ay + s, ax + 2 * s, ay)
-
-    def _show_popup(self) -> None:
-        popup = _ColorGridPopup(self._color.name(), self)
-        popup.colorPicked.connect(self._on_color_picked)
-        # 定位在按钮下方左对齐
-        pos = self.mapToGlobal(QPoint(0, self.height() + 2))
-        popup.move(pos)
-        popup.show()
-
-    def _on_color_picked(self, color_hex: str) -> None:
-        self._color = QColor(color_hex)
-        self.update()
-        self.colorChanged.emit(color_hex)
-
-
-class _ColorGridPopup(QWidget):
-    """网格色盘浮层：顶部"默认"黑色块 + 下方 5 行 × 6 列预设色块。
-
-    用 Qt.Popup 标志，点击外部自动关闭。字体从 QApplication.font() 继承，
-    保证与 fluent 全局字号一致。
-    """
-
-    colorPicked = Signal(str)
-
-    _SWATCH = 24
-    _GAP = 4
-    _COLS = 6
-
-    def __init__(self, current_hex: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent, Qt.Popup)
-        self._current = current_hex
-        self.setObjectName("colorGridPopup")
-        # 确保字体跟随应用全局（不随 QApplication.font() 变化时自动更新，
-        # 但弹出瞬间已是最新值——足够了）
-        self.setFont(QApplication.font())
-        self._build()
-
-    def _build(self) -> None:
-        dark = isDarkTheme()
-        bg = "#2d2d30" if dark else "#ffffff"
-        border_c = "#3c3c3c" if dark else "#cccccc"
-        self.setStyleSheet(f"""
-            QWidget#colorGridPopup {{
-                background: {bg};
-                border: 1px solid {border_c};
-                border-radius: 6px;
-            }}
-        """)
-
-        v = QVBoxLayout(self)
-        v.setContentsMargins(10, 8, 10, 8)
-        v.setSpacing(self._GAP)
-
-        # 顶部："默认" 黑色色块 + 标签
-        top = QHBoxLayout()
-        top.setSpacing(6)
-        top.addWidget(self._make_swatch("#000000"))
-        # 用 BodyLabel 而非 QLabel，保证字体与 qfluentwidgets 全局 UI 字体一致
-        lbl = BodyLabel(self.tr("默认"))
-        top.addWidget(lbl)
-        top.addStretch(1)
-        v.addLayout(top)
-
-        # 预设色块网格
-        grid = QGridLayout()
-        grid.setSpacing(self._GAP)
-        for i, c in enumerate(_COLOR_GRID_PRESETS):
-            row, col = divmod(i, self._COLS)
-            grid.addWidget(self._make_swatch(c), row, col)
-        v.addLayout(grid)
-
-    def _make_swatch(self, color_hex: str) -> QPushButton:
-        """创建单个色块。用 QPushButton + stylesheet，避免自绘。"""
-        btn = QPushButton(self)
-        btn.setFixedSize(self._SWATCH, self._SWATCH)
-        btn.setCursor(Qt.PointingHandCursor)
-
-        is_sel = color_hex.upper() == self._current.upper()
-        border = f"2px solid {themeColor()}" if is_sel else "1px solid #cccccc"
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {color_hex};
-                border: {border};
-                border-radius: 2px;
-            }}
-            QPushButton:hover {{
-                border: 2px solid #888888;
-            }}
-        """)
-        # 默认参数捕获避免闭包循环引用
-        btn.clicked.connect(lambda checked=None, c=color_hex: self._pick(c))
-        return btn
-
-    def _pick(self, color_hex: str) -> None:
-        self.colorPicked.emit(color_hex)
-        self.close()
 
 
 class RTTMonitorPage(QWidget):
@@ -530,7 +169,7 @@ class RTTMonitorPage(QWidget):
         self._last_remote_addr = ""
         self._last_enum_state = None
         self._jlink_products: dict[str, str] = {}
-        self._remote_probe_helper = _RemoteProbeHelper()
+        self._remote_probe_helper = RemoteProbeHelper()
         self._remote_probe_helper.probe_done.connect(self._on_remote_probe_done)
 
         # 发送字节统计缓存（跨连接累计；_update_stats 从 worker 同步）
@@ -924,18 +563,18 @@ class RTTMonitorPage(QWidget):
         v.addLayout(row_ch)
 
         self.btn_connect = PrimaryPushButton(FluentIcon.PLAY, self.tr("连接"), inner)
-        _tip(self.btn_connect, self.tr("F2 连接 / F3 断开"))
+        tip(self.btn_connect, self.tr("F2 连接 / F3 断开"))
         v.addWidget(self.btn_connect)
 
         row_reset = QHBoxLayout()
         row_reset.setSpacing(6)
         row_reset.setContentsMargins(0, 0, 0, 0)
         self.btn_reset = PushButton(FluentIcon.SYNC, self.tr("重置目标"), inner)
-        _tip(self.btn_reset, self.tr("F4 重置目标"))
+        tip(self.btn_reset, self.tr("F4 重置目标"))
         self.btn_reset.setEnabled(False)
         self.btn_reset.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.btn_reset_halt = PushButton(FluentIcon.PAUSE_BOLD, self.tr("重置并暂停"), inner)
-        _tip(self.btn_reset_halt, self.tr("复位 MCU 并停在复位状态（halt）"))
+        tip(self.btn_reset_halt, self.tr("复位 MCU 并停在复位状态（halt）"))
         self.btn_reset_halt.setEnabled(False)
         self.btn_reset_halt.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         row_reset.addWidget(self.btn_reset, 1)
@@ -943,7 +582,7 @@ class RTTMonitorPage(QWidget):
         v.addLayout(row_reset)
 
         # ---- 分隔线 ----
-        v.addWidget(_section_separator(inner))
+        v.addWidget(section_separator(inner))
 
         # ════════════════════════════════════════════════════════════
         # 区域 2：设备信息（可折叠）
@@ -992,7 +631,7 @@ class RTTMonitorPage(QWidget):
         v.addWidget(self.gb_info)
 
         # ---- 分隔线 ----
-        v.addWidget(_section_separator(inner))
+        v.addWidget(section_separator(inner))
 
         # ════════════════════════════════════════════════════════════
         # 区域 3：接收设置
@@ -1019,7 +658,7 @@ class RTTMonitorPage(QWidget):
         # HEX 显示
         self.chk_hex_display = CheckBox(self.tr("十六进制显示"))
         self.chk_hex_display.setFixedHeight(_CTRL_H)
-        _tip(self.chk_hex_display, self.tr("将接收到的每个字节以大写的 HEX 格式显示"))
+        tip(self.chk_hex_display, self.tr("将接收到的每个字节以大写的 HEX 格式显示"))
         v.addWidget(self.chk_hex_display)
 
         # 自动断帧
@@ -1078,7 +717,7 @@ class RTTMonitorPage(QWidget):
         row_mark.setSpacing(8)
         row_mark.setContentsMargins(0, 0, 0, 0)
         self.btn_mark = PushButton(self.tr("插入标记"), inner)
-        _tip(self.btn_mark, self.tr("在显示区插入分隔标记"))
+        tip(self.btn_mark, self.tr("在显示区插入分隔标记"))
         self.btn_clear = PushButton(self.tr("清除"), inner)
         self.btn_save = PushButton(self.tr("💾 保存"), inner)
         row_mark.addWidget(self.btn_mark)
@@ -1098,7 +737,7 @@ class RTTMonitorPage(QWidget):
         self.btn_font_minus.setText("A-")
         self.btn_font_minus.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_font_minus.setFixedSize(44, 44)
-        _tip(self.btn_font_minus, self.tr("字号 −1"))
+        tip(self.btn_font_minus, self.tr("字号 −1"))
         self.lbl_font_size = BodyLabel(f"{self._cfg.get('font_size')}")
         self.lbl_font_size.setAlignment(Qt.AlignCenter)
         self.lbl_font_size.setFixedWidth(28)
@@ -1106,14 +745,14 @@ class RTTMonitorPage(QWidget):
         self.btn_font_plus.setText("A+")
         self.btn_font_plus.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_font_plus.setFixedSize(44, 44)
-        _tip(self.btn_font_plus, self.tr("字号 +1"))
+        tip(self.btn_font_plus, self.tr("字号 +1"))
         row_font.addWidget(self.btn_font_minus)
         row_font.addWidget(self.lbl_font_size)
         row_font.addWidget(self.btn_font_plus)
         v.addLayout(row_font)
 
         # ---- 分隔线 ----
-        v.addWidget(_section_separator(inner))
+        v.addWidget(section_separator(inner))
 
         # ════════════════════════════════════════════════════════════
         # 区域 4：发送设置 + 标记
@@ -1159,9 +798,9 @@ class RTTMonitorPage(QWidget):
         self.chk_show_send_text = CheckBox(self.tr("显示发送字符串"))
         self.chk_show_send_text.setFixedHeight(_CTRL_H)
         # 色块按钮：从 cfg 读取上次选中的颜色（默认橙色 #FFA500）
-        _echo_color = self._cfg.get("send_text_color") or _DEFAULT_SEND_ECHO_COLOR
-        self.btn_send_color = _ColorComboButton(_echo_color)
-        _tip(self.btn_send_color, self.tr("选择发送回显颜色"))
+        _echo_color = self._cfg.get("send_text_color") or DEFAULT_SEND_ECHO_COLOR
+        self.btn_send_color = ColorComboButton(_echo_color)
+        tip(self.btn_send_color, self.tr("选择发送回显颜色"))
         row_echo.addWidget(self.chk_show_send_text)
         row_echo.addStretch(1)
         row_echo.addWidget(self.btn_send_color)
@@ -1181,7 +820,7 @@ class RTTMonitorPage(QWidget):
             self.cb_crc_algo.addItem(display_name)
         self.cb_crc_algo.addItem(self.tr("自动换行"))
         self.cb_crc_algo.setCurrentIndex(self._cfg.get("send_script_index"))  # 默认 CRC-16/MODBUS
-        _tip(self.cb_crc_algo, self.tr("发送时追加脚本后缀（CRC / 自动换行）"))
+        tip(self.cb_crc_algo, self.tr("发送时追加脚本后缀（CRC / 自动换行）"))
         row_crc.addWidget(self.chk_crc_script)
         row_crc.addStretch(1)
         row_crc.addWidget(self.cb_crc_algo)
@@ -1191,7 +830,7 @@ class RTTMonitorPage(QWidget):
         self.chk_auto_reconnect = CheckBox(self.tr("自动重连"))
         self.chk_auto_reconnect.setFixedHeight(_CTRL_H)
         self.chk_auto_reconnect.setChecked(self._cfg.get("auto_reconnect"))
-        _tip(self.chk_auto_reconnect, self.tr("设备被物理拔出后自动尝试重连同一台 J-Link"))
+        tip(self.chk_auto_reconnect, self.tr("设备被物理拔出后自动尝试重连同一台 J-Link"))
         self.chk_auto_reconnect.toggled.connect(self._on_auto_reconnect_toggled)
         v.addWidget(self.chk_auto_reconnect)
 
@@ -1244,14 +883,14 @@ class RTTMonitorPage(QWidget):
         self.btn_panel_toggle = ToggleToolButton(FluentIcon.CHEVRON_RIGHT, self._toolbar)
         self.btn_panel_toggle.setFixedSize(36, 30)
         self.btn_panel_toggle.setCheckable(True)
-        _tip(self.btn_panel_toggle, self.tr("显示/隐藏配置面板"))
+        tip(self.btn_panel_toggle, self.tr("显示/隐藏配置面板"))
 
         # HEX 模式切换（接收方向）—— 收窄工具栏的样式模板
         self.btn_hex_rx_up = ToggleToolButton(self._toolbar)
         self.btn_hex_rx_up.setText("HEX ↑")
         self.btn_hex_rx_up.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_hex_rx_up.setFixedSize(56, 30)
-        _tip(self.btn_hex_rx_up, self.tr("接收 HEX 显示切换"))
+        tip(self.btn_hex_rx_up, self.tr("接收 HEX 显示切换"))
         self.btn_hex_rx_up.setCheckable(True)
         # 同步 chk_hex_display ↔ btn_hex_rx_up（纯 UI 状态，不持久化）
         self.btn_hex_rx_up.toggled.connect(self.chk_hex_display.setChecked)
@@ -1263,14 +902,14 @@ class RTTMonitorPage(QWidget):
         self.btn_hex_tx_down.setText("HEX ↓")
         self.btn_hex_tx_down.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_hex_tx_down.setFixedSize(56, 30)
-        _tip(self.btn_hex_tx_down, self.tr("发送 HEX 模式切换"))
+        tip(self.btn_hex_tx_down, self.tr("发送 HEX 模式切换"))
         self.btn_hex_tx_down.setCheckable(True)
         self.btn_hex_tx_down.setChecked(self._cfg.get("hex_send_mode"))
 
         # 暂停/恢复
         self.btn_toolbar_pause = ToggleToolButton(FluentIcon.PAUSE, self._toolbar)
         self.btn_toolbar_pause.setFixedSize(36, 30)
-        _tip(self.btn_toolbar_pause, self.tr("暂停/恢复接收"))
+        tip(self.btn_toolbar_pause, self.tr("暂停/恢复接收"))
         self.btn_toolbar_pause.setCheckable(True)
         self.btn_toolbar_pause.toggled.connect(self._worker.set_pause_receive_requested.emit)
         self.btn_toolbar_pause.toggled.connect(self.chk_pause.setChecked)
@@ -1279,13 +918,13 @@ class RTTMonitorPage(QWidget):
         # 清空显示
         self.btn_toolbar_clear = ToolButton(FluentIcon.DELETE, self._toolbar)
         self.btn_toolbar_clear.setFixedSize(36, 30)
-        _tip(self.btn_toolbar_clear, self.tr("清除显示"))
+        tip(self.btn_toolbar_clear, self.tr("清除显示"))
         self.btn_toolbar_clear.clicked.connect(self._on_clear_clicked)
 
         # 保存
         self.btn_toolbar_save = ToolButton(FluentIcon.SAVE, self._toolbar)
         self.btn_toolbar_save.setFixedSize(36, 30)
-        _tip(self.btn_toolbar_save, self.tr("保存当前"))
+        tip(self.btn_toolbar_save, self.tr("保存当前"))
         self.btn_toolbar_save.clicked.connect(self._on_save_clicked)
 
         # 连接/断开切换（收窄模式入口，同步主页 btn_connect 状态）
@@ -1293,7 +932,7 @@ class RTTMonitorPage(QWidget):
         # _set_disconnected_ui 驱动，按钮点击只负责触发连接/断开动作
         self.btn_toolbar_connect = ToggleToolButton(FluentIcon.PLAY, self._toolbar)
         self.btn_toolbar_connect.setFixedSize(36, 30)
-        _tip(self.btn_toolbar_connect, self.tr("连接/断开"))
+        tip(self.btn_toolbar_connect, self.tr("连接/断开"))
         self.btn_toolbar_connect.clicked.connect(self._on_connect_clicked)
 
         # 所有按钮靠右——悬浮卡片从左侧 280px 弹出时不遮挡任何按钮
@@ -1324,7 +963,7 @@ class RTTMonitorPage(QWidget):
         self.btn_send = ToolButton(FluentIcon.SEND, panel)
         self.btn_send.setFixedSize(_SEND_H, _SEND_H)
         self.btn_send.setIconSize(QSize(36, 36))
-        _tip(self.btn_send, self.tr("发送 (Enter) · 未连接时点击提示"))
+        tip(self.btn_send, self.tr("发送 (Enter) · 未连接时点击提示"))
         send_btn_col = QVBoxLayout()
         send_btn_col.setContentsMargins(0, 0, 0, 0)
         send_btn_col.setSpacing(1)
@@ -1343,17 +982,17 @@ class RTTMonitorPage(QWidget):
         self.lbl_status_state.setMinimumWidth(100)
         self.lbl_status_tx = BodyLabel(self.tr("发送: 0 - 0"))
         self.lbl_status_tx.setMinimumWidth(80)
-        _tip(self.lbl_status_tx, self.tr("发送总数 - 上一次发送（字节）"))
+        tip(self.lbl_status_tx, self.tr("发送总数 - 上一次发送（字节）"))
         self.lbl_status_rx = BodyLabel(self.tr("接收: 0 - 0"))
         self.lbl_status_rx.setMinimumWidth(100)
-        _tip(self.lbl_status_rx, self.tr("接收总数 - 上一次接收增量（字节）"))
+        tip(self.lbl_status_rx, self.tr("接收总数 - 上一次接收增量（字节）"))
         self.lbl_status_duration = BodyLabel(
             self.tr("时长: {duration}").format(duration="00:00:00")
         )
         self.lbl_status_duration.setMinimumWidth(110)
         self.btn_reset_stats = HyperlinkButton()
         self.btn_reset_stats.setText(self.tr("重置计数"))
-        _tip(self.btn_reset_stats, self.tr("清零发送 / 接收计数（保留会话时长）"))
+        tip(self.btn_reset_stats, self.tr("清零发送 / 接收计数（保留会话时长）"))
         self.lbl_status_encoding = BodyLabel("")
 
         status_row = QHBoxLayout()
@@ -1621,7 +1260,7 @@ class RTTMonitorPage(QWidget):
             self._sync_jlink_status_dot()
             return
         self._remote_probe_in_flight = True
-        runnable = _TcpReachableRunnable(resolved, int(port_text), self._remote_probe_helper)
+        runnable = TcpReachableRunnable(resolved, int(port_text), self._remote_probe_helper)
         QThreadPool.globalInstance().start(runnable)
 
     def _on_remote_probe_done(self, ok: bool) -> None:
@@ -1823,7 +1462,7 @@ class RTTMonitorPage(QWidget):
                 self._pending_reconnect = True
                 self._append_styled_line(
                     self.tr("设备连接丢失，等待恢复后自动重连…") + "\n",
-                    _PENDING_RECONNECT_COLOR,
+                    PENDING_RECONNECT_COLOR,
                     bold=True,
                 )
             else:
@@ -1974,10 +1613,10 @@ class RTTMonitorPage(QWidget):
         """按 cfg.reset_mode 刷新 btn_reset 文字 + tooltip。"""
         if mode == "auto_reconnect":
             self.btn_reset.setText(self.tr("重置(重连)"))
-            _tip(self.btn_reset, self.tr("F4 重置目标 — 当前模式：断开+重连（更可靠）"))
+            tip(self.btn_reset, self.tr("F4 重置目标 — 当前模式：断开+重连（更可靠）"))
         else:
             self.btn_reset.setText(self.tr("重置目标"))
-            _tip(self.btn_reset, self.tr("F4 重置目标 — 当前模式：仅重置 MCU"))
+            tip(self.btn_reset, self.tr("F4 重置目标 — 当前模式：仅重置 MCU"))
 
     def _on_reset_clicked(self) -> None:
         # auto_reconnect=reset+disconnect+sleep+reconnect）
@@ -2028,9 +1667,9 @@ class RTTMonitorPage(QWidget):
             return
         if getattr(self, "_is_connected", False):
             n = max(1, int(self._worker.get_num_up_channels()))
-            _tip(self.sp_channel, self.tr("MCU 实际上报 {n} 个通道；全部 = 合并查看").format(n=n))
+            tip(self.sp_channel, self.tr("MCU 实际上报 {n} 个通道；全部 = 合并查看").format(n=n))
         else:
-            _tip(self.sp_channel, self.tr("全部 = 合并查看所有通道；发送走最近选中的具体通道"))
+            tip(self.sp_channel, self.tr("全部 = 合并查看所有通道；发送走最近选中的具体通道"))
 
     def _on_send_clicked(self) -> None:
         if not self._is_connected:
@@ -2123,7 +1762,7 @@ class RTTMonitorPage(QWidget):
         """
         self._append_styled_line(
             f"\u00bb {text}\n",
-            self._cfg.get("send_text_color") or _DEFAULT_SEND_ECHO_COLOR,
+            self._cfg.get("send_text_color") or DEFAULT_SEND_ECHO_COLOR,
         )
 
     def _on_crc_script_toggled(self, checked: bool) -> None:
@@ -2337,7 +1976,7 @@ class RTTMonitorPage(QWidget):
             msg = f"{ts} -> {self.tr('远程 J-Link')} {self._last_remote_addr} {self.tr('连接意外断开')}\n"
         else:
             msg = f"{ts} -> {device} {self.tr('连接意外断开')}\n"
-        self._append_styled_line(msg, _DISCONNECT_ALERT_COLOR, bold=True)
+        self._append_styled_line(msg, DISCONNECT_ALERT_COLOR, bold=True)
         self._request_disconnect(pending_reconnect=True)
 
     def _on_auto_reconnect_toggled(self, checked: bool) -> None:
@@ -2373,7 +2012,7 @@ class RTTMonitorPage(QWidget):
         else:
             return
         self._append_styled_line(
-            f"{ts} -> {line}\n", _RECONNECT_COLORS.get(kind, "#888888"), bold=True
+            f"{ts} -> {line}\n", RECONNECT_COLORS.get(kind, "#888888"), bold=True
         )
 
     def set_flash_busy(self, busy: bool) -> None:
@@ -2421,7 +2060,7 @@ class RTTMonitorPage(QWidget):
         if remote_addr:
             self._append_styled_line(
                 f"──── {self.tr('已连接远程 J-Link {addr} (S/N: {sn})').format(addr=remote_addr, sn=info.get('jlink_serial', '-'))} ────\n",
-                _REMOTE_MARK_COLOR,
+                REMOTE_MARK_COLOR,
                 bold=True,
                 force_scroll=True,
             )
@@ -2490,7 +2129,7 @@ class RTTMonitorPage(QWidget):
 
     def _update_encoding_label(self, encoding: str) -> None:
         if hasattr(self, "lbl_status_encoding"):
-            display: str = _ENCODING_LABEL_MAP.get(encoding, encoding.upper())
+            display: str = ENCODING_LABEL_MAP.get(encoding, encoding.upper())
             self.lbl_status_encoding.setText(self.tr("编码: {name}").format(name=display))
 
     def _on_rtt_data(self, channel: int, text: str) -> None:
@@ -2658,13 +2297,13 @@ class RTTMonitorPage(QWidget):
         self.le_mark.setCurrentText("")
 
     def _fmt(self, attrs: AnsiAttrs) -> QTextCharFormat:
-        # 注意：QColor 必须从预构造表查（_ANSI_QCOLORS），不要 QColor(hex_string)。
+        # 注意：QColor 必须从预构造表查（ANSI_QCOLORS），不要 QColor(hex_string)。
         # RTT 高吞吐时本函数每段都调，每次构造 QColor 是不必要的 syscall + alloc。
         fmt = QTextCharFormat()
         if attrs.fg:
-            fmt.setForeground(_ANSI_QCOLORS.get(attrs.fg, _DEFAULT_FG_QCOLOR))
+            fmt.setForeground(ANSI_QCOLORS.get(attrs.fg, DEFAULT_FG_QCOLOR))
         if attrs.bg:
-            fmt.setBackground(_ANSI_QCOLORS.get(attrs.bg, _DEFAULT_BG_QCOLOR))
+            fmt.setBackground(ANSI_QCOLORS.get(attrs.bg, DEFAULT_BG_QCOLOR))
         if attrs.bold:
             # 用 setFontWeight 而非 setFont(fmt.font())——后者会把字号也设回
             # QTextCharFormat 默认值（通常远小于 widget 字号），导致 bold
@@ -3001,12 +2640,12 @@ class RTTMonitorPage(QWidget):
             self.btn_connect.setText(self.tr("烧录中…"))
         elif self.btn_connect.isEnabled():
             self.btn_connect.setText(self.tr("断开") if self._is_connected else self.tr("连接"))
-        _tip(self.btn_connect, self.tr("F2 连接 / F3 断开"))
+        tip(self.btn_connect, self.tr("F2 连接 / F3 断开"))
         # btn_reset 文字 + tooltip 由 _apply_reset_mode_to_button 维护，
         # 直接调用一次刷新即可
         self._apply_reset_mode_to_button(self._cfg.get("reset_mode"))
         self.btn_reset_halt.setText(self.tr("重置并暂停"))
-        _tip(self.btn_reset_halt, self.tr("复位 MCU 并停在复位状态（halt）"))
+        tip(self.btn_reset_halt, self.tr("复位 MCU 并停在复位状态（halt）"))
 
         # 设备信息卡片标题：固定显示「设备信息」，不随连接状态变化
         # （详情在展开网格内；连接状态由状态栏圆点 + 文字体现）
@@ -3023,7 +2662,7 @@ class RTTMonitorPage(QWidget):
         self.chk_power.setText(self.tr("电源输出"))
         self.chk_log_rec.setText(self.tr("实时日志记录"))
         self.chk_hex_display.setText(self.tr("十六进制显示"))
-        _tip(self.chk_hex_display, self.tr("将接收到的每个字节以大写的 HEX 格式显示"))
+        tip(self.chk_hex_display, self.tr("将接收到的每个字节以大写的 HEX 格式显示"))
         self.chk_auto_frame.setText(self.tr("自动断帧"))
         # 自动断帧帮助内容
         self._frame_help_title = self.tr("自动断帧")
@@ -3042,45 +2681,45 @@ class RTTMonitorPage(QWidget):
         # 标记 / 清除 / 保存
         self.le_mark.setPlaceholderText(self.tr("会话标记文本…"))
         self.btn_mark.setText(self.tr("插入标记"))
-        _tip(self.btn_mark, self.tr("在显示区插入分隔标记"))
+        tip(self.btn_mark, self.tr("在显示区插入分隔标记"))
         self.btn_clear.setText(self.tr("清除"))
         self.btn_save.setText(self.tr("💾 保存"))
 
         # 字号控制
         self._lbl_font_size_label.setText(self.tr("字号"))
-        _tip(self.btn_font_minus, self.tr("字号 −1"))
-        _tip(self.btn_font_plus, self.tr("字号 +1"))
+        tip(self.btn_font_minus, self.tr("字号 −1"))
+        tip(self.btn_font_plus, self.tr("字号 +1"))
 
         # 发送设置区
         self.chk_timed_send.setText(self.tr("定时发送"))
         self.btn_timed_unit.setText(self.tr("秒"))
         self.chk_hex_left.setText(self.tr("十六进制发送"))
         self.chk_show_send_text.setText(self.tr("显示发送字符串"))
-        _tip(self.btn_send_color, self.tr("选择发送回显颜色"))
+        tip(self.btn_send_color, self.tr("选择发送回显颜色"))
         self.chk_crc_script.setText(self.tr("脚本"))
-        _tip(self.cb_crc_algo, self.tr("发送时追加脚本后缀（CRC / 自动换行）"))
+        tip(self.cb_crc_algo, self.tr("发送时追加脚本后缀（CRC / 自动换行）"))
         self.cb_crc_algo.setItemText(len(CRC_ALGORITHMS), self.tr("自动换行"))
 
         # 自动重连
         self.chk_auto_reconnect.setText(self.tr("自动重连"))
-        _tip(self.chk_auto_reconnect, self.tr("设备被物理拔出后自动尝试重连同一台 J-Link"))
+        tip(self.chk_auto_reconnect, self.tr("设备被物理拔出后自动尝试重连同一台 J-Link"))
 
         # 右侧收窄工具栏 tooltips
-        _tip(self.btn_panel_toggle, self.tr("显示/隐藏配置面板"))
-        _tip(self.btn_hex_rx_up, self.tr("接收 HEX 显示切换"))
-        _tip(self.btn_hex_tx_down, self.tr("发送 HEX 模式切换"))
-        _tip(self.btn_toolbar_pause, self.tr("暂停/恢复接收"))
-        _tip(self.btn_toolbar_clear, self.tr("清除显示"))
-        _tip(self.btn_toolbar_save, self.tr("保存当前"))
-        _tip(self.btn_toolbar_connect, self.tr("连接/断开"))
-        _tip(self.btn_send, self.tr("发送 (Enter) · 未连接时点击提示"))
+        tip(self.btn_panel_toggle, self.tr("显示/隐藏配置面板"))
+        tip(self.btn_hex_rx_up, self.tr("接收 HEX 显示切换"))
+        tip(self.btn_hex_tx_down, self.tr("发送 HEX 模式切换"))
+        tip(self.btn_toolbar_pause, self.tr("暂停/恢复接收"))
+        tip(self.btn_toolbar_clear, self.tr("清除显示"))
+        tip(self.btn_toolbar_save, self.tr("保存当前"))
+        tip(self.btn_toolbar_connect, self.tr("连接/断开"))
+        tip(self.btn_send, self.tr("发送 (Enter) · 未连接时点击提示"))
 
         # 状态栏：按钮文字 + tooltip（重翻译时保留计数 / 时长数值）
         self.btn_reset_stats.setText(self.tr("重置计数"))
-        _tip(self.btn_reset_stats, self.tr("清零发送 / 接收计数（保留会话时长）"))
-        _tip(self.lbl_status_rx, self.tr("接收总数 - 上一次接收增量（字节）"))
+        tip(self.btn_reset_stats, self.tr("清零发送 / 接收计数（保留会话时长）"))
+        tip(self.lbl_status_rx, self.tr("接收总数 - 上一次接收增量（字节）"))
         # 发送：保留计数数值，仅刷新语言前缀
-        _tip(self.lbl_status_tx, self.tr("发送总数 - 上一次发送（字节）"))
+        tip(self.lbl_status_tx, self.tr("发送总数 - 上一次发送（字节）"))
         self.lbl_status_tx.setText(
             self.tr("发送: {total} - {last}").format(
                 total=self._send_total_bytes, last=self._send_last_bytes

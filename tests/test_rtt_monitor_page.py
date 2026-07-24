@@ -881,7 +881,7 @@ def test_set_connected_ui_shows_remote_mark(rtt_page, qtbot):
     assert "已连接远程 J-Link" in text
     assert "192.168.79.1:19020" in text
     assert "602717758" in text
-    assert rtt_mod._REMOTE_MARK_COLOR == "#5599ff"
+    assert rtt_mod.REMOTE_MARK_COLOR == "#5599ff"
 
 
 def test_startup_restore_remote_mode(isolated_appdata, qtbot):

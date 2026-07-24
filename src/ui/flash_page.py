@@ -12,10 +12,9 @@ UI 布局（4 个 Card，透明 ScrollArea 整页包裹）：
 from __future__ import annotations
 
 import os
-from contextlib import suppress
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QRunnable, Qt, QThread, QThreadPool, QTimer, Signal
+from PySide6.QtCore import QEvent, Qt, QThread, QThreadPool, QTimer
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -68,29 +67,9 @@ from .widgets.remote_host import (
     REMOTE_ITEM_TEXT,
     is_valid_port,
     resolve_remote_host,
-    tcp_reachable,
 )
+from .widgets.remote_probe import RemoteProbeHelper, TcpReachableRunnable
 from .widgets.target_combo_box import TargetComboBox
-
-
-class _RemoteProbe(QObject):
-    probe_done = Signal(bool)
-
-
-class _ReachabilityRunnable(QRunnable):
-    def __init__(self, ip: str, port: int, probe: _RemoteProbe) -> None:
-        super().__init__()
-        self._ip = ip
-        self._port = port
-        self._probe = probe
-
-    def run(self) -> None:
-        ok = tcp_reachable(self._ip, self._port)
-        # 页面对象已销毁（测试 teardown / 关窗）时 probe 随之删除，
-        # 池化线程后到的 emit 抛 RuntimeError，静默丢弃即可。
-        with suppress(RuntimeError):
-            self._probe.probe_done.emit(ok)
-
 
 _ERASE_LABELS = [
     ("扇区擦除（推荐，快）", ERASE_MODE_SECTOR),
@@ -127,7 +106,7 @@ class FlashPage(QWidget):
         # 远程 J-Link 模式状态
         self._remote_mode = False
         self._remote_reachable: bool | None = None
-        self._remote_probe = _RemoteProbe()
+        self._remote_probe = RemoteProbeHelper()
         self._remote_probe.probe_done.connect(self._on_remote_probe_done)
         self._remote_probe_in_flight = False
 
@@ -870,7 +849,7 @@ class FlashPage(QWidget):
         port = int(port_text) if is_valid_port(port_text) else 0
         if resolved and port:
             self._remote_probe_in_flight = True
-            runnable = _ReachabilityRunnable(resolved, port, self._remote_probe)
+            runnable = TcpReachableRunnable(resolved, port, self._remote_probe)
             QThreadPool.globalInstance().start(runnable)
         else:
             self._remote_reachable = False
