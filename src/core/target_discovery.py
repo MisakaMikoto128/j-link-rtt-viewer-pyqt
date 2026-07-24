@@ -54,7 +54,7 @@ _COMMON_MCU_PREFIXES = (
     "WCH",
 )
 
-# SEGGER 常在设备名后加括号注释，如 "STM32F030C8 (allow opt. bytes)"；
+# SEGGER 常在设备名后加括号注释，如 "STM32xx (allow opt. bytes)"；
 # 这些注释对应同一颗芯片的额外 Flash 算法选项， stripped 后归并到基础名。
 _SEGGER_ANNOTATIONS = (
     " (ALLOW OPT. BYTES)",
@@ -120,11 +120,11 @@ def _pick_main_region(areas, legacy_addr, legacy_size) -> tuple[int | None, int 
     """从 SEGGER aFlashArea / aRAMArea 数组里挑主区域（最大 Size）。
 
     pylink `supported_device()` 的 legacy `FlashAddr`/`FlashSize`（顶层字段）对带
-    括号注释的变体（如 `STM32F030C8 (allow opt. bytes)`）常是选项字节区垃圾
+    括号注释的变体（如 `STM32xx (allow opt. bytes)`）常是选项字节区垃圾
     （如 FlashAddr=0x06000000 FlashSize=65552），不可信。真实主 Flash/RAM 在
     `aFlashArea`/`aRAMArea` 数组里。策略：
     1. 数组里若有 Size>0 的区域，取 Size 最大者（主 Flash，滤掉选项字节/配置
-       小区域，如 STM32F030C8 的 area[0] 16B 选项字节）。
+       小区域，如 STM32xx 的 area[0] 16B 选项字节）。
     2. 数组全空才回退 legacy 顶层字段。
     """
     best_addr: int | None = None
@@ -193,6 +193,11 @@ def _cache_path() -> "Path":
 
 _dll_version_cache: str | None = None
 
+# 进程内磁盘缓存镜像：_read_cache 首次磁盘命中后缓存，_write_cache 写盘后刷新。
+# None = 尚未加载或磁盘无缓存；tuple = 已加载的磁盘内容（可能空元组表示已尝试但空）。
+# 目的：UI 高频读下拉候选时避免每次读 600KB JSON；worker 写盘后 UI 立即看到新值。
+_disk_cache_memory: tuple[TargetDeviceInfo, ...] | None = None
+
 
 def _jlink_dll_version() -> str:
     """读 J-Link DLL 版本号（缓存失效依据）。失败返回空串。
@@ -223,6 +228,9 @@ def _read_cache() -> tuple[TargetDeviceInfo, ...] | None:
     比较（期望版本在 _write_cache 时写入）。DLL 升级后期望版本手动更新——罕见，
     可接受。
     """
+    global _disk_cache_memory
+    if _disk_cache_memory is not None:
+        return _disk_cache_memory
     import json
     path = _cache_path()
     if not path.exists():
@@ -232,7 +240,7 @@ def _read_cache() -> tuple[TargetDeviceInfo, ...] | None:
         items = data.get("devices", [])
         if not isinstance(items, list) or not items:
             return None
-        return tuple(
+        infos = tuple(
             TargetDeviceInfo(
                 name=str(d["name"]),
                 vendor=str(d.get("vendor", "")),
@@ -246,6 +254,9 @@ def _read_cache() -> tuple[TargetDeviceInfo, ...] | None:
         )
     except Exception:
         return None
+    if infos:
+        _disk_cache_memory = infos
+    return infos
 
 
 def _write_cache(infos: tuple[TargetDeviceInfo, ...]) -> None:
@@ -273,6 +284,10 @@ def _write_cache(infos: tuple[TargetDeviceInfo, ...]) -> None:
         tmp.replace(path)
     except Exception as e:
         _logger.warning(f"target_devices 缓存写入失败：{e}")
+        return
+    # 写盘成功：刷新进程内镜像，UI 立即读到新值
+    global _disk_cache_memory
+    _disk_cache_memory = infos
 
 
 def _read_pylink_target_infos_locked() -> tuple[TargetDeviceInfo, ...]:
@@ -443,3 +458,64 @@ def target_infos_for_burner_kind(kind: str) -> tuple[TargetDeviceInfo, ...]:
     if kind == BURNER_KIND_JLINK:
         return get_pylink_target_infos()
     return get_pyocd_target_infos()
+
+
+# ============================================================
+# UI 安全只读 API：永不枚举，只读缓存
+# ============================================================
+# 设计动机（见 CLAUDE.md「设备下拉时序竞态」）：
+# get_* / target_*_for_burner_kind 是「读缓存 + 未命中枚举」的 ensure 语义，
+# 供 worker 线程调用。UI 主线程一旦调用，缓存未命中时会触发主线程枚举
+# （pylink supported_device 11130 次调用损坏 J-Link DLL TLS -> connect 崩 0x14；
+# pyOCD ~500ms 阻塞 UI）。因此 UI 必须用下面这组只读 API：
+# - 磁盘缓存命中（含内存镜像）-> 返回非空元组
+# - 缓存未就绪（worker 尚未枚举完）-> 返回空元组，**绝不枚举**
+# worker 枚举完写缓存后 emit target_infos_ready 信号，UI 收到后再读一次即拿到。
+
+
+def read_cached_target_infos() -> tuple[TargetDeviceInfo, ...]:
+    """只读 J-Link 设备缓存（磁盘 + 内存镜像），永不枚举。UI 线程安全。
+
+    缓存就绪返回非空元组；worker 尚未枚举完返回空元组。
+    """
+    cached = _read_cache()
+    return cached if cached is not None else ()
+
+
+def read_cached_target_names() -> tuple[str, ...]:
+    """只读 J-Link 设备名（磁盘 + 内存镜像），永不枚举。UI 线程安全。"""
+    return tuple(info.name for info in read_cached_target_infos())
+
+
+def read_cached_pyocd_target_infos() -> tuple[TargetDeviceInfo, ...]:
+    """只读 pyOCD 设备列表（进程内 functools.cache），永不枚举。UI 线程安全。
+
+    pyOCD 枚举不碰 J-Link DLL（不崩），但 ~500ms 阻塞主线程不可接受。worker
+    线程在 FlashWorker.initialize 调 get_pyocd_target_infos() 填充 cache 后，
+    本函数返回非空；此前返回空。
+    """
+    if get_pyocd_target_infos.cache_info().currsize == 0:
+        return ()
+    return get_pyocd_target_infos()
+
+
+def read_cached_pyocd_target_names() -> tuple[str, ...]:
+    """只读 pyOCD 设备名（进程内 cache），永不枚举。UI 线程安全。"""
+    return tuple(info.name for info in read_cached_pyocd_target_infos())
+
+
+def read_cached_target_infos_for_burner_kind(kind: str) -> tuple[TargetDeviceInfo, ...]:
+    """按烧录器 kind 路由到对应只读 API。UI 线程安全，永不枚举。
+
+    - BURNER_KIND_JLINK -> read_cached_target_infos（磁盘 + 内存镜像）
+    - 其它（cmsisdap / stlink）-> read_cached_pyocd_target_infos（进程内 cache）
+    """
+    from .probe.base import BURNER_KIND_JLINK
+    if kind == BURNER_KIND_JLINK:
+        return read_cached_target_infos()
+    return read_cached_pyocd_target_infos()
+
+
+def read_cached_target_names_for_burner_kind(kind: str) -> tuple[str, ...]:
+    """按烧录器 kind 路由到对应只读设备名 API。UI 线程安全，永不枚举。"""
+    return tuple(info.name for info in read_cached_target_infos_for_burner_kind(kind))

@@ -81,7 +81,7 @@ from core.jlink_worker import (
     JLinkWorker,
     encode_send_payload,
 )
-from core.target_discovery import get_pylink_target_names
+from core.target_discovery import read_cached_target_names
 
 from . import _infobar
 from .widgets.remote_host import (
@@ -851,10 +851,10 @@ class RTTMonitorPage(QWidget):
         row_target.addStretch(1)
         self.cb_target = TargetComboBox(self._cfg, "rtt_target_history", inner)
         self.cb_target.setFixedWidth(200)
-        # 设备列表延迟加载：target_discovery 枚举必须在 worker 线程跑（主线程枚举
-        # 会损坏 J-Link DLL TLS → connect 崩 0x14）。构造时先给空列表，等 worker 的
-        # target_infos_ready 信号回填（见 _wire_signals）。
-        self.cb_target.set_names_provider(lambda: ())
+        # 设备列表：直接读磁盘缓存（零 DLL 调用，主线程安全，永不枚举）。
+        # 不依赖 worker 时序：二次启动缓存命中即有候选；首次启动缓存空时由
+        # _connect_signals 末尾主动再读一次 + worker 的 target_infos_ready 信号兜底。
+        self.cb_target.set_names_provider(read_cached_target_names)
         self.cb_target.setPlaceholderText(self.tr("目标设备"))
         self.cb_target.restore_text(str(self._cfg.get("target_mcu") or ""))
         row_target.addWidget(self.cb_target)
@@ -1528,6 +1528,9 @@ class RTTMonitorPage(QWidget):
         # 测试的 FakeWorker 可能没这个信号——hasattr 守卫。
         if hasattr(self._worker, "target_infos_ready"):
             self._worker.target_infos_ready.connect(self._on_target_infos_ready, Qt.QueuedConnection)
+            # connect 后主动再读一次磁盘缓存：worker 可能已跑完（emit 早于 connect
+            # 信号丢失），但磁盘缓存已写，主动读即拿到，彻底摆脱时序竞态。
+            self._on_target_infos_ready()
 
         # 用户手动选设备 → 持久化 + 红点同步。currentIndexChanged 只在用户
         # 真的选了 items 里某一项时触发；用户点开但没选（或列表空）不会改值。
@@ -1539,7 +1542,8 @@ class RTTMonitorPage(QWidget):
 
     def _on_target_infos_ready(self) -> None:
         """worker 线程 target_discovery 枚举完成 → 回填目标设备下拉（命中缓存）。"""
-        self.cb_target.set_names_provider(get_pylink_target_names)
+        self.cb_target.set_names_provider(read_cached_target_names)
+        self.cb_target.refresh_tooltip()
         self.cb_target.refresh_tooltip()
 
     def _on_jlink_selection_changed(self) -> None:

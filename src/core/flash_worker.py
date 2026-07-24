@@ -23,7 +23,7 @@ from .probe.base import (
     FORMAT_ELF,
     FORMAT_HEX,
     POST_ACTION_NONE,
-    POST_ACTION_RESET,
+    POST_ACTION_HALT,
     POST_ACTION_RESET_RUN,
     STAGE_CONNECT,
     STAGE_DISCONNECT,
@@ -45,7 +45,7 @@ __all__ = [
     "FORMAT_ELF",
     "FORMAT_HEX",
     "POST_ACTION_NONE",
-    "POST_ACTION_RESET",
+    "POST_ACTION_HALT",
     "POST_ACTION_RESET_RUN",
     "STAGE_CONNECT",
     "STAGE_DISCONNECT",
@@ -89,6 +89,9 @@ class FlashWorker(QObject):
     flash_log = Signal(str, str)  # (level, msg) - "info"/"warn"/"error"
     flash_finished = Signal(bool, str)  # (success, summary_text)
     pyocd_probes_enumerated = Signal(str)  # "kind|serial|product;..."（非 J-Link probe）
+    # pyOCD target 库枚举完成（worker 线程后台跑，填充 functools.cache）。
+    # UI 收到后读 read_cached_pyocd_* 命中 cache，避免主线程枚举卡 UI ~500ms。
+    pyocd_target_infos_ready = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -121,6 +124,16 @@ class FlashWorker(QObject):
             self._pyocd_enum_timer.start()
         self.flash_requested.connect(self._on_flash_requested)
         self.stop_requested.connect(self._on_stop)
+        # pyOCD target 库后台枚举（填充 functools.cache）。不碰 J-Link DLL（不崩），
+        # ~500ms-数秒（CMSIS-Pack 索引），放 worker 线程不卡 UI。UI 读
+        # read_cached_pyocd_* 命中 cache，收信号后刷新下拉。测试模式跳过。
+        if not os.environ.get("JLINK_RTT_TEST_MODE"):
+            try:
+                from core.target_discovery import get_pyocd_target_infos
+                get_pyocd_target_infos()
+            except Exception as e:
+                self._logger.warning(f"pyocd target 枚举失败：{e}")
+            self.pyocd_target_infos_ready.emit()
         self._logger.info("FlashWorker initialized in worker thread")
 
     @Slot()
@@ -177,6 +190,11 @@ class FlashWorker(QObject):
             self._busy = False
 
     def _run_flash_impl(self, p: FlashParams) -> None:
+        # 上次烧录若 post_action=halt，backend 未 close（保持 CPU halt），先释放
+        if self._backend is not None:
+            with contextlib.suppress(Exception):
+                self._backend.close()
+            self._backend = None
         self.flash_started.emit()
         self._t_start = time.time()
         erase_only = p.erase_only
@@ -226,15 +244,18 @@ class FlashWorker(QObject):
                     backend.verify()
                     self.flash_log.emit("info", "extra verify OK")
 
-                if p.post_action in (POST_ACTION_RESET, POST_ACTION_RESET_RUN):
+                if p.post_action in (POST_ACTION_HALT, POST_ACTION_RESET_RUN):
                     self.flash_stage_changed.emit(STAGE_RESET)
                     backend.reset(
-                        halt=(p.post_action == POST_ACTION_RESET),
+                        halt=(p.post_action == POST_ACTION_HALT),
                         run=(p.post_action == POST_ACTION_RESET_RUN),
                     )
 
             self.flash_stage_changed.emit(STAGE_DISCONNECT)
-            backend.close()
+            # post_action=halt：不 close。JLINKARM_Close 会 resume CPU（放跑），
+            # 无法保持 halt。backend 句柄保留，下次烧录或关窗时 close。
+            if p.post_action != POST_ACTION_HALT:
+                backend.close()
 
             elapsed = time.time() - self._t_start
             self.flash_log.emit("info", f"=== Done ({elapsed:.1f}s) ===")
@@ -247,9 +268,10 @@ class FlashWorker(QObject):
                     backend.close()
             self.flash_finished.emit(False, str(e))
         finally:
-            # 清掉活跃 backend 引用；_on_stop 仅在关窗时跑，worker 线程串行不会
-            # 与 _run_flash 并发，清空后 _on_stop 不会拿到已 close 的 backend。
-            self._backend = None
+            if p.post_action != POST_ACTION_HALT:
+                # 清掉活跃 backend 引用（_on_stop 仅在关窗时跑）
+                self._backend = None
+            # post_action=halt：保留 _backend（未 close），下次 _run_flash 开头 close
 
     def _on_progress(self, current: int, total: int) -> None:
         """backend program 进度回调 -> flash_progress 信号。"""

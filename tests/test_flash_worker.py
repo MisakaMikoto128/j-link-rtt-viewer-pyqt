@@ -18,7 +18,7 @@ from core.flash_worker import (
     FORMAT_BIN,
     FORMAT_ELF,
     POST_ACTION_NONE,
-    POST_ACTION_RESET,
+    POST_ACTION_HALT,
     POST_ACTION_RESET_RUN,
     STAGE_CONNECT,
     STAGE_DISCONNECT,
@@ -38,7 +38,7 @@ def test_constants_exposed():
     assert ERASE_MODE_SECTOR == "sector"
     assert ERASE_MODE_CHIP == "chip"
     assert POST_ACTION_NONE == "none"
-    assert POST_ACTION_RESET == "reset"
+    assert POST_ACTION_HALT == "halt"
     assert POST_ACTION_RESET_RUN == "reset_run"
     assert STAGE_CONNECT == "connect"
     assert STAGE_PROGRAM == "program"
@@ -184,15 +184,36 @@ def test_run_flash_post_action_none_no_reset(monkeypatch, qapp):
     fake_jlink.restart.assert_not_called()
 
 
-def test_run_flash_post_action_reset_no_run(monkeypatch, qapp):
-    """post_action=reset 调 reset(halt=True)，不调 restart。"""
+def test_run_flash_post_action_halt_no_run(monkeypatch, qapp):
+    """post_action=halt：reset(halt=True)+halt()，不 restart，不 close。
+
+    JLINKARM_Close 会 resume CPU（放跑），无法保持 halt。backend 句柄保留，
+    下次烧录开头或关窗时 close。CPU halt 由 reset+halt 达成（同 RTT 重置暂停）。
+    """
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True
     w = _make_worker(monkeypatch, fake_jlink)
-    w._run_flash(_params_default(post_action=POST_ACTION_RESET))
+    w._run_flash(_params_default(post_action=POST_ACTION_HALT))
     qapp.processEvents()
     fake_jlink.reset.assert_called_with(halt=True)
+    fake_jlink.halt.assert_called()
     fake_jlink.restart.assert_not_called()
+    fake_jlink.close.assert_not_called()  # 不 close（保持 CPU halt）
+
+
+def test_run_flash_halt_keeps_backend_next_run_closes_old(monkeypatch, qapp):
+    """post_action=halt 保留 backend；下次 _run_flash 开头 close 旧 backend。"""
+    fake_jlink = MagicMock()
+    fake_jlink.opened.return_value = True
+    w = _make_worker(monkeypatch, fake_jlink)
+    w._run_flash(_params_default(post_action=POST_ACTION_HALT))
+    qapp.processEvents()
+    assert w._backend is not None  # 保留未 close
+    # 第二次：开头 close 上次保留的 backend
+    fake_jlink.close.reset_mock()
+    w._run_flash(_params_default(post_action=POST_ACTION_RESET_RUN))
+    qapp.processEvents()
+    fake_jlink.close.assert_called()
 
 
 def test_run_flash_connect_failure(monkeypatch, qapp):

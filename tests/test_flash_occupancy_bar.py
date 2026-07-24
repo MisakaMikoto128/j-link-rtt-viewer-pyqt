@@ -68,10 +68,28 @@ def test_paint_no_crash_all_states(bar, device, qtbot):
     bar.repaint()
 
 
-def test_flash_page_has_compact_bar(qtbot, isolated_appdata):
+def test_flash_page_has_compact_bar(qtbot, isolated_appdata, monkeypatch):
     """FlashPage 文件卡片内有 flash_bar，且与 analysis_view 是不同实例。"""
     from core.config_service import ConfigService
+    from core.target_discovery import TargetDeviceInfo
+    from core.probe.base import BURNER_KIND_JLINK
+    from ui import flash_page
     from ui.flash_page import FlashPage
+    # isolated_appdata 下磁盘缓存空，read_cached_* 返回空 -> _lookup_target_info 返回
+    # None -> flash_bar._device 为 None。注入测试用 info，验证"构造时回填 device
+    # info"的 UI 逻辑（而非缓存存在性）。
+    fake_info = TargetDeviceInfo(
+        name="STM32H750VB", vendor="ST", flash_addr=0x08000000,
+        flash_size=128 * 1024, ram_addr=0x20000000, ram_size=1024 * 1024,
+    )
+    monkeypatch.setattr(
+        flash_page, "read_cached_target_infos_for_burner_kind",
+        lambda kind: (fake_info,) if kind == BURNER_KIND_JLINK else (),
+    )
+    monkeypatch.setattr(
+        flash_page, "read_cached_target_names_for_burner_kind",
+        lambda kind: [fake_info.name] if kind == BURNER_KIND_JLINK else [],
+    )
     cfg = ConfigService()
     page = FlashPage(cfg)
     qtbot.addWidget(page)

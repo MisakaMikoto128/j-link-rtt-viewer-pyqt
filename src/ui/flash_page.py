@@ -49,12 +49,16 @@ from core.flash_worker import (
     FORMAT_BIN,
     FORMAT_ELF,
     POST_ACTION_NONE,
-    POST_ACTION_RESET,
+    POST_ACTION_HALT,
     POST_ACTION_RESET_RUN,
     FlashParams,
     FlashWorker,
 )
-from core.target_discovery import TargetDeviceInfo, target_infos_for_burner_kind
+from core.target_discovery import (
+    TargetDeviceInfo,
+    read_cached_target_infos_for_burner_kind,
+    read_cached_target_names_for_burner_kind,
+)
 
 from . import _infobar
 from ._scroll_helpers import make_transparent_scroll
@@ -95,8 +99,8 @@ _ERASE_LABELS = [
 ]
 _POST_LABELS = [
     ("仅烧录", POST_ACTION_NONE),
-    ("烧录 + 复位", POST_ACTION_RESET),
-    ("烧录 + 复位 + 运行（推荐）", POST_ACTION_RESET_RUN),
+    ("烧录后暂停", POST_ACTION_HALT),
+    ("烧录后复位运行", POST_ACTION_RESET_RUN),
 ]
 
 
@@ -113,6 +117,7 @@ class FlashPage(QWidget):
 
         # 与 RTT 页协调：烧录前先断同一台 J-Link 的 RTT，烧完回连
         self._resume_rtt_after_flash = False
+        self._last_post_action = POST_ACTION_NONE
         self._rtt_pending_disconnect = False
         self._rtt_disconnect_timeout_timer: QTimer | None = None
         self._rtt_resume_remote_addr = ""
@@ -243,10 +248,13 @@ class FlashPage(QWidget):
         self.lbl_device = BodyLabel(self.tr("目标设备:"))
         row.addWidget(self.lbl_device)
         self.cmb_device = TargetComboBox(self._cfg, "flash_device_history")
-        # 设备列表延迟加载：target_discovery 枚举必须在 worker 线程跑（主线程枚举
-        # 会损坏 J-Link DLL TLS → connect 崩 0x14）。构造时先给空列表，等 worker 的
-        # target_infos_ready 信号回填。functools.cache 保证回填时不重复枚举。
-        self.cmb_device.set_names_provider(lambda: [])
+        # 设备列表：直接读磁盘缓存（零 DLL 调用，主线程安全，永不枚举）。
+        # 不依赖 worker 时序：缓存命中即有候选；缓存空时由 _connect_signals 末尾
+        # 主动再读一次 + worker 的 target_infos_ready 信号兜底。
+        kind = self._selected_kind if self._selected_kind and self._selected_kind != "remote" else BURNER_KIND_JLINK
+        self.cmb_device.set_names_provider(
+            lambda: list(read_cached_target_names_for_burner_kind(kind))
+        )
         self.cmb_device.set_target_info_lookup(self._lookup_target_info)
         self.cmb_device.restore_text(str(self._cfg.get("flash_device_name") or ""))
         self.cmb_device.textChanged.connect(self._on_target_device_changed)
@@ -280,12 +288,8 @@ class FlashPage(QWidget):
         name = name.strip().upper()
         if not name:
             return None
-        # 缓存未就绪不触发枚举（worker 枚举完成后 target_infos_ready 信号回填）
-        from core.target_discovery import get_pylink_target_infos
-        if get_pylink_target_infos.cache_info().currsize == 0:
-            return None
         kind = self._selected_kind if self._selected_kind and self._selected_kind != "remote" else BURNER_KIND_JLINK
-        for info in target_infos_for_burner_kind(kind):
+        for info in read_cached_target_infos_for_burner_kind(kind):
             if info.name == name:
                 return info
         return None
@@ -295,10 +299,10 @@ class FlashPage(QWidget):
         self._refresh_device_combo()
 
     def _refresh_device_combo(self) -> None:
-        """按当前烧录器 kind 刷新目标设备下拉的数据源。"""
+        """按当前烧录器 kind 刷新目标设备下拉的数据源（只读缓存，不枚举）。"""
         kind = self._selected_kind if self._selected_kind and self._selected_kind != "remote" else BURNER_KIND_JLINK
         self.cmb_device.set_names_provider(
-            lambda: [info.name for info in target_infos_for_burner_kind(kind)]
+            lambda: list(read_cached_target_names_for_burner_kind(kind))
         )
         self.cmb_device.refresh_tooltip()
         # kind 变化可能换设备库 -> 重查当前设备的 Flash 容量
@@ -464,8 +468,11 @@ class FlashPage(QWidget):
                 self.cmb_erase.setCurrentIndex(i)
                 break
 
-        # post action
+        # post action（旧配置 "reset" 迁移到 "halt"）
         pa = self._cfg.get("flash_post_action")
+        if pa == "reset":
+            pa = "halt"
+            self._cfg.set("flash_post_action", pa)
         for i, (_, v) in enumerate(_POST_LABELS):
             if v == pa:
                 self.cmb_post.setCurrentIndex(i)
@@ -521,10 +528,21 @@ class FlashPage(QWidget):
                 self._rtt_worker.target_infos_ready.connect(
                     self._on_target_infos_ready, _Qt.QueuedConnection
                 )
+                # connect 后主动再读一次磁盘缓存：worker 可能已跑完（emit 早于
+                # connect 信号丢失），但缓存已写，主动读即拿到，摆脱时序竞态。
+                self._on_target_infos_ready()
         # pyOCD 烧录器枚举（非 J-Link，FlashWorker worker 线程 1s tick）
         self._worker.pyocd_probes_enumerated.connect(
             self._on_pyocd_burners_enumerated, _Qt.QueuedConnection
         )
+        # pyOCD target 库枚举完成（FlashWorker worker 线程）-> 回填设备下拉。
+        # 切到 cmsisdap/stlink 时 read_cached_pyocd_* 命中 cache。
+        # 测试 fixture 的 FakeFlashWorker 可能没此信号，hasattr 守卫。
+        if hasattr(self._worker, "pyocd_target_infos_ready"):
+            self._worker.pyocd_target_infos_ready.connect(
+                self._on_target_infos_ready, _Qt.QueuedConnection
+            )
+            self._on_target_infos_ready()  # 主动调：worker 可能已跑完，读磁盘/进程 cache
 
         # 详情折叠
         self.btn_toggle_log.clicked.connect(self._toggle_log)
@@ -1098,6 +1116,7 @@ class FlashPage(QWidget):
         speed = int(self.cmb_speed.currentText())
         erase_mode = _ERASE_LABELS[self.cmb_erase.currentIndex()][1]
         post_action = _POST_LABELS[self.cmb_post.currentIndex()][1]
+        self._last_post_action = post_action
         verify = self.chk_verify.isChecked()
         if erase_only:
             # 全片擦除：固定 chip 擦除，不做烧录后动作/校验
@@ -1230,7 +1249,7 @@ class FlashPage(QWidget):
         self.btn_erase_chip.setText(self.tr("全片擦除"))
         self._set_rtt_busy(False)
 
-        if self._resume_rtt_after_flash:
+        if self._resume_rtt_after_flash and self._last_post_action != POST_ACTION_HALT:
             self._resume_rtt_after_flash = False
             target = self._cfg.get("target_mcu")
             iface = self._cfg.get("interface")
@@ -1377,7 +1396,7 @@ class FlashPage(QWidget):
             e.acceptProposedAction()
 
     def _on_rtt_state_for_flash(self, connected: bool) -> None:
-        """RTT 断开后确认真正切到断开态，再启动烧录。"""
+        """RTT 断开后确认切到断开态，再启动烧录。"""
         if self._rtt_pending_disconnect and not connected:
             self._rtt_pending_disconnect = False
             self._rtt_disconnect_timeout_timer.stop()

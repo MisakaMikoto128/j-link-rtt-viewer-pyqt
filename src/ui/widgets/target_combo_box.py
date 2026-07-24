@@ -5,7 +5,7 @@
 - 下拉只显示“最近使用 8 条”（无输入）或“当前输入匹配的前 8 条”。
 - 完整设备库交给 QCompleter，由 Qt 内部过滤并弹出补全提示，不污染下拉 items。
 - 用户确认输入后（editingFinished / activated）加入页面历史，RTT 与 Flash 历史键分开。
-- 保留用户手动输入任意名称的能力（如 STM32F030C8T6x），不一定非在下拉 items 里。
+- 保留用户手动输入任意名称的能力（如 STM32xxT6x），不一定非在下拉 items 里。
 """
 
 from __future__ import annotations

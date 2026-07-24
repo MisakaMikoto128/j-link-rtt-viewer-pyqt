@@ -447,7 +447,11 @@ def test_unexpected_disconnect_emits_signal(worker):
     unexpected = []
     w.unexpected_disconnect.connect(lambda d: unexpected.append(d))
     states = []
-    w.connection_state_changed.connect(lambda c: states.append(c))
+    # DirectConnection：worker 线程 emit 跨线程到主线程槽，裸 lambda（无 QObject
+    # receiver）默认 AutoConnection 投递不可靠（CLAUDE.md「裸 lambda 连接 worker
+    # 线程拥有的信号不触发」）。DirectConnection 在 emit 线程同步执行 slot，
+    # states.append 是 GIL 安全的纯 Python 操作，可靠收到。同 857 行模式。
+    w.connection_state_changed.connect(lambda c: states.append(c), type=Qt.DirectConnection)
 
     # 模拟物理掉线：下一次 rtt_read 抛异常
     jl.rtt_read.side_effect = RuntimeError("device gone")
@@ -461,6 +465,12 @@ def test_unexpected_disconnect_emits_signal(worker):
     assert unexpected, "应 emit unexpected_disconnect"
     assert "12345678" in unexpected[0], f"标识应含 J-Link serial，got {unexpected[0]!r}"
     assert w.state_name() == "IDLE"
+    # _do_disconnect 顺序：520 state=IDLE -> 531 start_ts=0 -> 533 emit(False)。
+    # state=IDLE 先于 emit，读到 IDLE 时 emit 可能尚未执行，轮询等 emit 到达。
+    deadline2 = time.time() + 2.0
+    while not states and time.time() < deadline2:
+        QCoreApplication.processEvents()
+        time.sleep(0.02)
     assert False in states, "应 emit connection_state_changed(False)"
 
 

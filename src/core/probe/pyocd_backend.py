@@ -10,12 +10,13 @@ J-Link），但本 backend 只用于非 J-Link probe--J-Link 仍走 PylinkBacken
 - FileProgrammer(session, progress=cb, chip_erase=...)  # progress cb 单参数
 - target.halt / mass_erase / reset / reset_and_halt / resume / read_memory_block8
 
-target_override：用户填的 device_name（如 STM32F030C8）。pyOCD 先查内置
+target_override：用户填的 device_name（如 STM32xx）。pyOCD 先查内置
 target（lowercase），再查 CMSIS-Pack（part number 原样，首次可能下载 pack）。
 """
 from __future__ import annotations
 
 import contextlib
+import sys
 
 from .base import (
     ERASE_MODE_CHIP,
@@ -30,7 +31,7 @@ from .base import (
 
 
 def _pack_part_wildcard_eq(pattern: str, text: str) -> bool:
-    """CMSIS-Pack part_number 的 'x' 是封装/等级通配（STM32F030C8Tx）。
+    """CMSIS-Pack part_number 的 'x' 是封装/等级通配（STM32xxTx）。
 
     等长比较，pattern 的 'x' 匹配 text 任意单字符：
     stm32f030c8tx ~ stm32f030c8t6 -> True；~ stm32f030c8 -> False（长度不同）。
@@ -55,7 +56,7 @@ _SWD_ERR_KEYWORDS = (
 def _swd_err_hint(msg: str) -> str:
     """SWD 通信类错误追加接线排查提示；其它错误原样返回。
 
-    实验依据：ST-Link + STM32F030 在 10kHz–4MHz 全频率、default/under_reset/attach
+    实验依据：ST-Link + STM32xx 在 10kHz–4MHz 全频率、default/under_reset/attach
     全模式下 SWD 均失败（Get IDCODE error / DP error / DP parity），同一目标下
     DAPLink 正常 -> 属信号完整性问题，非 pyOCD 配置。STLinkV3 必须接 VREF。
     """
@@ -83,9 +84,26 @@ class PyOCDBackend:
     # ============================================================
     def connect(self, params: ProbeParams) -> None:
         from pyocd.core.helpers import ConnectHelper
+        import pyocd.core.session as _sess
+        # Windows 上 CMSIS-DAP v2 走 pyusb_v2_backend → libusb claim_interface 对 HID
+        # 设备返回 LIBUSB_ERROR_NOT_SUPPORTED。强制 v1（hidapi）避免该问题。
+        # 但 prefer_v1 会让 ST-Link 从枚举中消失（ST-Link 不是 CMSIS-DAP），所以
+        # 连接 CMSIS-DAP 时临时设置，连接后恢复（不影响后续 ST-Link 连接）。
+        _opts = _sess.Session.get_current().options
+        _had_prefer_v1 = _opts.is_set('cmsis_dap.prefer_v1') and _opts.get('cmsis_dap.prefer_v1')
+        _opts['cmsis_dap.prefer_v1'] = True
+        try:
+            self._connect_impl(params, ConnectHelper)
+        finally:
+            # 恢复 prefer_v1（无论成功失败，不影响后续 ST-Link 枚举）
+            if not _had_prefer_v1:
+                _opts['cmsis_dap.prefer_v1'] = False
+
+    def _connect_impl(self, params: ProbeParams, ConnectHelper) -> None:
+        """connect 的实现（prefer_v1 已在外层设置/恢复）。"""
         self._params = params
-        # target_override：用户填的 device_name（如 STM32F030C8）。pyOCD 的 pack
-        # part number 通常带封装后缀（如 STM32F030C8Tx），_resolve_target_type
+        # target_override：用户填的 device_name（如 STM32xx）。pyOCD 的 pack
+        # part number 通常带封装后缀（如 STM32xxTx），_resolve_target_type
         # 模糊匹配到已注册的 part number。
         target_override = self._resolve_target_type(params.device_name)
         if target_override is None:
@@ -214,11 +232,13 @@ class PyOCDBackend:
     # 复位
     # ============================================================
     def reset(self, halt: bool, run: bool) -> None:
+        """复位目标。语义同 PylinkBackend.reset。"""
         if run:
             self._target.reset()
             self._log("info", "CPU running")
         elif halt:
             self._target.reset_and_halt()
+            self._log("info", "CPU halted after reset")
         else:
             # halt=False run=False：复位后保持 halt（与 PylinkBackend 一致语义）
             self._target.reset_and_halt()
@@ -251,12 +271,12 @@ class PyOCDBackend:
 
         pyOCD builtin target 在 TARGET dict（lowercase key）。CMSIS-Pack target
         不在 TARGET dict，要经 ManagedPacks.get_installed_targets() 查 part_number。
-        pack part number 用 'x' 作封装/等级后缀通配（如 STM32F030C8Tx）。
+        pack part number 用 'x' 作封装/等级后缀通配（如 STM32xxTx）。
 
         用户在 UI 填的 device_name 可能是：
-        - SEGGER 短名：STM32F030C8（不带后缀）
-        - 完整型号：STM32F030C8T6（带封装后缀 T6）
-        都要匹配到 pack 的 part_number（STM32F030C8Tx）。
+        - SEGGER 短名：STM32xx（不带后缀）
+        - 完整型号：STM32xxT6（带封装后缀 T6）
+        都要匹配到 pack 的 part_number（STM32xxTx）。
 
         匹配顺序：
         1. device_name.lower() 直接命中 builtin TARGET dict。

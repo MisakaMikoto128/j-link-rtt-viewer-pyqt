@@ -29,9 +29,9 @@ BURNER_KIND_CMSIS_DAP = "cmsisdap"
 ERASE_MODE_SECTOR = "sector"
 ERASE_MODE_CHIP = "chip"
 
-POST_ACTION_NONE = "none"
-POST_ACTION_RESET = "reset"
-POST_ACTION_RESET_RUN = "reset_run"
+POST_ACTION_NONE = "none"           # 仅烧录：烧录完不管，直接断开
+POST_ACTION_HALT = "halt"           # 烧录后暂停：复位 + 显式 halt（CPU 停在复位状态）
+POST_ACTION_RESET_RUN = "reset_run" # 烧录后复位运行：复位 + 运行（默认）
 
 FORMAT_ELF = "elf"
 FORMAT_HEX = "hex"

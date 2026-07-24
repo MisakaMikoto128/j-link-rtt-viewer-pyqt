@@ -107,7 +107,7 @@ class PylinkBackend:
 
         # 用自家解析器把固件读成带地址的段，逐段 jlink.flash 在正确物理地址烧录。
         # 不用 flash_file：其 ELF loader 对部分 axf 的段/入口处理不可靠（实测
-        # STM32F030C8 axf 烧后无法运行，同固件 hex 正常）——hex 只含裸地址数据，
+        # STM32xx axf 烧后无法运行，同固件 hex 正常）——hex 只含裸地址数据，
         # 所以 hex 没踩。逐段按 p_paddr 烧录与 hex 等价，行为可控。
         from core import flash_file_parser as fp
         ih = fp.to_intelhex(p.file_path, p.bin_start_addr)
@@ -155,8 +155,21 @@ class PylinkBackend:
     # 复位
     # ============================================================
     def reset(self, halt: bool, run: bool) -> None:
+        """复位目标。
+
+        halt=True  run=False：复位后显式 halt（CPU 停在复位状态，不运行）
+        halt=False run=True ：复位后运行（默认）
+        halt=False run=False：仅复位（不推荐，状态不确定）
+        """
         self._jlink.reset(halt=halt)
-        if run:
+        if halt and not run:
+            # 复位后显式 halt：reset(halt=True) 只保证不调 Go，不保证 CPU 停住——
+            # 复位释放后 CPU 立即运行，halt() 需要在复位完成后调才有效。
+            # JLINKARM_Reset() 是同步的（返回时复位已释放），但 CPU 可能已跑了几条
+            # 指令——halt() 仍能停住（停在当前 PC，不是复位向量，但符合"暂停"语义）。
+            self._jlink.halt()
+            self._log("info", "CPU halted after reset")
+        elif run:
             self._jlink.restart()
             self._log("info", "CPU running")
 

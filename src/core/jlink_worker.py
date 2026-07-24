@@ -81,7 +81,7 @@ class JLinkWorker(QObject):
     enumerate_devices_requested = Signal()
     disconnect_requested = Signal()
     send_data_requested = Signal(str, bool)
-    reset_requested = Signal(str)  # mode: "normal" / "auto_reconnect" —— worker 内部一条龙
+    reset_requested = Signal(str)  # mode: "normal" / "auto_reconnect" —— worker 内部完成完整重置流程
     set_rtt_channel_requested = Signal(int)
     set_pause_receive_requested = Signal(bool)
     set_power_output_requested = Signal(bool)
@@ -232,6 +232,12 @@ class JLinkWorker(QObject):
         self._rtt_drain_timer.timeout.connect(self._drain_rtt_buffer)
         self._rtt_drain_timer.start()
 
+        # target_discovery：worker 线程跑（主线程 supported_device 枚举损坏 DLL TLS →
+        # connect 崩 0x14）。优先读磁盘缓存（零 DLL 调用），未命中才枚举。
+        # **必须在 _enum_timer 启动前同步跑完**——singleShot(0) 会让 _enum_timer 的
+        # connected_emulators 与 supported_device 枚举并发打 DLL → 崩（实测）。
+        self._run_target_discovery()
+
         # J-Link 设备枚举 timer：200ms 一次，worker 线程内自动广播 devices_enumerated。
         # UI 各页面只消费该信号，不各自起轮询（全局唯一轮询源）。
         self._enum_timer = QTimer()
@@ -239,27 +245,26 @@ class JLinkWorker(QObject):
         self._enum_timer.timeout.connect(self._on_enumerate_devices)
         self._enum_timer.start()
 
-        # target_discovery：worker 线程跑（主线程 supported_device 枚举损坏 DLL TLS →
-        # connect 崩 0x14）。优先读磁盘缓存（零 DLL 调用），未命中才枚举。
-        # 用 singleShot(0) 延迟到事件循环，避免阻塞 initialize 的 timer 启动。
-        QTimer.singleShot(0, self._run_target_discovery)
-
         self._ready = True
         self._logger.info("JLinkWorker initialized in worker thread")
 
     def _run_target_discovery(self) -> None:
-        """在 worker 线程跑 target_discovery（优先读缓存，未命中才枚举）。"""
+        """在 worker 线程跑 target_discovery（优先读缓存，未命中才枚举）。
+
+        结果存 _target_infos_ready 标志，UI 构造时主动查询（不靠信号——信号在
+        UI 连接前 emit 会丢）。
+        """
         try:
             from core.target_discovery import get_pylink_target_infos, _cache_path
             cache_hit = _cache_path().exists()
             get_pylink_target_infos()
-            self.target_infos_ready.emit()
             src = "缓存" if cache_hit else "DLL 枚举"
             self._logger.info(f"target_discovery 完成（{src}，worker 线程）")
         except Exception as e:
             self._logger.warning(f"target_discovery 失败：{e}")
-            # 失败也 emit，UI 用空列表
-            self.target_infos_ready.emit()
+        # 无论成功失败都 emit：UI 收到后读磁盘缓存，作为首次启动缓存空时的兜底
+        # 刷新。UI 不依赖本信号时序（构造时直接读磁盘，connect 后主动再读一次）。
+        self.target_infos_ready.emit()
 
     def state_name(self) -> str:
         """状态名（线程安全：Python 单赋值原子）。"""
@@ -534,7 +539,7 @@ class JLinkWorker(QObject):
 
         关键：不用 rtt_get_num_up_buffers() 的返回值当通道数--它返回的是固件声明的
         MaxNumUpBuffers（描述符数组大小），含「声明了但没初始化的空槽」。实测某
-        STM32F030 固件声明 3 个上行缓冲，但只有 ch0 真正分配了缓冲（SizeOfBuffer=1024），
+        STM32xx 固件声明 3 个上行缓冲，但只有 ch0 真正分配了缓冲（SizeOfBuffer=1024），
         ch1/ch2 的 SizeOfBuffer=0（空槽，永远没数据）。若用声明数 3，SpinBox 会显示
         0/1/2 且选 4 拉回到 2（空槽无数据）--正是用户报的 bug。
 
@@ -766,10 +771,10 @@ class JLinkWorker(QObject):
 
     @Slot(str)
     def _on_reset(self, mode: str) -> None:
-        """一条龙重置 —— UI 只发模式，剩下全在 worker 闭环。
+        """完整重置流程 —— UI 只发模式，剩下全在 worker 闭环。
 
-        mode 决定治法（针对 pylink 缓存 RTT 控制块地址在 reset 后过期的 bug）：
-        - "normal":         5 步 dance —— reset + rtt_stop/start，连接保留。
+        mode 决定重置方式（针对 pylink 缓存 RTT 控制块地址在 reset 后过期的 bug）：
+        - "normal":         分步重置 —— reset + rtt_stop/start，连接保留。
                             快，对大多数 MCU 够用；少数 MCU 上不可靠。
         - "auto_reconnect": reset + 断开 + 等 MCU boot + 重连，整个 J-Link 会话
                             推倒重来。慢 ~500ms 但 100% 可靠。
@@ -785,7 +790,7 @@ class JLinkWorker(QObject):
             self._reset_in_place()
 
     def _reset_in_place(self) -> None:
-        """治法 A：5 步 dance（保留 J-Link 会话）。"""
+        """normal 模式：分步重置，保留 J-Link 会话。"""
         self._pause_read_thread()
         ok, err = True, ""
         try:
@@ -804,7 +809,7 @@ class JLinkWorker(QObject):
             self.log_message.emit("info", "目标设备已重置")
 
     def _reset_and_halt(self) -> None:
-        """治法 C：reset 后让 CPU 停在复位状态（halt=True），不运行、不断开重连。
+        """halt 模式：reset 后 CPU 停在复位状态（halt=True），不运行、不断开。
 
         与「仅重置」不同——这里 reset 第二参 halt=True，CPU 复位后停在复位向量、
         不执行启动代码，可用于上电瞬间状态调试。MCU 停着不跑，所以不会再产生
@@ -824,7 +829,7 @@ class JLinkWorker(QObject):
             self.log_message.emit("info", "目标设备已重置并暂停（halt，停在复位状态）")
 
     def _reset_with_reconnect(self) -> None:
-        """治法 B：reset → disconnect → 等 boot → reconnect，整个会话重建。"""
+        """auto_reconnect 模式：reset → disconnect → 等 boot → reconnect，整个会话重建。"""
         params = self._last_connect_params
         if params is None:
             self.command_result.emit("reset", False, "无连接参数可重连")

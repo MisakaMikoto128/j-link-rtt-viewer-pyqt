@@ -122,7 +122,7 @@ class ConfigService(QObject):
         "flash_speed": 4000,
         "flash_bin_address": 0x08000000,  # bin 模式的起始地址
         "flash_erase_mode": "sector",  # "sector" | "chip"
-        "flash_post_action": "reset_run",  # "none" | "reset" | "reset_run"
+        "flash_post_action": "reset_run",  # "none" | "halt" | "reset_run"
         "flash_verify": False,  # extra byte-by-byte verify
         "flash_recent_files": [],  # 最多 10 个，时间倒序
         "flash_recent_files_mtime": {},  # path → mtime（float），用于变更提示
