@@ -13,6 +13,7 @@ pyOCD 烧录依赖 CMSIS-Pack 提供 target 的 flash algo。pack 体积大（�
 Cache 实例模块级缓存：data_path 不变时复用；变更或 pack 增删后调
 invalidate_cache() 重建，否则 Cache.index 读不到新状态。
 """
+
 from __future__ import annotations
 
 import os
@@ -38,6 +39,7 @@ class PackInfo:
         size_bytes: 文件字节数
         file_path: 绝对路径
     """
+
     file_name: str
     vendor: str
     name: str
@@ -85,6 +87,7 @@ def get_pack_data_path() -> str:
     """
     global _DEFAULT_PACK_PATH
     from .config_service import ConfigService
+
     cfg = ConfigService()
     path = str(cfg.get("pack_data_path") or "")
     if path:
@@ -92,11 +95,10 @@ def get_pack_data_path() -> str:
     if _DEFAULT_PACK_PATH is None:
         try:
             import cmsis_pack_manager as cpm
+
             _DEFAULT_PACK_PATH = cpm.Cache(True, False).data_path
         except ImportError:
-            _DEFAULT_PACK_PATH = str(
-                ConfigService._compute_user_prefs_path().parent / "packs"
-            )
+            _DEFAULT_PACK_PATH = str(ConfigService._compute_user_prefs_path().parent / "packs")
     return _DEFAULT_PACK_PATH
 
 
@@ -107,6 +109,7 @@ def set_pack_data_path(path: str) -> None:
     CMSIS-Pack 索引（约 1-2 分钟）。旧 pack 不会自动迁移，用「迁移旧 pack」按钮。
     """
     from .config_service import ConfigService
+
     cfg = ConfigService()
     cfg.set("pack_data_path", path)
     cfg.flush()
@@ -130,6 +133,7 @@ def get_pack_cache():
     except ImportError:
         return None
     from pathlib import Path
+
     Path(path).mkdir(parents=True, exist_ok=True)
     _cache_obj = cmsis_pack_manager.Cache(True, False, json_path=path, data_path=path)
     _cache_data_path = path
@@ -178,14 +182,16 @@ def list_installed_packs() -> list[PackInfo]:
                 size = 0
             rel = os.path.relpath(file_path, path).replace("\\", "/")
             vendor, name, version = _parse_pack_rel_path(rel)
-            result.append(PackInfo(
-                file_name=rel,
-                vendor=vendor,
-                name=name,
-                version=version,
-                size_bytes=size,
-                file_path=file_path,
-            ))
+            result.append(
+                PackInfo(
+                    file_name=rel,
+                    vendor=vendor,
+                    name=name,
+                    version=version,
+                    size_bytes=size,
+                    file_path=file_path,
+                )
+            )
     result.sort(key=lambda p: (p.vendor, p.name, p.version))
     return result
 
@@ -230,7 +236,7 @@ def search_packs(query: str, limit: int = 500) -> list[str]:
     if not q:
         return []
     matches: list[str] = []
-    for name in cache.index.keys():
+    for name in cache.index:
         if q in name.upper():
             matches.append(name)
             if len(matches) >= limit:
@@ -247,6 +253,7 @@ def _invalidate_pyocd_target_cache() -> None:
     """
     try:
         from core.target_discovery import get_pyocd_target_infos
+
         get_pyocd_target_infos.cache_clear()
     except Exception:
         pass
@@ -282,7 +289,7 @@ def download_pack(part_number: str, log=None) -> str:
         return "failed"
     key = part_number.lower().strip()
     matches = set()
-    for name in cache.index.keys():
+    for name in cache.index:
         nl = name.lower()
         if nl == key or wildcard_eq(nl, key) or nl.startswith(key) or key.startswith(nl):
             matches.add(name)
@@ -334,7 +341,9 @@ def delete_pack(file_name: str) -> bool:
         return False
     file_path = os.path.join(path, safe)
     # 双重校验：最终路径必须在 data_path 内
-    if os.path.commonpath([os.path.abspath(path), os.path.abspath(file_path)]) != os.path.abspath(path):
+    if os.path.commonpath([os.path.abspath(path), os.path.abspath(file_path)]) != os.path.abspath(
+        path
+    ):
         return False
     if not os.path.isfile(file_path):
         return False

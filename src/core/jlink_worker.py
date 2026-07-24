@@ -22,9 +22,11 @@ Qt 官方反复强调："不要继承 QThread 把业务逻辑放进去"。正确
   清理 pylink → `self.thread().quit()` 让外部 thread 的 exec() 返回。
 - 主线程 `thread.wait(timeout)`，不主动 quit/terminate（除非超时兜底）。
 """
+
 from __future__ import annotations
 
 import codecs
+import contextlib
 import threading
 import time
 from datetime import datetime
@@ -81,7 +83,9 @@ class JLinkWorker(QObject):
     enumerate_devices_requested = Signal()
     disconnect_requested = Signal()
     send_data_requested = Signal(str, bool)
-    reset_requested = Signal(str)  # mode: "normal" / "auto_reconnect" —— worker 内部完成完整重置流程
+    reset_requested = Signal(
+        str
+    )  # mode: "normal" / "auto_reconnect" —— worker 内部完成完整重置流程
     set_rtt_channel_requested = Signal(int)
     set_pause_receive_requested = Signal(bool)
     set_power_output_requested = Signal(bool)
@@ -131,19 +135,19 @@ class JLinkWorker(QObject):
         super().__init__()
         self._logger = get_logger()
         self._state: str = _STATE_IDLE
-        self._view_channel: int = CHANNEL_DEFAULT   # UI 选择的视图通道（-1 = 全部）
-        self._send_channel: int = CHANNEL_DEFAULT   # 实际发送通道（恒为具体通道）
-        self._num_up_channels: int = 1              # MCU 上报的上行通道数（连接后探测）
+        self._view_channel: int = CHANNEL_DEFAULT  # UI 选择的视图通道（-1 = 全部）
+        self._send_channel: int = CHANNEL_DEFAULT  # 实际发送通道（恒为具体通道）
+        self._num_up_channels: int = 1  # MCU 上报的上行通道数（连接后探测）
         self._paused: bool = False
         self._ready: bool = False
 
         # 这些在 initialize() 内（worker 线程）创建/启动：
         self.jlink: pylink.JLink | None = None
         self._decoders: dict[int, codecs.IncrementalDecoder] = {}  # 每通道独立 decoder
-        self._encoding: str = "utf-8"      # 可由 UI 改：utf-8/gbk/utf-16-le/...
+        self._encoding: str = "utf-8"  # 可由 UI 改：utf-8/gbk/utf-16-le/...
         self._read_thread: threading.Thread | None = None
         self._stop_read: bool = False
-        self._poll_interval: float = 0.1   # 100ms，匹配参考项目
+        self._poll_interval: float = 0.1  # 100ms，匹配参考项目
         self._log_file = None
         self._log_path: str | None = None
 
@@ -182,7 +186,7 @@ class JLinkWorker(QObject):
         # 数据吞吐统计（按通道）：read_thread 写入，UI 1s 一次同步读取（GIL + lock 保护）
         self._stats_lock = threading.Lock()
         self._channel_stats: dict[int, tuple[int, int]] = {}  # ch -> (bytes, lines)
-        self._session_start_ts: float = 0.0   # 0 = 未开始会话
+        self._session_start_ts: float = 0.0  # 0 = 未开始会话
 
     # ============================================================
     # worker 线程初始化（由外部 QThread.started 触发）
@@ -237,6 +241,7 @@ class JLinkWorker(QObject):
         # 缓存命中时跳过--UI 直接读磁盘缓存即可（零 DLL 调用），省 worker 线程
         # 启动时间（首次读缓存+转换 ~89ms 持有 GIL，挪到 UI 打开页面时再付）。
         from core.target_discovery import _cache_path
+
         if not _cache_path().exists():
             self._run_target_discovery()
         else:
@@ -259,7 +264,8 @@ class JLinkWorker(QObject):
         UI 连接前 emit 会丢）。
         """
         try:
-            from core.target_discovery import get_pylink_target_infos, _cache_path
+            from core.target_discovery import _cache_path, get_pylink_target_infos
+
             cache_hit = _cache_path().exists()
             get_pylink_target_infos()
             src = "缓存" if cache_hit else "DLL 枚举"
@@ -355,20 +361,29 @@ class JLinkWorker(QObject):
     # 连接 / 断开
     # ============================================================
     @Slot(str, str, int, int, str)
-    def _on_connect(self, target: str, iface: str, speed: int, channel: int,
-                    jlink_serial: str) -> None:
+    def _on_connect(
+        self, target: str, iface: str, speed: int, channel: int, jlink_serial: str
+    ) -> None:
         """connect_requested 信号槽。实现在 _do_connect，方便其他 worker 内部
         路径（如 _reset_with_reconnect）以普通函数方式直接调，不走信号队列。"""
         self._do_connect(target, iface, speed, channel, jlink_serial)
 
     @Slot(str, str, int, int, str)
-    def _on_connect_remote(self, target: str, iface: str, speed: int, channel: int,
-                           remote_addr: str) -> None:
+    def _on_connect_remote(
+        self, target: str, iface: str, speed: int, channel: int, remote_addr: str
+    ) -> None:
         """connect_remote_requested 信号槽：连接远程 J-Link（Remote Server）。"""
         self._do_connect(target, iface, speed, channel, "", remote_addr)
 
-    def _do_connect(self, target: str, iface: str, speed: int, channel: int,
-                    jlink_serial: str = "", remote_addr: str = "") -> None:
+    def _do_connect(
+        self,
+        target: str,
+        iface: str,
+        speed: int,
+        channel: int,
+        jlink_serial: str = "",
+        remote_addr: str = "",
+    ) -> None:
         if self._state == _STATE_CONNECTED:
             self.log_message.emit("warning", "已连接，先断开再切换设备")
             return
@@ -402,11 +417,17 @@ class JLinkWorker(QObject):
                 # 「这台还在接入」——否则 open(serial) 对不存在的 serial 会直接抛，
                 # 且「上次是 A，现在只剩 B」时 auto_reconnect 会误连 B（CLAUDE.md
                 # 多 J-Link 设计原则）。
-                if jlink_serial and jlink_serial != "0" and not any(
-                        str(int(getattr(e, "SerialNumber", 0) or 0)) == jlink_serial
-                        for e in emus):
+                if (
+                    jlink_serial
+                    and jlink_serial != "0"
+                    and not any(
+                        str(int(getattr(e, "SerialNumber", 0) or 0)) == jlink_serial for e in emus
+                    )
+                ):
                     self.log_message.emit(
-                        "warning", f"选中的 J-Link（S/N: {jlink_serial}）不在线，请刷新设备列表或重新选择")
+                        "warning",
+                        f"选中的 J-Link（S/N: {jlink_serial}）不在线，请刷新设备列表或重新选择",
+                    )
                     self._do_disconnect()
                     return
                 if not self.jlink.opened():
@@ -431,8 +452,11 @@ class JLinkWorker(QObject):
                         self.jlink.open(str(ser_num))
                         self.jlink.rtt_start()
 
-            tif = pylink.enums.JLinkInterfaces.SWD if iface == "SWD" \
+            tif = (
+                pylink.enums.JLinkInterfaces.SWD
+                if iface == "SWD"
                 else pylink.enums.JLinkInterfaces.JTAG
+            )
             self.jlink.set_tif(tif)
             self.jlink.set_speed(int(speed))
             self.jlink.connect(target)
@@ -450,7 +474,14 @@ class JLinkWorker(QObject):
                     actual_serial = str(int(sn)) if sn is not None else ""
                 else:
                     actual_serial = jlink_serial or ""
-                self._last_connect_params = (target, iface, speed, channel, actual_serial, remote_addr)
+                self._last_connect_params = (
+                    target,
+                    iface,
+                    speed,
+                    channel,
+                    actual_serial,
+                    remote_addr,
+                )
                 info = self._collect_device_info(target, iface, speed, remote_addr)
                 with self._info_lock:
                     self._device_info = info
@@ -458,8 +489,9 @@ class JLinkWorker(QObject):
                 with self._stats_lock:
                     self._session_start_ts = time.time()
                 self._logger.info(
-                    f"已连接 {target} ({iface} {speed}kHz, RTT 上行通道数 {self._num_up_channels})" +
-                    (f", 远程 {remote_addr}" if remote_addr else ""))
+                    f"已连接 {target} ({iface} {speed}kHz, RTT 上行通道数 {self._num_up_channels})"
+                    + (f", 远程 {remote_addr}" if remote_addr else "")
+                )
                 self.connection_state_changed.emit(True)
                 self._restart_read_thread()
             else:
@@ -470,7 +502,9 @@ class JLinkWorker(QObject):
             self._logger.error(f"连接失败：{e}")
             if remote_addr:
                 self.log_message.emit(
-                    "error", f"无法连接远程 J-Link（{remote_addr}）：请检查 Remote Server 是否运行、IP/端口是否正确（{e}）")
+                    "error",
+                    f"无法连接远程 J-Link（{remote_addr}）：请检查 Remote Server 是否运行、IP/端口是否正确（{e}）",
+                )
             else:
                 self.log_message.emit("error", f"连接失败：{e}")
             self._do_disconnect()
@@ -555,7 +589,7 @@ class JLinkWorker(QObject):
         故失败/返回 0 时短间隔重试，仍失败回退 1（只读 ch0，行为同旧版）。
         """
         last_err: str = ""
-        for attempt in range(4):   # 0ms / 150ms / 300ms / 450ms，覆盖典型定位窗口
+        for attempt in range(4):  # 0ms / 150ms / 300ms / 450ms，覆盖典型定位窗口
             try:
                 declared = int(self.jlink.rtt_get_num_up_buffers())
                 if declared < 1:
@@ -566,10 +600,11 @@ class JLinkWorker(QObject):
                     if getattr(desc, "SizeOfBuffer", 0) > 0:
                         allocated += 1
                     else:
-                        break   # 从 0 起连续，遇空槽即停
+                        break  # 从 0 起连续，遇空槽即停
                 if allocated >= 1:
                     self._logger.info(
-                        f"RTT 通道数探测：声明 {declared} / 实际分配 {allocated}（第 {attempt + 1} 次尝试）")
+                        f"RTT 通道数探测：声明 {declared} / 实际分配 {allocated}（第 {attempt + 1} 次尝试）"
+                    )
                     return allocated
                 last_err = f"声明{declared}但无已分配缓冲"
             except Exception as e:
@@ -579,8 +614,9 @@ class JLinkWorker(QObject):
         self._logger.warning(f"探测 RTT 上行通道数失败（重试 4 次），回退 1：{last_err}")
         return 1
 
-    def _collect_device_info(self, target: str, iface: str, speed: int,
-                             remote_addr: str = "") -> dict:
+    def _collect_device_info(
+        self, target: str, iface: str, speed: int, remote_addr: str = ""
+    ) -> dict:
         try:
             return {
                 "jlink_firmware": self.jlink.firmware_version,
@@ -946,8 +982,10 @@ class JLinkWorker(QObject):
         # 让循环跳过 read，rtt_read 调用窗口仍可能和 memory_read 重叠）。
         self._pause_read_thread()
         try:
+
             def cb(cur: int, total: int) -> None:
                 self.firmware_export_progress.emit(cur, total)
+
             memory_service.export_firmware(self.jlink, path, start_addr, size, cb)
             self.firmware_export_finished.emit(True, path, "")
         except Exception as e:
@@ -964,7 +1002,9 @@ class JLinkWorker(QObject):
             Path(log_dir).mkdir(parents=True, exist_ok=True)
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self._log_path = str(Path(log_dir) / f"rtt_{stamp}.log")
-            self._log_file = open(self._log_path, "a", encoding="utf-8", buffering=1)
+            self._log_file = open(  # noqa: SIM115 log file held until _close_log_file
+                self._log_path, "a", encoding="utf-8", buffering=1
+            )
             self.command_result.emit("log_recording", True, "")
         except Exception as e:
             self._logger.error(f"开始日志记录失败：{e}")
@@ -977,10 +1017,8 @@ class JLinkWorker(QObject):
 
     def _close_log_file(self) -> None:
         if self._log_file is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._log_file.close()
-            except Exception:
-                pass
             self._log_file = None
             self._log_path = None
 

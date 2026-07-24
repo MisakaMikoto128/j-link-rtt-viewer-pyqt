@@ -16,6 +16,7 @@ connect/open/close 与主线程 target_discovery 的 3700 次 supported_device �
         jlink.open(...)
 RLock：同一线程内嵌套（如 _do_connect 持锁调 _detect_num_up_channels）可重入。
 """
+
 from __future__ import annotations
 
 import threading

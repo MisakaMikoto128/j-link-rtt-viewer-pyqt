@@ -6,6 +6,7 @@
 - 占用汇总 Summary：text/data/bss + Flash/RAM 总量 + 入口/初始 SP/Reset_Handler
 - Flash 占用图 FlashMap：固件在选中 MCU Flash 中的位置和占比，颜色跟随主题色
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -133,7 +134,10 @@ class _FlashMapWidget(QWidget):
         if self._device is None or not self._device.flash_size:
             painter.setPen(self.palette().text().color())
             painter.drawText(
-                margin, text_y, bar_w, 20,
+                margin,
+                text_y,
+                bar_w,
+                20,
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 self.tr("未选择目标设备"),
             )
@@ -152,7 +156,10 @@ class _FlashMapWidget(QWidget):
             )
             painter.setPen(self.palette().text().color())
             painter.drawText(
-                margin, text_y, bar_w, 20,
+                margin,
+                text_y,
+                bar_w,
+                20,
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 label,
             )
@@ -207,7 +214,10 @@ class _FlashMapWidget(QWidget):
 
         painter.setPen(self.palette().text().color())
         painter.drawText(
-            margin, text_y, bar_w, 20,
+            margin,
+            text_y,
+            bar_w,
+            20,
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             label,
         )
@@ -231,8 +241,7 @@ class _SectionsView(QWidget):
         self.table.setHorizontalHeaderLabels(_SEC_COLUMNS)
         self.table.setSortingEnabled(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().setVisible(False)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -262,8 +271,7 @@ class _SectionsView(QWidget):
             flags_item = QTableWidgetItem(s.flags)
             align_item = _NumericItem(s.align, str(s.align))
             align_item.setData(Qt.ItemDataRole.UserRole, s.align)
-            for c, item in enumerate(
-                    (name_item, addr_item, size_item, flags_item, align_item)):
+            for c, item in enumerate((name_item, addr_item, size_item, flags_item, align_item)):
                 self.table.setItem(r, c, item)
         self.table.setSortingEnabled(True)
         self.table.setUpdatesEnabled(True)
@@ -368,14 +376,20 @@ class _SummaryView(QWidget):
         self.lbl_data.setText(_human(s.data))
         self.lbl_bss.setText(_human(s.bss))
         self.lbl_entry.setText(f"0x{m.entry:08X}")
-        self.lbl_sp.setText(
-            f"0x{m.initial_sp:08X}" if m.initial_sp is not None else "—")
-        self.lbl_reset.setText(
-            f"0x{m.reset_handler:08X}" if m.reset_handler is not None else "—")
+        self.lbl_sp.setText(f"0x{m.initial_sp:08X}" if m.initial_sp is not None else "—")
+        self.lbl_reset.setText(f"0x{m.reset_handler:08X}" if m.reset_handler is not None else "—")
 
     def clear(self) -> None:
-        for lbl in (self.lbl_flash, self.lbl_ram, self.lbl_text, self.lbl_data,
-                    self.lbl_bss, self.lbl_entry, self.lbl_sp, self.lbl_reset):
+        for lbl in (
+            self.lbl_flash,
+            self.lbl_ram,
+            self.lbl_text,
+            self.lbl_data,
+            self.lbl_bss,
+            self.lbl_entry,
+            self.lbl_sp,
+            self.lbl_reset,
+        ):
             lbl.setText("-")
         self.flash_map.clear()
 
@@ -384,12 +398,12 @@ class FirmwareAnalysisView(QWidget):
     """SegmentedWidget 切换的「符号 / 段 / 占用汇总 / Flash 占用图」复合视图。"""
 
     # pivot 文本 key → source string
-    _PIVOT_ITEMS = [
+    _PIVOT_ITEMS = (
         ("symbols", "符号 Symbols"),
         ("sections", "段 Sections"),
         ("summary", "占用汇总 Summary"),
         ("flashmap", "Flash 占用图"),
-    ]
+    )
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -421,9 +435,7 @@ class FirmwareAnalysisView(QWidget):
     def _add(self, w: QWidget, key: str, text: str) -> None:
         w.setObjectName(key)
         self.stack.addWidget(w)
-        self.pivot.addItem(
-            routeKey=key, text=text,
-            onClick=lambda: self.stack.setCurrentWidget(w))
+        self.pivot.addItem(routeKey=key, text=text, onClick=lambda: self.stack.setCurrentWidget(w))
 
     def changeEvent(self, event: QEvent) -> None:
         if event.type() == QEvent.Type.LanguageChange:
@@ -514,7 +526,10 @@ class FlashOccupancyBar(QWidget):
         if self._device is None or not self._device.flash_size:
             painter.setPen(self.palette().text().color())
             painter.drawText(
-                margin, bar_y, bar_w, bar_h,
+                margin,
+                bar_y,
+                bar_w,
+                bar_h,
                 Qt.AlignmentFlag.AlignCenter,
                 self.tr("未选择目标设备"),
             )
@@ -529,7 +544,10 @@ class FlashOccupancyBar(QWidget):
         if self._fw_start is None or self._fw_end is None:
             painter.setPen(self.palette().text().color())
             painter.drawText(
-                margin, bar_y, bar_w, bar_h,
+                margin,
+                bar_y,
+                bar_w,
+                bar_h,
                 Qt.AlignmentFlag.AlignCenter,
                 f"{self.tr('无固件占用')} · {_human_short(flash_size)}",
             )
@@ -573,7 +591,10 @@ class FlashOccupancyBar(QWidget):
             label += self.tr(" ⚠ 超出")
         painter.setPen(self.palette().text().color())
         painter.drawText(
-            margin, bar_y, bar_w, bar_h,
+            margin,
+            bar_y,
+            bar_w,
+            bar_h,
             Qt.AlignmentFlag.AlignCenter,
             label,
         )

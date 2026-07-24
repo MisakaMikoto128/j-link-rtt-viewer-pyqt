@@ -8,6 +8,7 @@
 - 复制 hex / ASCII / C 数组；保存当前缓冲为 .bin
 - 显示区改用 qfluentwidgets.PlainTextEdit，跟随 fluent 主题
 """
+
 from __future__ import annotations
 
 import re
@@ -44,7 +45,6 @@ from core.memory_service import format_as_c_array, format_hex_dump, parse_value
 
 from . import _infobar
 from ._scroll_helpers import make_transparent_scroll
-
 
 _SIZE_PRESETS = [
     ("128 KB", 128 * 1024),
@@ -285,7 +285,9 @@ class MemoryViewerPage(QWidget):
         wr_header = QHBoxLayout()
         self.lbl_write_title = StrongBodyLabel(self.tr("写内存 ⚠"))
         wr_header.addWidget(self.lbl_write_title)
-        self.warn_lbl = BodyLabel(self.tr("写错地址可能让 MCU 失去响应直到复位。仅在确认安全地址（如 SRAM）时使用。"))
+        self.warn_lbl = BodyLabel(
+            self.tr("写错地址可能让 MCU 失去响应直到复位。仅在确认安全地址（如 SRAM）时使用。")
+        )
         self.warn_lbl.setStyleSheet("color: #d04040;")
         self.warn_lbl.setWordWrap(True)
         wr_header.addWidget(self.warn_lbl, 1)
@@ -330,7 +332,9 @@ class MemoryViewerPage(QWidget):
             else:
                 self.cb_ex_preset.addItem(label)
         # 把 cb_ex_preset 索引限制到合法范围（防止 user_prefs.json 被手改成越界值）
-        _preset_idx = max(0, min(int(self._cfg.get("mem_export_preset_idx")), len(_SIZE_PRESETS) - 1))
+        _preset_idx = max(
+            0, min(int(self._cfg.get("mem_export_preset_idx")), len(_SIZE_PRESETS) - 1)
+        )
         self.cb_ex_preset.setCurrentIndex(_preset_idx)
         ex_row.addWidget(self.cb_ex_preset)
         self.le_ex_custom = LineEdit(self)
@@ -371,6 +375,7 @@ class MemoryViewerPage(QWidget):
         self.display.viewport().installEventFilter(self)
         # 用 Fluent 风格气泡替代原生 QToolTip（圆角 + 阴影，与全应用 tooltip 一致）
         from .widgets.fluent_hover_tip import FluentHoverTip
+
         self._hover_tip = FluentHoverTip(self.display)
 
     # ------------------------------------------------------------------
@@ -442,7 +447,9 @@ class MemoryViewerPage(QWidget):
 
         # ---- 写内存卡片 ----
         self.lbl_write_title.setText(self.tr("写内存 ⚠"))
-        self.warn_lbl.setText(self.tr("写错地址可能让 MCU 失去响应直到复位。仅在确认安全地址（如 SRAM）时使用。"))
+        self.warn_lbl.setText(
+            self.tr("写错地址可能让 MCU 失去响应直到复位。仅在确认安全地址（如 SRAM）时使用。")
+        )
         self.lbl_write_addr.setText(self.tr("地址"))
         self.lbl_write_data.setText(self.tr("Hex 数据"))
         self.btn_write.setText(self.tr("写入…"))
@@ -524,10 +531,9 @@ class MemoryViewerPage(QWidget):
         self.btn_export.setEnabled(connected and bool(self._save_path))
         self.btn_write.setEnabled(connected)
         self.chk_auto_refresh.setEnabled(connected)
-        if not connected:
-            # 断开时主动停止自动刷新——但不弹 InfoBar，避免 N 次断开 N 个噪音
-            if self.chk_auto_refresh.isChecked():
-                self.chk_auto_refresh.setChecked(False)
+        # 断开时主动停止自动刷新——但不弹 InfoBar，避免 N 次断开 N 个噪音
+        if not connected and self.chk_auto_refresh.isChecked():
+            self.chk_auto_refresh.setChecked(False)
 
     # ------------------------------------------------------------------
     # 读取 / 显示
@@ -582,8 +588,12 @@ class MemoryViewerPage(QWidget):
         self._refresh_types()
 
         # Diff 仅在 地址+长度 都不变 且 在阈值内 时计算
-        if (self.chk_diff.isChecked() and prev_base == addr
-                and len(prev) == len(raw) and len(raw) <= _DIFF_MAX_SIZE):
+        if (
+            self.chk_diff.isChecked()
+            and prev_base == addr
+            and len(prev) == len(raw)
+            and len(raw) <= _DIFF_MAX_SIZE
+        ):
             diff_offsets = [i for i in range(len(raw)) if raw[i] != prev[i]]
             if diff_offsets:
                 self._highlight_diff(diff_offsets[:_DIFF_MAX_HIGHLIGHTS])
@@ -649,10 +659,12 @@ class MemoryViewerPage(QWidget):
         le_u32 = parse_value(self._buffer, offset, "u32", True)
         be_u32 = parse_value(self._buffer, offset, "u32", False)
         le_u16 = parse_value(self._buffer, offset, "u16", True)
-        text = (f"{self.tr('地址')} 0x{addr:08X}  (+{offset})\n"
-                f"u32 LE: {le_u32}\n"
-                f"u32 BE: {be_u32}\n"
-                f"u16 LE: {le_u16}")
+        text = (
+            f"{self.tr('地址')} 0x{addr:08X}  (+{offset})\n"
+            f"u32 LE: {le_u32}\n"
+            f"u32 BE: {be_u32}\n"
+            f"u16 LE: {le_u16}"
+        )
         # duration=0：hover 持续显示直到鼠标移走（Leave 时 hide）
         self._hover_tip.show_at(event.globalPosition().toPoint(), text, duration=0)
 
@@ -814,14 +826,17 @@ class MemoryViewerPage(QWidget):
             return
         text = format_as_c_array(self._buffer, name="data", bytes_per_row=self._bytes_per_row)
         QGuiApplication.clipboard().setText(text)
-        _infobar.ok(self, self.tr("已复制 C 数组"), f"{len(self._buffer)} {self.tr('字节')}", duration=1500)
+        _infobar.ok(
+            self, self.tr("已复制 C 数组"), f"{len(self._buffer)} {self.tr('字节')}", duration=1500
+        )
 
     def _on_save_bin(self) -> None:
         if not self._buffer:
             _infobar.warn(self, self.tr("无数据"), self.tr("请先读取内存"))
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, self.tr("保存为 .bin"),
+            self,
+            self.tr("保存为 .bin"),
             f"mem_0x{self._buffer_base:08X}_{len(self._buffer)}B.bin",
             "Binary (*.bin);;All (*)",
         )
@@ -829,6 +844,7 @@ class MemoryViewerPage(QWidget):
             return
         try:
             from pathlib import Path
+
             Path(path).write_bytes(self._buffer)
             _infobar.ok(self, self.tr("已保存"), path)
         except OSError as e:
@@ -857,8 +873,11 @@ class MemoryViewerPage(QWidget):
 
     def _on_choose_path(self) -> None:
         from datetime import datetime
+
         default = f"firmware_{datetime.now():%Y%m%d_%H%M%S}.bin"
-        path, _ = QFileDialog.getSaveFileName(self, self.tr("选择导出路径"), default, "Binary (*.bin);;All (*)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, self.tr("选择导出路径"), default, "Binary (*.bin);;All (*)"
+        )
         if path:
             self._save_path = path
             self.lbl_path.setText(path)
@@ -881,8 +900,11 @@ class MemoryViewerPage(QWidget):
         else:
             size = preset_size
 
-        _infobar.warn(self, self.tr("RTT 接收将暂停"),
-                      self.tr("导出 {n} KB 期间无法接收 RTT 数据").format(n=size // 1024))
+        _infobar.warn(
+            self,
+            self.tr("RTT 接收将暂停"),
+            self.tr("导出 {n} KB 期间无法接收 RTT 数据").format(n=size // 1024),
+        )
         self.pb_export.setValue(0)
         self.btn_export.setEnabled(False)
         self._worker.export_firmware_requested.emit(self._save_path, start, size)
@@ -933,7 +955,11 @@ class MemoryViewerPage(QWidget):
             "<span style='color:#d04040;'>⚠ 写错地址可能让 MCU 失去响应！</span><br/>"
             "请确认地址是可写区域（SRAM/外设寄存器，<b>不要写 Flash 控制器</b>）"
         )
-        content = content.replace("%1", f"{addr:08X}").replace("%2", str(len(data))).replace("%3", preview)
+        content = (
+            content.replace("%1", f"{addr:08X}")
+            .replace("%2", str(len(data)))
+            .replace("%3", preview)
+        )
         msg_box = MessageBox(self.tr("⚠ 确认写入内存"), content, self)
         msg_box.yesButton.setText(self.tr("确认写入"))
         msg_box.cancelButton.setText(self.tr("取消"))

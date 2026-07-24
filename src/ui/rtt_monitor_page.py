@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import time
 from contextlib import contextmanager
+from typing import ClassVar
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -1527,7 +1528,9 @@ class RTTMonitorPage(QWidget):
         # 不重复枚举（也不会在主线程触发 supported_device → 崩 DLL）。
         # 测试的 FakeWorker 可能没这个信号——hasattr 守卫。
         if hasattr(self._worker, "target_infos_ready"):
-            self._worker.target_infos_ready.connect(self._on_target_infos_ready, Qt.QueuedConnection)
+            self._worker.target_infos_ready.connect(
+                self._on_target_infos_ready, Qt.QueuedConnection
+            )
             # connect 后主动再读一次磁盘缓存：worker 可能已跑完（emit 早于 connect
             # 信号丢失），但磁盘缓存已写，主动读即拿到，彻底摆脱时序竞态。
             self._on_target_infos_ready()
@@ -2906,7 +2909,7 @@ class RTTMonitorPage(QWidget):
         self.display.setExtraSelections(selections)
 
     # 命令内部名 → 用户可读标题
-    _CMD_TITLES = {
+    _CMD_TITLES: ClassVar[dict[str, str]] = {
         "send_data": "发送失败",
         "reset": "重置失败",
         "power_output": "电源切换失败",

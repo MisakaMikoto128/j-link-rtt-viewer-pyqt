@@ -8,6 +8,7 @@
 5. 收窄模式下展开卡片不会退出收窄模式。
 6. 从收窄模式回到正常模式：面板回到布局，卡片隐藏，toggle 复位。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -39,8 +40,7 @@ class FakeWorker(QObject):
 
     def __init__(self):
         super().__init__()
-        self._device_info = {"target_device": "STM32H750VB",
-                             "interface": "SWD", "speed_khz": 4000}
+        self._device_info = {"target_device": "STM32H750VB", "interface": "SWD", "speed_khz": 4000}
 
     def get_device_info(self) -> dict:
         return dict(self._device_info)
@@ -56,6 +56,7 @@ class FakeWorker(QObject):
 def rtt_page(qtbot, isolated_appdata):
     from core.config_service import ConfigService
     from ui.rtt_monitor_page import RTTMonitorPage
+
     cfg = ConfigService()
     worker = FakeWorker()
     page = RTTMonitorPage(worker, cfg)
@@ -70,6 +71,7 @@ def rtt_page(qtbot, isolated_appdata):
 
 # ── 正常模式 ──────────────────────────────────────────────────────
 
+
 def test_normal_mode_panel_in_layout_card_hidden(rtt_page, qtbot):
     """正常模式：面板在 main_split 布局中，悬浮卡片隐藏，toggle 按钮不可见。"""
     page, _, _ = rtt_page
@@ -82,6 +84,7 @@ def test_normal_mode_panel_in_layout_card_hidden(rtt_page, qtbot):
 
 
 # ── 收窄模式 ──────────────────────────────────────────────────────
+
 
 def test_narrow_mode_panel_reparented_to_card(rtt_page, qtbot):
     """收窄模式：面板被 reparent 到悬浮卡片，toggle 按钮可见，卡片默认隐藏。"""
@@ -172,7 +175,6 @@ def test_card_content_is_same_panel_widget(rtt_page, qtbot):
 
 def test_card_show_animation_only_x_direction(rtt_page, qtbot):
     """展开动画起点 Y 与目标 Y 一致，不会出现 Y 方向位移。"""
-    from PySide6.QtCore import QPoint
     page, _, _ = rtt_page
     page._set_config_panel_visible(False)
     qtbot.wait(50)

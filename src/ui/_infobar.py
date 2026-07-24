@@ -9,24 +9,22 @@
 直接调（违反 CLAUDE.md 跨线程规则）—— worker emit log_message 信号
 让 UI 槽再用本模块弹出。
 """
+
 from __future__ import annotations
 
 from qfluentwidgets import InfoBar, InfoBarPosition
 
 
 def warn(parent, title: str, msg: str = "", *, duration: int = 2000) -> None:
-    InfoBar.warning(title, msg, parent=parent,
-                    position=InfoBarPosition.TOP, duration=duration)
+    InfoBar.warning(title, msg, parent=parent, position=InfoBarPosition.TOP, duration=duration)
 
 
 def err(parent, title: str, msg: str = "", *, duration: int = 3000) -> None:
-    InfoBar.error(title, msg, parent=parent,
-                  position=InfoBarPosition.TOP, duration=duration)
+    InfoBar.error(title, msg, parent=parent, position=InfoBarPosition.TOP, duration=duration)
 
 
 def ok(parent, title: str, msg: str = "", *, duration: int = 2000) -> None:
-    InfoBar.success(title, msg, parent=parent,
-                    position=InfoBarPosition.TOP, duration=duration)
+    InfoBar.success(title, msg, parent=parent, position=InfoBarPosition.TOP, duration=duration)
 
 
 # Aliases for semantic clarity

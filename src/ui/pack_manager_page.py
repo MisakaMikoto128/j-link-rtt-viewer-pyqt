@@ -9,7 +9,10 @@
 首次 showEvent 才 import + 枚举已装 pack。搜索/下载用独立线程池/QThread，
 不阻塞 UI。控件用 qfluentwidgets，跟随全局 UI 字体 + i18n 重翻译。
 """
+
 from __future__ import annotations
+
+from contextlib import suppress
 
 from PySide6.QtCore import QEvent, QObject, QRunnable, Qt, QThread, QThreadPool, Signal, Slot
 from PySide6.QtWidgets import (
@@ -53,15 +56,14 @@ class _PackSearchRunnable(QRunnable):
 
     def run(self) -> None:
         from core.pack_service import search_packs
+
         try:
             results = search_packs(self._query)
         except Exception:
             results = []
-        try:
+        # 页面已销毁（关窗/teardown）时 probe 随之删除，池化线程后到的 emit 静默丢弃。
+        with suppress(RuntimeError):
             self._probe.done.emit(results)
-        except RuntimeError:
-            # 页面已销毁（关窗/teardown）时 probe 随之删除，池化线程后到的 emit 静默丢弃。
-            pass
 
 
 class _PackMigrateProbe(QObject):
@@ -79,14 +81,13 @@ class _PackMigrateRunnable(QRunnable):
 
     def run(self) -> None:
         from core.pack_service import migrate_legacy_packs
+
         try:
             count = migrate_legacy_packs()
         except Exception:
             count = -1
-        try:
+        with suppress(RuntimeError):
             self._probe.done.emit(count)
-        except RuntimeError:
-            pass
 
 
 class _PackDownloadWorker(QObject):
@@ -102,6 +103,7 @@ class _PackDownloadWorker(QObject):
     @Slot()
     def run(self) -> None:
         from core.pack_service import download_pack
+
         ok = download_pack(
             self._part,
             log=lambda lv, msg: self.log_message.emit(lv, msg),
@@ -211,9 +213,14 @@ class PackManagerPage(QWidget):
         self.tbl_installed = TableWidget(self)
         self.tbl_installed.setColumnCount(4)
         self.tbl_installed.setRowCount(0)
-        self.tbl_installed.setHorizontalHeaderLabels([
-            self.tr("文件名"), self.tr("厂商"), self.tr("版本"), self.tr("大小"),
-        ])
+        self.tbl_installed.setHorizontalHeaderLabels(
+            [
+                self.tr("文件名"),
+                self.tr("厂商"),
+                self.tr("版本"),
+                self.tr("大小"),
+            ]
+        )
         self.tbl_installed.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.tbl_installed.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tbl_installed.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -295,6 +302,7 @@ class PackManagerPage(QWidget):
 
     def _lazy_load(self) -> None:
         from core.pack_service import get_pack_data_path
+
         self.le_path.setText(get_pack_data_path())
         self._reload_installed()
 
@@ -303,6 +311,7 @@ class PackManagerPage(QWidget):
     # ------------------------------------------------------------------
     def _reload_installed(self) -> None:
         from core.pack_service import list_installed_packs
+
         packs = list_installed_packs()
         self.tbl_installed.setRowCount(0)
         for p in packs:
@@ -336,7 +345,9 @@ class PackManagerPage(QWidget):
     # ------------------------------------------------------------------
     def _on_browse(self) -> None:
         from PySide6.QtWidgets import QFileDialog
+
         from core.pack_service import get_pack_data_path, set_pack_data_path
+
         path = QFileDialog.getExistingDirectory(
             self, self.tr("选择 CMSIS-Pack 存储目录"), get_pack_data_path()
         )
@@ -363,7 +374,9 @@ class PackManagerPage(QWidget):
         self.btn_migrate.setText(self.tr("迁移旧 CMSIS-Pack"))
         self._reload_installed()
         if count > 0:
-            _infobar.ok(self, self.tr("迁移完成"), self.tr("已迁移 {n} 个 CMSIS-Pack").format(n=count))
+            _infobar.ok(
+                self, self.tr("迁移完成"), self.tr("已迁移 {n} 个 CMSIS-Pack").format(n=count)
+            )
             self.packs_changed.emit()
         elif count == 0:
             _infobar.info(self, self.tr("迁移"), self.tr("无旧 CMSIS-Pack 可迁移"))
@@ -372,6 +385,7 @@ class PackManagerPage(QWidget):
 
     def _on_delete(self) -> None:
         from core.pack_service import delete_pack
+
         row = self.tbl_installed.currentRow()
         if row < 0:
             _infobar.warn(self, self.tr("提示"), self.tr("请先选中要删除的 CMSIS-Pack"))
@@ -455,7 +469,8 @@ class PackManagerPage(QWidget):
             part = self.le_search.text().strip()
         if not part:
             _infobar.warn(
-                self, self.tr("提示"),
+                self,
+                self.tr("提示"),
                 self.tr("请先搜索并选中 CMSIS-Pack，或在搜索框输入 part_number"),
             )
             return
@@ -526,9 +541,14 @@ class PackManagerPage(QWidget):
         self.le_filter.setPlaceholderText(self.tr("按文件名子串过滤（大小写无关）"))
         self.le_search.setPlaceholderText(self.tr("输入 part_number（如 STM32F103C8）"))
         # 表格 header
-        self.tbl_installed.setHorizontalHeaderLabels([
-            self.tr("文件名"), self.tr("厂商"), self.tr("版本"), self.tr("大小"),
-        ])
+        self.tbl_installed.setHorizontalHeaderLabels(
+            [
+                self.tr("文件名"),
+                self.tr("厂商"),
+                self.tr("版本"),
+                self.tr("大小"),
+            ]
+        )
         self.tbl_search.setHorizontalHeaderLabels([self.tr("Part Number")])
         # 分页标签（按当前状态重算）
         self._refresh_search_table()

@@ -12,6 +12,7 @@ UI 布局（4 个 Card，透明 ScrollArea 整页包裹）：
 from __future__ import annotations
 
 import os
+from contextlib import suppress
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QRunnable, Qt, QThread, QThreadPool, QTimer, Signal
@@ -48,8 +49,8 @@ from core.flash_worker import (
     ERASE_MODE_SECTOR,
     FORMAT_BIN,
     FORMAT_ELF,
-    POST_ACTION_NONE,
     POST_ACTION_HALT,
+    POST_ACTION_NONE,
     POST_ACTION_RESET_RUN,
     FlashParams,
     FlashWorker,
@@ -85,12 +86,10 @@ class _ReachabilityRunnable(QRunnable):
 
     def run(self) -> None:
         ok = tcp_reachable(self._ip, self._port)
-        try:
+        # 页面对象已销毁（测试 teardown / 关窗）时 probe 随之删除，
+        # 池化线程后到的 emit 抛 RuntimeError，静默丢弃即可。
+        with suppress(RuntimeError):
             self._probe.probe_done.emit(ok)
-        except RuntimeError:
-            # 页面对象已销毁（测试 teardown / 关窗）时 probe 随之删除，
-            # 池化线程后到的 emit 抛 RuntimeError，静默丢弃即可。
-            pass
 
 
 _ERASE_LABELS = [
@@ -118,7 +117,9 @@ class FlashPage(QWidget):
         # 与 RTT 页协调：烧录前先断同一台 J-Link 的 RTT，烧完回连
         self._resume_rtt_after_flash = False
         self._last_post_action = POST_ACTION_NONE
-        self._pyocd_targets_enumerated = False  # 切到 CMSIS-DAP/ST-Link 时按需触发 pyOCD target 枚举
+        self._pyocd_targets_enumerated = (
+            False  # 切到 CMSIS-DAP/ST-Link 时按需触发 pyOCD target 枚举
+        )
         self._rtt_pending_disconnect = False
         self._rtt_disconnect_timeout_timer: QTimer | None = None
         self._rtt_resume_remote_addr = ""
@@ -252,7 +253,11 @@ class FlashPage(QWidget):
         # 设备列表：直接读磁盘缓存（零 DLL 调用，主线程安全，永不枚举）。
         # 不依赖 worker 时序：缓存命中即有候选；缓存空时由 _connect_signals 末尾
         # 主动再读一次 + worker 的 target_infos_ready 信号兜底。
-        kind = self._selected_kind if self._selected_kind and self._selected_kind != "remote" else BURNER_KIND_JLINK
+        kind = (
+            self._selected_kind
+            if self._selected_kind and self._selected_kind != "remote"
+            else BURNER_KIND_JLINK
+        )
         self.cmb_device.set_names_provider(
             lambda: list(read_cached_target_names_for_burner_kind(kind))
         )
@@ -289,7 +294,11 @@ class FlashPage(QWidget):
         name = name.strip().upper()
         if not name:
             return None
-        kind = self._selected_kind if self._selected_kind and self._selected_kind != "remote" else BURNER_KIND_JLINK
+        kind = (
+            self._selected_kind
+            if self._selected_kind and self._selected_kind != "remote"
+            else BURNER_KIND_JLINK
+        )
         for info in read_cached_target_infos_for_burner_kind(kind):
             if info.name == name:
                 return info
@@ -301,7 +310,11 @@ class FlashPage(QWidget):
 
     def _refresh_device_combo(self) -> None:
         """按当前烧录器 kind 刷新目标设备下拉的数据源（只读缓存，不枚举）。"""
-        kind = self._selected_kind if self._selected_kind and self._selected_kind != "remote" else BURNER_KIND_JLINK
+        kind = (
+            self._selected_kind
+            if self._selected_kind and self._selected_kind != "remote"
+            else BURNER_KIND_JLINK
+        )
         self.cmb_device.set_names_provider(
             lambda: list(read_cached_target_names_for_burner_kind(kind))
         )
@@ -1114,7 +1127,9 @@ class FlashPage(QWidget):
         path = self.cmb_file.currentText().strip()
         if not erase_only:
             if not path:
-                _infobar.warn(self, self.tr("未选择文件"), self.tr("请先选择 .axf/.elf/.hex/.bin 文件"))
+                _infobar.warn(
+                    self, self.tr("未选择文件"), self.tr("请先选择 .axf/.elf/.hex/.bin 文件")
+                )
                 return
             if not os.path.exists(path):
                 _infobar.warn(self, self.tr("文件不存在"), path)
@@ -1448,5 +1463,6 @@ class FlashPage(QWidget):
             self._thread.wait(1000)
         # 处理 worker 线程 quit 前排入的 deleteLater 事件
         from PySide6.QtCore import QCoreApplication, QEvent
+
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         QCoreApplication.processEvents()

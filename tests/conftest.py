@@ -4,6 +4,7 @@
 的 CI 环境跑。`QT_QPA_PLATFORM=offscreen` 必须在 QApplication 创建前设好，
 所以放在 conftest 模块加载阶段，而不是 fixture 里。
 """
+
 import os
 import sys
 from pathlib import Path
@@ -28,6 +29,7 @@ def qapp():
     pytest-qt 也会自动创建 qapp；显式 fixture 用于 mock/无 qtbot 的老测试。
     """
     from PySide6.QtWidgets import QApplication
+
     app = QApplication.instance() or QApplication([])
     yield app
 
@@ -64,8 +66,7 @@ def stub_make_backend(request, monkeypatch):
 
     backend = MagicMock()
     backend.connected_serial.return_value = ""
-    monkeypatch.setattr(
-        "core.flash_worker.make_backend", lambda kind, log: backend)
+    monkeypatch.setattr("core.flash_worker.make_backend", lambda kind, log: backend)
     return backend
 
 
@@ -82,6 +83,7 @@ def stub_pyocd_enumerator(monkeypatch):
     """
     monkeypatch.setenv("JLINK_RTT_TEST_MODE", "1")
     from core.probe import enumerator
+
     monkeypatch.setattr(enumerator, "enumerate_pyocd_probes", lambda: [])
 
 

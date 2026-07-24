@@ -3,6 +3,7 @@
 锁住需求：加载固件（任意格式）后显示其在目标 Flash 中的位置/占比；占用区
 颜色跟随主题色；无固件时无占用区；无设备时显示占位提示。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 @pytest.fixture
 def bar(qtbot):
     from ui.firmware_analysis_view import FlashOccupancyBar
+
     w = FlashOccupancyBar()
     qtbot.addWidget(w)
     return w
@@ -19,10 +21,15 @@ def bar(qtbot):
 @pytest.fixture
 def device():
     from core.target_discovery import TargetDeviceInfo
+
     # flash_addr=0x08000000, flash_size=256KB
     return TargetDeviceInfo(
-        name="TESTDEV", vendor="Test", flash_addr=0x08000000,
-        flash_size=256 * 1024, ram_addr=0x20000000, ram_size=64 * 1024,
+        name="TESTDEV",
+        vendor="Test",
+        flash_addr=0x08000000,
+        flash_size=256 * 1024,
+        ram_addr=0x20000000,
+        ram_size=64 * 1024,
     )
 
 
@@ -71,23 +78,30 @@ def test_paint_no_crash_all_states(bar, device, qtbot):
 def test_flash_page_has_compact_bar(qtbot, isolated_appdata, monkeypatch):
     """FlashPage 文件卡片内有 flash_bar，且与 analysis_view 是不同实例。"""
     from core.config_service import ConfigService
-    from core.target_discovery import TargetDeviceInfo
     from core.probe.base import BURNER_KIND_JLINK
+    from core.target_discovery import TargetDeviceInfo
     from ui import flash_page
     from ui.flash_page import FlashPage
+
     # isolated_appdata 下磁盘缓存空，read_cached_* 返回空 -> _lookup_target_info 返回
     # None -> flash_bar._device 为 None。注入测试用 info，验证"构造时回填 device
     # info"的 UI 逻辑（而非缓存存在性）。
     fake_info = TargetDeviceInfo(
-        name="STM32H750VB", vendor="ST", flash_addr=0x08000000,
-        flash_size=128 * 1024, ram_addr=0x20000000, ram_size=1024 * 1024,
+        name="STM32H750VB",
+        vendor="ST",
+        flash_addr=0x08000000,
+        flash_size=128 * 1024,
+        ram_addr=0x20000000,
+        ram_size=1024 * 1024,
     )
     monkeypatch.setattr(
-        flash_page, "read_cached_target_infos_for_burner_kind",
+        flash_page,
+        "read_cached_target_infos_for_burner_kind",
         lambda kind: (fake_info,) if kind == BURNER_KIND_JLINK else (),
     )
     monkeypatch.setattr(
-        flash_page, "read_cached_target_names_for_burner_kind",
+        flash_page,
+        "read_cached_target_names_for_burner_kind",
         lambda kind: [fake_info.name] if kind == BURNER_KIND_JLINK else [],
     )
     cfg = ConfigService()
@@ -106,6 +120,7 @@ def test_flash_bar_updates_on_file_select(qtbot, isolated_appdata, fixtures_dir)
     """选 bin 固件后 flash_bar 收到固件范围（即使符号面板隐藏也更新）。"""
     from core.config_service import ConfigService
     from ui.flash_page import FlashPage
+
     cfg = ConfigService()
     page = FlashPage(cfg)
     qtbot.addWidget(page)

@@ -8,11 +8,12 @@ J-Link 走 PylinkBackend，ST-Link / CMSIS-DAP 走 PyOCDBackend（后续步骤�
 - 常量单点真源在此；flash_worker re-export 保持 UI 层 import 兼容。
 - 跨线程不在此层：backend 实例在 worker 线程创建并使用。
 """
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Protocol
-
+from typing import Protocol
 
 # ============================================================
 # 烧录器类型
@@ -29,9 +30,9 @@ BURNER_KIND_CMSIS_DAP = "cmsisdap"
 ERASE_MODE_SECTOR = "sector"
 ERASE_MODE_CHIP = "chip"
 
-POST_ACTION_NONE = "none"           # 仅烧录：烧录完不管，直接断开
-POST_ACTION_HALT = "halt"           # 烧录后暂停：复位 + 显式 halt（CPU 停在复位状态）
-POST_ACTION_RESET_RUN = "reset_run" # 烧录后复位运行：复位 + 运行（默认）
+POST_ACTION_NONE = "none"  # 仅烧录：烧录完不管，直接断开
+POST_ACTION_HALT = "halt"  # 烧录后暂停：复位 + 显式 halt（CPU 停在复位状态）
+POST_ACTION_RESET_RUN = "reset_run"  # 烧录后复位运行：复位 + 运行（默认）
 
 FORMAT_ELF = "elf"
 FORMAT_HEX = "hex"
@@ -58,6 +59,7 @@ class ProbeNotConnected(ProbeError):
 
 class VerifyMismatch(ProbeError):
     """烧录后逐字节校验失败。"""
+
     def __init__(self, addr: int, n: int) -> None:
         super().__init__(f"verify mismatch at 0x{addr:08X}: {n} bytes")
         self.addr = addr
@@ -83,9 +85,10 @@ LogCallback = Callable[[str, str], None]
 @dataclass(frozen=True)
 class ProbeInfo:
     """枚举的烧录器描述项（UI 下拉 + 同设备检测用）。"""
-    kind: str              # BURNER_KIND_*
-    serial: str            # 唯一标识（J-Link=int serial；ST-Link/DAP=USB iSerial）
-    product: str           # 显示名
+
+    kind: str  # BURNER_KIND_*
+    serial: str  # 唯一标识（J-Link=int serial；ST-Link/DAP=USB iSerial）
+    product: str  # 显示名
     remote_addr: str = ""  # 仅 J-Link 远程
 
 
@@ -95,17 +98,18 @@ class ProbeParams:
 
     FlashWorker 把 FlashParams 翻译成这个，避免 backend 反向依赖 UI 层数据类。
     """
+
     device_name: str
-    interface: str            # "SWD" | "JTAG"
+    interface: str  # "SWD" | "JTAG"
     speed_khz: int
     file_path: str
-    file_format: str          # FORMAT_*
-    bin_start_addr: int       # 仅 bin 用
-    erase_mode: str           # ERASE_MODE_*
-    post_action: str          # POST_ACTION_*
+    file_format: str  # FORMAT_*
+    bin_start_addr: int  # 仅 bin 用
+    erase_mode: str  # ERASE_MODE_*
+    post_action: str  # POST_ACTION_*
     extra_verify: bool
-    serial: str = ""          # USB serial；空/"0" = 未指定
-    remote_addr: str = ""     # 远程 "ip:port"；空 = 本地 USB
+    serial: str = ""  # USB serial；空/"0" = 未指定
+    remote_addr: str = ""  # 远程 "ip:port"；空 = 本地 USB
     erase_only: bool = False  # True = 只整片擦除不烧录（复用完整连接/断开流程）
 
 

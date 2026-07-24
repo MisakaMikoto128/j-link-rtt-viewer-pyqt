@@ -1,4 +1,5 @@
 """项目内资源路径查找：开发模式 + Nuitka standalone 双兼容。"""
+
 from __future__ import annotations
 
 import sys

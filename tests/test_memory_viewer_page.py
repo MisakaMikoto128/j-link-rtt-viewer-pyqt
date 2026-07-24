@@ -1,16 +1,17 @@
 """UI 测试：MemoryViewerPage 的读取请求、hex dump 渲染、行宽切换、diff 高亮、跳转/搜索。"""
+
 from __future__ import annotations
 
 import types
 
 import pytest
-from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtCore import QPoint, QPointF
+from PySide6.QtCore import QObject, QPoint, QPointF, Qt, Signal
 from qfluentwidgets import BodyLabel, ProgressBar
 
 
 class FakeMemWorker(QObject):
     """MemoryViewerPage 使用的 JLinkWorker 信号子集。"""
+
     read_memory_requested = Signal(int, int)
     write_memory_requested = Signal(int, bytes, bool)
     export_firmware_requested = Signal(int, int, str)
@@ -25,16 +26,15 @@ class FakeMemWorker(QObject):
         super().__init__()
         self._reads: list[tuple[int, int]] = []
         self._writes: list[tuple[int, bytes, bool]] = []
-        self.read_memory_requested.connect(
-            lambda a, n: self._reads.append((a, n)))
-        self.write_memory_requested.connect(
-            lambda a, b, v: self._writes.append((a, bytes(b), v)))
+        self.read_memory_requested.connect(lambda a, n: self._reads.append((a, n)))
+        self.write_memory_requested.connect(lambda a, b, v: self._writes.append((a, bytes(b), v)))
 
 
 @pytest.fixture
 def mem_page(qtbot, isolated_appdata):
     from core.config_service import ConfigService
     from ui.memory_viewer_page import MemoryViewerPage
+
     cfg = ConfigService()
     worker = FakeMemWorker()
     page = MemoryViewerPage(worker, cfg)
@@ -68,7 +68,7 @@ def test_read_decimal_address_accepted(mem_page, qtbot):
     """非 0x 开头按十进制解释——_parse_int 支持两种。"""
     page, worker, _ = mem_page
     _set_connected(page, worker, qtbot)
-    page.le_read_addr.setText("536870912")    # = 0x20000000
+    page.le_read_addr.setText("536870912")  # = 0x20000000
     page.le_read_size.setText("16")
     page.btn_read.click()
     qtbot.wait(20)
@@ -118,6 +118,7 @@ def test_display_font_family_ignores_ui_font(mem_page, qtbot):
 def test_display_uses_fluent_hover_tip(mem_page):
     """hover 提示应是 Fluent 气泡（FluentHoverTip），不是原生 QToolTip。"""
     from ui.widgets.fluent_hover_tip import FluentHoverTip
+
     page, _, _ = mem_page
     assert isinstance(page._hover_tip, FluentHoverTip)
 
@@ -131,8 +132,11 @@ def test_hover_tip_show_and_hide(mem_page, qtbot):
     page._last_hover_offset = -1
     page.show()
     qtbot.wait(20)
-    page._hover_tip.show_at(page.display.mapToGlobal(page.display.rect().center()),
-                            "addr 0x20000000\nu32 LE: 0x03020100", duration=0)
+    page._hover_tip.show_at(
+        page.display.mapToGlobal(page.display.rect().center()),
+        "addr 0x20000000\nu32 LE: 0x03020100",
+        duration=0,
+    )
     assert page._hover_tip.is_showing()
     page._hover_tip.hide()
     assert not page._hover_tip.is_showing()
@@ -158,8 +162,8 @@ def test_memory_read_renders_hex_dump(mem_page, qtbot):
     worker.memory_read_finished.emit(0x20000000, data)
     qtbot.wait(50)
     text = page.display.toPlainText()
-    assert "0x20000000" in text          # 地址前缀
-    assert "00 01 02 03" in text              # 起始字节
+    assert "0x20000000" in text  # 地址前缀
+    assert "00 01 02 03" in text  # 起始字节
 
 
 def test_row_width_change_persists_to_cfg(mem_page, qtbot):
@@ -179,11 +183,12 @@ def test_diff_highlight_after_second_read_with_change(mem_page, qtbot):
     qtbot.wait(20)
     assert page.display.extraSelections() == []
     # 第二帧第 5 字节变了
-    new = bytearray(16); new[5] = 0xAA
+    new = bytearray(16)
+    new[5] = 0xAA
     worker.memory_read_finished.emit(0x20000000, bytes(new))
     qtbot.wait(50)
     sels = page.display.extraSelections()
-    assert len(sels) == 1                     # 只有 1 字节变化
+    assert len(sels) == 1  # 只有 1 字节变化
     # 高亮应恰好覆盖变化字节的两位 hex，不错位
     assert sels[0].cursor.selectedText() == "AA"
 
@@ -217,7 +222,7 @@ def test_goto_invalid_outside_buffer_no_crash(mem_page, qtbot):
     _set_connected(page, worker, qtbot)
     worker.memory_read_finished.emit(0x20000000, b"\x00" * 16)
     qtbot.wait(20)
-    page.le_goto.setText("0x20001000")        # 在 buffer 外
+    page.le_goto.setText("0x20001000")  # 在 buffer 外
     page.btn_goto.click()
     qtbot.wait(20)
     # 没崩就算通过；具体 InfoBar 状态不强制断言（InfoBar 是异步动画）
@@ -263,6 +268,7 @@ def test_goto_addr_restored_on_init(qtbot, isolated_appdata):
     """cfg 里保存的 goto 地址应在页面构造时恢复。"""
     from core.config_service import ConfigService
     from ui.memory_viewer_page import MemoryViewerPage
+
     cfg = ConfigService()
     cfg.set("mem_goto_addr", "0x20000020")
     worker = FakeMemWorker()

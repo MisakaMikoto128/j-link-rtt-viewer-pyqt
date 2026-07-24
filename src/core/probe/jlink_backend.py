@@ -3,18 +3,18 @@
 从旧 FlashWorker._do_connect / flash_file / _verify_bytewise / reset / close
 平移而来，行为完全不变（CLAUDE.md 'pylink 1.6.0 连接顺序' 仍在此执行）。
 """
+
 from __future__ import annotations
 
 import pylink
 
 from .base import (
     ERASE_MODE_CHIP,
-    FORMAT_BIN,
     LogCallback,
-    ProgressCallback,
     ProbeError,
     ProbeNotConnected,
     ProbeParams,
+    ProgressCallback,
     VerifyMismatch,
 )
 
@@ -55,13 +55,15 @@ class PylinkBackend:
                 emus = j.connected_emulators()
             except Exception as e:
                 self._log("warn", f"未检测到 J-Link 设备，请检查 USB 连接 ({e})")
-                raise ProbeNotConnected("no jlink")
+                raise ProbeNotConnected("no jlink") from e
             if not emus:
                 self._log("warn", "未检测到 J-Link 设备，请检查 USB 连接")
                 raise ProbeNotConnected("no jlink")
-            if serial and serial != "0" and not any(
-                    str(int(getattr(e, "SerialNumber", 0) or 0)) == serial
-                    for e in emus):
+            if (
+                serial
+                and serial != "0"
+                and not any(str(int(getattr(e, "SerialNumber", 0) or 0)) == serial for e in emus)
+            ):
                 self._log(
                     "warn",
                     f"选中的 J-Link（S/N: {serial}）不在线，请刷新设备列表或重新选择",
@@ -82,8 +84,11 @@ class PylinkBackend:
                 self._log("info", f"J-Link SN: {ser}")
 
         # SWD / JTAG 二选一（CLAUDE.md 'set_tif 是错的'：不可 OR 起来）
-        tif = (pylink.enums.JLinkInterfaces.SWD if params.interface == "SWD"
-               else pylink.enums.JLinkInterfaces.JTAG)
+        tif = (
+            pylink.enums.JLinkInterfaces.SWD
+            if params.interface == "SWD"
+            else pylink.enums.JLinkInterfaces.JTAG
+        )
         j.set_tif(tif)
         j.set_speed(int(params.speed_khz))
         j.connect(params.device_name)
@@ -110,6 +115,7 @@ class PylinkBackend:
         # STM32xx axf 烧后无法运行，同固件 hex 正常）——hex 只含裸地址数据，
         # 所以 hex 没踩。逐段按 p_paddr 烧录与 hex 等价，行为可控。
         from core import flash_file_parser as fp
+
         ih = fp.to_intelhex(p.file_path, p.bin_start_addr)
         segments = list(ih.segments())  # [(start, end_exclusive), ...]
         if not segments:
@@ -136,6 +142,7 @@ class PylinkBackend:
         if self._params is None:
             raise ProbeError("not connected")
         from core import flash_file_parser as fp
+
         ih = fp.to_intelhex(self._params.file_path, self._params.bin_start_addr)
         for start, end in ih.segments():  # end 为开区间
             data = bytes(ih.tobinarray(start=start, end=end - 1))
@@ -147,7 +154,7 @@ class PylinkBackend:
         while off < len(expected):
             n = min(CHUNK, len(expected) - off)
             got = bytes(self._jlink.memory_read(addr + off, n))
-            if got != expected[off:off + n]:
+            if got != expected[off : off + n]:
                 raise VerifyMismatch(addr + off, n)
             off += n
 

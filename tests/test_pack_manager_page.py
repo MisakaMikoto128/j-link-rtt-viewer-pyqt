@@ -1,14 +1,17 @@
 """PackManagerPage UI 测试：已装列表/过滤/删除 + 在线搜索分页。"""
+
 from __future__ import annotations
 
 
 def test_pack_page_lists_packs(qtbot, isolated_appdata, monkeypatch, tmp_path):
     from core import pack_service
+
     monkeypatch.setattr(pack_service, "get_pack_data_path", lambda: str(tmp_path))
     (tmp_path / "Keil.STM32F0_DFP.1.0.0.pack").write_bytes(b"\x00" * 1024)
     (tmp_path / "Keil.STM32F1_DFP.4.0.0.pack").write_bytes(b"\x00" * 2048)
-    from ui.pack_manager_page import PackManagerPage
     from core.config_service import ConfigService
+    from ui.pack_manager_page import PackManagerPage
+
     page = PackManagerPage(ConfigService())
     qtbot.addWidget(page)
     page._lazy_load()
@@ -23,18 +26,20 @@ def test_pack_page_lists_packs(qtbot, isolated_appdata, monkeypatch, tmp_path):
 
 def test_pack_page_filter(qtbot, isolated_appdata, monkeypatch, tmp_path):
     from core import pack_service
+
     monkeypatch.setattr(pack_service, "get_pack_data_path", lambda: str(tmp_path))
     (tmp_path / "Keil.STM32F0_DFP.1.0.0.pack").write_bytes(b"\x00")
     (tmp_path / "Keil.STM32F1_DFP.4.0.0.pack").write_bytes(b"\x00")
-    from ui.pack_manager_page import PackManagerPage
     from core.config_service import ConfigService
+    from ui.pack_manager_page import PackManagerPage
+
     page = PackManagerPage(ConfigService())
     qtbot.addWidget(page)
     page._lazy_load()
     try:
         assert page.tbl_installed.rowCount() == 2
         page.le_filter.setText("F1")
-        assert page.tbl_installed.isRowHidden(0) is True   # F0
+        assert page.tbl_installed.isRowHidden(0) is True  # F0
         assert page.tbl_installed.isRowHidden(1) is False  # F1
     finally:
         page.shutdown()
@@ -42,11 +47,13 @@ def test_pack_page_filter(qtbot, isolated_appdata, monkeypatch, tmp_path):
 
 def test_pack_page_delete_selected(qtbot, isolated_appdata, monkeypatch, tmp_path):
     from core import pack_service
+
     monkeypatch.setattr(pack_service, "get_pack_data_path", lambda: str(tmp_path))
     f = tmp_path / "Keil.STM32F0_DFP.1.0.0.pack"
     f.write_bytes(b"\x00")
-    from ui.pack_manager_page import PackManagerPage
     from core.config_service import ConfigService
+    from ui.pack_manager_page import PackManagerPage
+
     page = PackManagerPage(ConfigService())
     qtbot.addWidget(page)
     page._lazy_load()
@@ -62,14 +69,16 @@ def test_pack_page_delete_selected(qtbot, isolated_appdata, monkeypatch, tmp_pat
 def test_pack_page_search_pagination(qtbot, isolated_appdata, monkeypatch, tmp_path):
     """在线搜索：mock search_packs 返回 30 条，分页 12/页 -> 1/12 + 2/12 + 3/6。"""
     from core import pack_service
+
     monkeypatch.setattr(pack_service, "get_pack_data_path", lambda: str(tmp_path))
     monkeypatch.setattr(
         pack_service,
         "search_packs",
         lambda q, limit=500: [f"STM32F{i:02d}" for i in range(30)],
     )
-    from ui.pack_manager_page import PackManagerPage
     from core.config_service import ConfigService
+    from ui.pack_manager_page import PackManagerPage
+
     page = PackManagerPage(ConfigService())
     qtbot.addWidget(page)
     page._lazy_load()
@@ -109,13 +118,16 @@ def test_pack_page_download_uses_selected_row(qtbot, isolated_appdata, monkeypat
         lambda q, limit=500: ["STM32F103C8Tx"],
     )
     captured = {}
+
     def _fake_download(part, log=None):
         captured["part"] = part
         return "downloaded"
+
     monkeypatch.setattr(pack_service, "download_pack", _fake_download)
 
-    from ui.pack_manager_page import PackManagerPage
     from core.config_service import ConfigService
+    from ui.pack_manager_page import PackManagerPage
+
     page = PackManagerPage(ConfigService())
     qtbot.addWidget(page)
     page._lazy_load()

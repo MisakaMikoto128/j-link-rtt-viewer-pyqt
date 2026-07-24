@@ -1,4 +1,5 @@
 """设置页：外观（主题/字体/语言）+ RTT 行为（最大行数/Rx Timeout/日志目录）。"""
+
 from __future__ import annotations
 
 import os
@@ -6,7 +7,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtGui import QColor, QFontDatabase
 from PySide6.QtWidgets import (
     QCompleter,
     QFileDialog,
@@ -30,16 +31,14 @@ from qfluentwidgets import (
     setTheme,
     setThemeColor,
 )
-from PySide6.QtGui import QColor, QFont
-
-from . import _infobar
-from ._scroll_helpers import make_transparent_scroll
 
 from core.config_service import ConfigService
 from core.i18n_service import lang_display_name, supported_langs
 from core.jlink_worker import RESET_MODE_AUTO_RECONNECT, RESET_MODE_NORMAL
 from core.logger import get_log_dir
 
+from . import _infobar
+from ._scroll_helpers import make_transparent_scroll
 
 _RESET_MODE_LABELS = [
     (RESET_MODE_NORMAL, "正常（仅重置目标 MCU）"),
@@ -60,7 +59,11 @@ _ENCODING_DISPLAY: dict[str, str] = {
 _ENCODING_FROM_DISPLAY: dict[str, str] = {v: k for k, v in _ENCODING_DISPLAY.items()}
 # ComboBox 显示列表（保持顺序）
 _ENCODING_DISPLAY_NAMES: list[str] = [
-    "UTF-8", "GBK", "UTF-16-LE", "Latin-1", "ASCII",
+    "UTF-8",
+    "GBK",
+    "UTF-16-LE",
+    "Latin-1",
+    "ASCII",
 ]
 
 # --- 换行符选项 ---
@@ -69,7 +72,9 @@ _SEND_LINE_ENDING_DISPLAY: dict[str, str] = {
     "\n": "LF (\\n)",
     "\r": "CR (\\r)",
 }
-_SEND_LINE_ENDING_FROM_DISPLAY: dict[str, str] = {v: k for k, v in _SEND_LINE_ENDING_DISPLAY.items()}
+_SEND_LINE_ENDING_FROM_DISPLAY: dict[str, str] = {
+    v: k for k, v in _SEND_LINE_ENDING_DISPLAY.items()
+}
 _SEND_LINE_ENDING_NAMES: list[str] = ["CRLF (\\r\\n)", "LF (\\n)", "CR (\\r)"]
 
 
@@ -162,8 +167,7 @@ class SettingsPage(QWidget):
         self.sp_ui_font_size.setRange(8, 32)
         self.sp_ui_font_size.setValue(max(8, int(self._cfg.get("ui_font_size") or 9)))
         self.sp_ui_font_size.setSuffix(" pt")
-        self.sp_ui_font_size.valueChanged.connect(
-            lambda v: self._cfg.set("ui_font_size", v))
+        self.sp_ui_font_size.valueChanged.connect(lambda v: self._cfg.set("ui_font_size", v))
         row_ui_font = _SettingRow("界面字号", self.sp_ui_font_size)
         self._setting_rows.append(row_ui_font)
         app_lay.addWidget(row_ui_font)
@@ -215,7 +219,7 @@ class SettingsPage(QWidget):
         self._lbl_bg_opacity = BodyLabel(self.tr("透明度"))
         self.slider_bg_opacity = Slider(Qt.Horizontal, self)
         self.slider_bg_opacity.setRange(0, 100)
-        self.slider_bg_opacity.setValue(int(round(float(self._cfg.get("background_opacity")) * 100)))
+        self.slider_bg_opacity.setValue(round(float(self._cfg.get("background_opacity")) * 100))
         self.slider_bg_opacity.valueChanged.connect(self._on_bg_opacity)
         row_bg_opacity = QHBoxLayout()
         row_bg_opacity.addWidget(self._lbl_bg_opacity)
@@ -281,19 +285,21 @@ class SettingsPage(QWidget):
 
         # 每通道历史缓存：切通道时各通道各自的历史能完整复现的上限（字符数）
         self.sp_channel_hist = SpinBox(self)
-        self.sp_channel_hist.setRange(10, 5000)   # × 1000 字符 = 10k ~ 5M
+        self.sp_channel_hist.setRange(10, 5000)  # × 1000 字符 = 10k ~ 5M
         self.sp_channel_hist.setSingleStep(50)
         self.sp_channel_hist.setSuffix(" k字符")
         self.sp_channel_hist.setValue(
-            max(10, int(self._cfg.get("rtt_channel_history_chars") or 200000) // 1000))
+            max(10, int(self._cfg.get("rtt_channel_history_chars") or 200000) // 1000)
+        )
         self.sp_channel_hist.valueChanged.connect(
-            lambda v: self._cfg.set("rtt_channel_history_chars", v * 1000))
+            lambda v: self._cfg.set("rtt_channel_history_chars", v * 1000)
+        )
         row_ch_hist = _SettingRow("每通道历史缓存", self.sp_channel_hist)
         self._setting_rows.append(row_ch_hist)
         rtt_lay.addWidget(row_ch_hist)
 
         self.sp_poll = SpinBox(self)
-        self.sp_poll.setRange(5, 1000)   # 5ms - 1s
+        self.sp_poll.setRange(5, 1000)  # 5ms - 1s
         self.sp_poll.setSuffix(" ms")
         self.sp_poll.setValue(max(20, self._cfg.get("rtt_poll_interval_ms") or 100))
         self.sp_poll.valueChanged.connect(lambda v: self._cfg.set("rtt_poll_interval_ms", v))
@@ -316,7 +322,9 @@ class SettingsPage(QWidget):
         self.cb_line_ending = ComboBox(self)
         self.cb_line_ending.addItems(_SEND_LINE_ENDING_NAMES)
         cur_le: str = self._cfg.get("send_line_ending") or "\r\n"
-        cur_le_display: str = _SEND_LINE_ENDING_DISPLAY.get(cur_le, _SEND_LINE_ENDING_DISPLAY["\r\n"])
+        cur_le_display: str = _SEND_LINE_ENDING_DISPLAY.get(
+            cur_le, _SEND_LINE_ENDING_DISPLAY["\r\n"]
+        )
         self.cb_line_ending.setCurrentText(cur_le_display)
         self.cb_line_ending.currentTextChanged.connect(self._on_line_ending_changed)
         row_le = _SettingRow("换行符", self.cb_line_ending)
@@ -413,15 +421,22 @@ class SettingsPage(QWidget):
         cur_idx = self._bg_fill_modes.index(cur_mode) if cur_mode in self._bg_fill_modes else 1
         self.cmb_bg_fill.blockSignals(True)
         self.cmb_bg_fill.clear()
-        self.cmb_bg_fill.addItems([
-            self.tr("拉伸"), self.tr("覆盖"), self.tr("居中"), self.tr("平铺"),
-        ])
+        self.cmb_bg_fill.addItems(
+            [
+                self.tr("拉伸"),
+                self.tr("覆盖"),
+                self.tr("居中"),
+                self.tr("平铺"),
+            ]
+        )
         self.cmb_bg_fill.setCurrentIndex(cur_idx)
         self.cmb_bg_fill.blockSignals(False)
 
     def _on_bg_browse(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, self.tr("选择背景图片"), "",
+            self,
+            self.tr("选择背景图片"),
+            "",
             self.tr("图片 (*.png *.jpg *.jpeg *.bmp *.webp)"),
         )
         if path:
@@ -527,6 +542,7 @@ class SettingsPage(QWidget):
 
     def _on_pick_color(self) -> None:
         from qfluentwidgets import ColorDialog
+
         cur = QColor(self._cfg.get("theme_color"))
         dlg = ColorDialog(cur, self.tr("选择主题色"), self, enableAlpha=False)
         dlg.colorChanged.connect(self._apply_color)
@@ -543,6 +559,7 @@ class SettingsPage(QWidget):
 
     def _on_pick_mark_color(self) -> None:
         from qfluentwidgets import ColorDialog
+
         cur = QColor(self._cfg.get("mark_color"))
         dlg = ColorDialog(cur, self.tr("选择标记颜色"), self, enableAlpha=False)
         dlg.colorChanged.connect(self._apply_mark_color)
@@ -561,10 +578,20 @@ class SettingsPage(QWidget):
         """系统字体列表，常用编程/中文字体置顶。"""
         all_families = sorted({f for f in QFontDatabase.families() if f and not f.startswith("@")})
         preferred = [
-            "Consolas", "Cascadia Code", "Cascadia Mono", "JetBrains Mono",
-            "Source Code Pro", "Fira Code", "Courier New",
-            "Microsoft YaHei", "Microsoft YaHei UI", "Source Han Sans CN",
-            "Noto Sans CJK SC", "Segoe UI", "Arial", "Times New Roman",
+            "Consolas",
+            "Cascadia Code",
+            "Cascadia Mono",
+            "JetBrains Mono",
+            "Source Code Pro",
+            "Fira Code",
+            "Courier New",
+            "Microsoft YaHei",
+            "Microsoft YaHei UI",
+            "Source Han Sans CN",
+            "Noto Sans CJK SC",
+            "Segoe UI",
+            "Arial",
+            "Times New Roman",
         ]
         head = [f for f in preferred if f in all_families]
         tail = [f for f in all_families if f not in head]
@@ -596,7 +623,11 @@ class SettingsPage(QWidget):
         """编码下拉切换：从显示名映射到内部存储的小写标准名。"""
         key: str = _ENCODING_FROM_DISPLAY.get(display_name, "utf-8")
         self._cfg.set("rtt_encoding", key)
-        _infobar.ok(self, self.tr("已切换 RTT 编码"), self.tr("新编码：") + f"{display_name}" + self.tr("（立即生效）"))
+        _infobar.ok(
+            self,
+            self.tr("已切换 RTT 编码"),
+            self.tr("新编码：") + f"{display_name}" + self.tr("（立即生效）"),
+        )
 
     def _on_line_ending_changed(self, display_name: str) -> None:
         """换行符下拉切换：从显示名映射到内部值。"""
@@ -606,10 +637,13 @@ class SettingsPage(QWidget):
     def _on_keep_screen_on_toggled(self, checked: bool) -> None:
         self._cfg.set("keep_screen_on", checked)
         from core.screen_keeper import apply_keep_screen_on
+
         apply_keep_screen_on(checked)
 
     def _on_pick_log_dir(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, self.tr("选择日志目录"), self.lbl_log_dir.text())
+        path = QFileDialog.getExistingDirectory(
+            self, self.tr("选择日志目录"), self.lbl_log_dir.text()
+        )
         if path:
             self._cfg.set("log_dir", path)
             self.lbl_log_dir.setText(path)
@@ -622,6 +656,7 @@ class SettingsPage(QWidget):
                 os.startfile(path)
             else:
                 import subprocess
+
                 subprocess.Popen(["xdg-open", path])
         except Exception as e:
             _infobar.err(self, self.tr("打开失败"), str(e))

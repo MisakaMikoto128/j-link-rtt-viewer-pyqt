@@ -15,7 +15,11 @@ extend-exclude = ["venv", ".venv", "build", "dist"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
-ignore = ["E501", "B008"]
+# RUF001/002/003：中文全角标点（。，：；！？等）被判定为 ambiguous-unicode-character，
+#   对中文项目是纯噪声（本项目曾报 4000+ 条），必须 ignore。
+# E501：行太长由 black 统一处理（line-length=100），ruff 重复报无意义。
+# B008：函数默认值里实例化对象（如 Signal()），PySide6 信号定义必需，误报。
+ignore = ["E501", "B008", "RUF001", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

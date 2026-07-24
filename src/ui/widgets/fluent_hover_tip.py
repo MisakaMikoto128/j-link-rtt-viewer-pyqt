@@ -12,11 +12,11 @@ family）的 helper：手动 `move(globalPos)` + `show()`，跟随鼠标定位�
 生命周期：单例式复用同一个 `ToolTip` 实例（避免每次 hover 都 new + delete，
 高频率 hover 下抖动/闪烁）。内容由调用方 setText 更新，位置由调用方 move。
 """
+
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QWidget
-
 from qfluentwidgets.components.widgets.tool_tip import ToolTip
 
 # 气泡相对鼠标的偏移（x 右移、y 上移显示在光标上方，避免被光标挡住）

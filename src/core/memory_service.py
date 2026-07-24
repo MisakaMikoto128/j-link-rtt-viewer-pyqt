@@ -4,6 +4,7 @@
 read_memory / export_firmware 必须在持有 pylink 的那条线程（JLinkWorker）内调用。
 format_hex_dump 是纯字符串函数，UI 端用，不需要 pylink。
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -39,7 +40,7 @@ def write_memory(jlink, addr: int, data: bytes) -> int:
     padded = bytes(data) + b"\xff" * ((-len(data)) % 4)
     words = []
     for i in range(0, len(padded), 4):
-        w = padded[i] | (padded[i+1] << 8) | (padded[i+2] << 16) | (padded[i+3] << 24)
+        w = padded[i] | (padded[i + 1] << 8) | (padded[i + 2] << 16) | (padded[i + 3] << 24)
         words.append(w)
     jlink.memory_write32(addr, words)
     return len(data)
@@ -75,7 +76,7 @@ def format_hex_dump(data: bytes, base_addr: int = 0, bytes_per_row: int = 16) ->
         bytes_per_row = 16
     lines: list[str] = []
     for offset in range(0, len(data), bytes_per_row):
-        chunk = data[offset:offset + bytes_per_row]
+        chunk = data[offset : offset + bytes_per_row]
         addr = base_addr + offset
 
         hex_col_parts: list[str] = []
@@ -102,7 +103,7 @@ def format_as_c_array(data: bytes, name: str = "data", bytes_per_row: int = 16) 
         return f"uint8_t {name}[0] = {{}};"
     lines: list[str] = [f"uint8_t {name}[{len(data)}] = {{"]
     for offset in range(0, len(data), bytes_per_row):
-        chunk = data[offset:offset + bytes_per_row]
+        chunk = data[offset : offset + bytes_per_row]
         row = ", ".join(f"0x{b:02X}" for b in chunk)
         suffix = "," if offset + bytes_per_row < len(data) else ""
         lines.append(f"    {row}{suffix}")
@@ -117,16 +118,25 @@ def parse_value(data: bytes, offset: int, dtype: str, little_endian: bool = True
     超出 data 长度返回 "—"。
     """
     import struct
+
     sizes = {"u8": 1, "i8": 1, "u16": 2, "i16": 2, "u32": 4, "i32": 4, "float": 4, "double": 8}
     if dtype not in sizes:
         return "—"
     size = sizes[dtype]
     if offset < 0 or offset + size > len(data):
         return "—"
-    buf = bytes(data[offset:offset + size])
+    buf = bytes(data[offset : offset + size])
     endian = "<" if little_endian else ">"
-    fmt_map = {"u8": "B", "i8": "b", "u16": "H", "i16": "h",
-               "u32": "I", "i32": "i", "float": "f", "double": "d"}
+    fmt_map = {
+        "u8": "B",
+        "i8": "b",
+        "u16": "H",
+        "i16": "h",
+        "u32": "I",
+        "i32": "i",
+        "float": "f",
+        "double": "d",
+    }
     try:
         value = struct.unpack(endian + fmt_map[dtype], buf)[0]
     except struct.error:

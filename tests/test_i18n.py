@@ -5,6 +5,7 @@
   现在所有语言（含 zh_CN）都装 JsonTranslator，zh_CN.json 里收了这些英文→中文映射。
 - 校验 JsonTranslator 未命中返回 source（既不空白也不报错）。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -19,6 +20,7 @@ def reset_translator_after_test(qapp):
     每个用例跑完强制重置回默认 zh_CN。"""
     yield
     from core.i18n_service import init_translator
+
     init_translator("zh_CN")
 
 
@@ -30,13 +32,16 @@ def dummy_parent(qapp):
 def test_json_translator_miss_returns_source():
     """未命中的键返回 source 自身，绝不返回空串（Qt 把非空当有效译文采用）。"""
     from core.i18n_service import JsonTranslator
+
     t = JsonTranslator("en")
     assert t.translate("ctx", "不存在的键XYZ") == "不存在的键XYZ"
 
 
 def _color_dialog_texts(lang, dummy_parent):
-    from core.i18n_service import init_translator
     from qfluentwidgets import ColorDialog
+
+    from core.i18n_service import init_translator
+
     init_translator(lang)
     d = ColorDialog(QColor("#28afe9"), "title", dummy_parent, enableAlpha=False)
     texts = {
@@ -83,6 +88,7 @@ def test_color_dialog_translates_in_ja(dummy_parent):
 def test_own_zh_tr_unchanged_under_zh_translator(dummy_parent):
     """装上 zh_CN 翻译器后，项目自身 self.tr('外观') 仍返回中文原文（未命中返回 source）。"""
     from core.i18n_service import init_translator
+
     init_translator("zh_CN")
     w = QWidget()
     assert w.tr("外观") == "外观"
@@ -92,6 +98,7 @@ def test_own_zh_tr_unchanged_under_zh_translator(dummy_parent):
 def test_own_en_tr_translates(dummy_parent):
     """装上 en 翻译器后，项目自身 self.tr('外观') 返回英文。"""
     from core.i18n_service import init_translator
+
     init_translator("en")
     w = QWidget()
     assert w.tr("外观") == "Appearance"

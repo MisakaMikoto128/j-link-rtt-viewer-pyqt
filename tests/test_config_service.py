@@ -1,4 +1,5 @@
 """ConfigService：默认值、节流、flush、atomic write。"""
+
 import json
 import time
 
@@ -13,14 +14,19 @@ def cfg(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     # 把 bundled config.json 放进 tmp 临时 src
     bundled = tmp_path / "bundled_config.json"
-    bundled.write_text(json.dumps({
-        "default_interface": "SWD",
-        "default_speed_khz": 4000,
-        "speed_options_khz": [100, 4000, 8000],
-        "default_font_family": "Consolas",
-        "default_font_size": 13,
-        "default_rtt_channel": 0,
-    }), encoding="utf-8")
+    bundled.write_text(
+        json.dumps(
+            {
+                "default_interface": "SWD",
+                "default_speed_khz": 4000,
+                "speed_options_khz": [100, 4000, 8000],
+                "default_font_family": "Consolas",
+                "default_font_size": 13,
+                "default_rtt_channel": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
     return ConfigService(bundled_config_path=bundled, throttle_ms=50)
 
 
@@ -129,6 +135,7 @@ def test_atomic_write_on_crash(cfg, qapp, tmp_path, monkeypatch):
 
     # mock os.replace 抛异常
     import os as _os
+
     original_replace = _os.replace
 
     def fake_replace(src, dst):
@@ -147,14 +154,19 @@ def test_flash_defaults_present(tmp_path, monkeypatch):
     """新增的 flash_* 偏好键必须出现在 DEFAULTS 里，并有正确默认值。"""
     monkeypatch.setenv("APPDATA", str(tmp_path))
     bundled = tmp_path / "bundled_config.json"
-    bundled.write_text(json.dumps({
-        "default_interface": "SWD",
-        "default_speed_khz": 4000,
-        "speed_options_khz": [100, 4000, 8000],
-        "default_font_family": "Consolas",
-        "default_font_size": 13,
-        "default_rtt_channel": 0,
-    }), encoding="utf-8")
+    bundled.write_text(
+        json.dumps(
+            {
+                "default_interface": "SWD",
+                "default_speed_khz": 4000,
+                "speed_options_khz": [100, 4000, 8000],
+                "default_font_family": "Consolas",
+                "default_font_size": 13,
+                "default_rtt_channel": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
     cfg = ConfigService(bundled_config_path=bundled, throttle_ms=50)
     assert cfg.get("flash_device_name") == "STM32H750VB"
     assert cfg.get("flash_interface") == "SWD"
@@ -171,14 +183,19 @@ def test_flash_set_persists_recent_files(tmp_path, monkeypatch):
     """flash_recent_files 是 list，set 进去要保留。"""
     monkeypatch.setenv("APPDATA", str(tmp_path))
     bundled = tmp_path / "bundled_config.json"
-    bundled.write_text(json.dumps({
-        "default_interface": "SWD",
-        "default_speed_khz": 4000,
-        "speed_options_khz": [100, 4000, 8000],
-        "default_font_family": "Consolas",
-        "default_font_size": 13,
-        "default_rtt_channel": 0,
-    }), encoding="utf-8")
+    bundled.write_text(
+        json.dumps(
+            {
+                "default_interface": "SWD",
+                "default_speed_khz": 4000,
+                "speed_options_khz": [100, 4000, 8000],
+                "default_font_family": "Consolas",
+                "default_font_size": 13,
+                "default_rtt_channel": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
     cfg = ConfigService(bundled_config_path=bundled, throttle_ms=50)
     cfg.set("flash_recent_files", ["C:/a.axf", "C:/b.hex"])
     cfg.flush()
@@ -207,9 +224,9 @@ def test_config_set_background_opacity_must_be_float(cfg, qapp):
 def test_config_emits_background_signals(cfg, qapp):
     """背景三个 key 的 set 对应 emit 各自的 Signal。"""
     received = {}
-    cfg.background_image_path_changed.connect(lambda v: received.__setitem__('path', v))
-    cfg.background_opacity_changed.connect(lambda v: received.__setitem__('op', v))
-    cfg.background_fill_mode_changed.connect(lambda v: received.__setitem__('fill', v))
+    cfg.background_image_path_changed.connect(lambda v: received.__setitem__("path", v))
+    cfg.background_opacity_changed.connect(lambda v: received.__setitem__("op", v))
+    cfg.background_fill_mode_changed.connect(lambda v: received.__setitem__("fill", v))
 
     cfg.set("background_image_path", "/tmp/x.png")
     cfg.set("background_opacity", 0.8)

@@ -3,9 +3,10 @@
 所有 pylink 都用 MagicMock。Worker 跑在子 QThread，主线程驱动 Qt 事件循环
 处理 queued connection。
 """
+
 import time
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from PySide6.QtCore import QCoreApplication, Qt
@@ -15,6 +16,7 @@ from PySide6.QtCore import QCoreApplication, Qt
 def worker(qapp, monkeypatch):
     """创建 JLinkWorker（纯 QObject）+ 外部 QThread + moveToThread。"""
     from PySide6.QtCore import QThread
+
     from core import jlink_worker as jw_mod
 
     fake_jlink_cls = MagicMock()
@@ -33,6 +35,7 @@ def worker(qapp, monkeypatch):
     # jw_mod.pylink；改 patch 真实 pylink 模块的 JLink —— 懒加载拿到的
     # 是同一个模块对象，monkeypatch 依然生效。
     import pylink
+
     monkeypatch.setattr(pylink, "JLink", fake_jlink_cls)
 
     worker = jw_mod.JLinkWorker()
@@ -148,6 +151,7 @@ def test_disconnect_always_calls_cleanup(worker):
     jl.connected.return_value = False
     # 让 rtt_stop/close 抛异常——断开不应因此失败
     import pylink.errors
+
     jl.rtt_stop.side_effect = pylink.errors.JLinkException(-1)
     jl.close.side_effect = pylink.errors.JLinkException(-1)
 
@@ -188,6 +192,7 @@ def test_reconnect_after_disconnect(worker):
 
 def test_set_tif_swd_vs_jtag(worker):
     import pylink
+
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
@@ -209,6 +214,7 @@ def test_set_tif_swd_vs_jtag(worker):
 def test_stop_requested_quits_thread(qapp, monkeypatch):
     """stop_requested 必须 worker 自己 quit 所在 thread，主线程只 wait。"""
     from PySide6.QtCore import QThread
+
     from core import jlink_worker as jw_mod
 
     fake_jlink_cls = MagicMock()
@@ -217,6 +223,7 @@ def test_stop_requested_quits_thread(qapp, monkeypatch):
     fake_jlink_instance.connected.return_value = False
     fake_jlink_cls.return_value = fake_jlink_instance
     import pylink
+
     monkeypatch.setattr(pylink, "JLink", fake_jlink_cls)
 
     worker = jw_mod.JLinkWorker()
@@ -269,13 +276,13 @@ def test_send_data_hex(worker):
 
 
 def test_send_data_when_not_connected(worker):
-    w, jl = worker
+    w, _jl = worker
     results = []
     w.command_result.connect(lambda c, ok, msg: results.append((c, ok, msg)))
 
     w.send_data_requested.emit("hello", False)
     _drain_events(0.3)
-    assert ("send_data", False) == (results[0][0], results[0][1])
+    assert (results[0][0], results[0][1]) == ("send_data", False)
 
 
 def test_send_data_unspecified_error_rewritten(worker):
@@ -341,15 +348,16 @@ def test_reset_and_halt(worker):
     jl.close.reset_mock()
 
     from core.jlink_worker import RESET_MODE_HALT
+
     w.reset_requested.emit(RESET_MODE_HALT)
     _drain_events(0.3)
 
     jl.reset.assert_called_once_with(0, True)  # halt=True
-    jl.close.assert_not_called()               # 不断开
+    jl.close.assert_not_called()  # 不断开
 
 
 def test_set_channel_takes_effect(worker):
-    w, jl = worker
+    w, _jl = worker
     w.set_rtt_channel_requested.emit(5)
     _drain_events(0.2)
     assert w._view_channel == 5
@@ -497,7 +505,7 @@ def test_connect_prechecks_jlink_presence(worker):
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
-    jl.connected_emulators.return_value = []   # 无设备接入
+    jl.connected_emulators.return_value = []  # 无设备接入
 
     logs = []
     w.log_message.connect(lambda lv, m: logs.append((lv, m)))
@@ -512,6 +520,7 @@ def test_connect_prechecks_jlink_presence(worker):
 def test_connect_warns_and_backs_off_when_selected_serial_offline(worker):
     """指定的 J-Link serial 不在当前接入列表里：warning + 回退，不调 open。"""
     from types import SimpleNamespace
+
     w, jl = worker
     jl.opened.return_value = False
     # 枚举里只有 serial=111 的 J-Link，用户选的是 222
@@ -522,8 +531,9 @@ def test_connect_warns_and_backs_off_when_selected_serial_offline(worker):
     w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "222")
     _drain_events(0.6)
 
-    assert any(lv == "warning" and "222" in m for lv, m in logs), \
-        f"应提示选中的 J-Link 不在线，got {logs}"
+    assert any(
+        lv == "warning" and "222" in m for lv, m in logs
+    ), f"应提示选中的 J-Link 不在线，got {logs}"
     assert not jl.open.called, "选中设备不在线不应调 jlink.open"
     assert w.state_name() == "IDLE"
 
@@ -531,6 +541,7 @@ def test_connect_warns_and_backs_off_when_selected_serial_offline(worker):
 def test_enumerate_devices_formats_semicolon_lines(worker):
     """enumerate_devices_requested → devices_enumerated 按 "serial|product;..." 格式返回。"""
     from types import SimpleNamespace
+
     w, jl = worker
     jl.connected_emulators.return_value = [
         SimpleNamespace(SerialNumber=12345678, acProduct=b"J-Link PLUS"),
@@ -563,13 +574,15 @@ def test_enumerate_devices_empty_when_no_jlink(worker):
     w.enumerate_devices_requested.emit()
     _drain_events(0.6)
     assert got[-1] == "", "枚举异常也应发空串（worker 不抛给 UI）"
-    assert not any(lv == "warning" and "J-Link 设备列表" in m for lv, m in logs), \
-        "200ms 高频轮询失败不应弹 UI warning 刷屏"
+    assert not any(
+        lv == "warning" and "J-Link 设备列表" in m for lv, m in logs
+    ), "200ms 高频轮询失败不应弹 UI warning 刷屏"
 
 
 def test_enumerate_devices_skips_invalid_serial(worker):
     """serial<=0 的条目被跳过（无法用于 open(serial_no=...)）。"""
     from types import SimpleNamespace
+
     w, jl = worker
     jl.connected_emulators.return_value = [
         SimpleNamespace(SerialNumber=0, acProduct=b"Ghost"),
@@ -621,10 +634,12 @@ def test_unexpected_disconnect_does_not_start_reconnect_timer(worker):
 # ============================================================
 def _make_channel_reader(per_channel: dict):
     """生成 rtt_read(channel, n) 的 side_effect：按通道返回预置数据（读一次后清空）。"""
+
     def _read(ch, n):
         data = per_channel.get(ch, b"")
         per_channel[ch] = b""
         return list(data) if data else []
+
     return _read
 
 
@@ -635,12 +650,14 @@ def _set_allocated_channels(jl, n: int):
     worker 的 _detect_num_up_channels 用 SizeOfBuffer>0 计数，故应返回 n。
     """
     from types import SimpleNamespace
+
     jl.rtt_get_num_up_buffers.return_value = n
 
     def _desc(ch, up=True):
         if ch < n:
             return SimpleNamespace(SizeOfBuffer=1024)
         raise RuntimeError("Invalid error code: -3")  # 超出声明范围
+
     jl.rtt_get_buf_descriptor.side_effect = _desc
 
 
@@ -665,15 +682,18 @@ def test_detect_counts_allocated_not_declared(worker):
     ch2（空槽无数据）。修法用 buf descriptor SizeOfBuffer>0 计数。
     """
     from types import SimpleNamespace
+
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
-    jl.rtt_get_num_up_buffers.return_value = 3   # 声明 3
+    jl.rtt_get_num_up_buffers.return_value = 3  # 声明 3
+
     # 只有 ch0 有真实缓冲，ch1/ch2 是空槽
     def _desc(ch, up=True):
         if ch == 0:
             return SimpleNamespace(SizeOfBuffer=1024)
-        return SimpleNamespace(SizeOfBuffer=0)   # 空槽
+        return SimpleNamespace(SizeOfBuffer=0)  # 空槽
+
     jl.rtt_get_buf_descriptor.side_effect = _desc
     jl.rtt_read.return_value = []
     w.connect_requested.emit("STM32G070CB", "SWD", 4000, 0, "0")
@@ -685,6 +705,7 @@ def test_detect_counts_allocated_not_declared(worker):
 def test_detect_retries_then_succeeds(worker):
     """紧凑重连：控制块首次未就绪抛异常，retry 后成功探测到分配数。"""
     from types import SimpleNamespace
+
     w, jl = worker
     jl.opened.return_value = False
     jl.connected.return_value = True
@@ -700,7 +721,6 @@ def test_detect_retries_then_succeeds(worker):
     _drain_events(1.0)
     assert w.state_name() == "CONNECTED"
     assert w.get_num_up_channels() == 2, "retry 后应探测到 2"
-
 
 
 def test_connect_detect_num_up_channels_fallback(worker):
@@ -760,8 +780,8 @@ def test_per_channel_decoder_independence(worker):
     assert w.state_name() == "CONNECTED"
 
     # ch0 先发半字节，ch1 发完整字符——若共享 decoder，ch1 会被 ch0 的半字节污染
-    hanzi = "中".encode("utf-8")  # 3 字节
-    per_ch = {0: hanzi[:1], 1: "X".encode("utf-8")}
+    hanzi = "中".encode()  # 3 字节
+    per_ch = {0: hanzi[:1], 1: b"X"}
     jl.rtt_read.side_effect = _make_channel_reader(per_ch)
     _drain_events(0.5)
     # ch0 补发剩余字节
@@ -846,8 +866,10 @@ def test_reset_counts_clears_all_channels(worker):
 def test_remote_connect_uses_ip_addr_double_open(worker):
     """远程连接：mock pylink，断言 open(ip_addr=) 被调两次、rtt_start 在 set_tif 前、
     不调用 connected_emulators，_last_connect_params 为 6 元组。"""
+    from unittest.mock import MagicMock, call
+
     import pylink
-    from unittest.mock import call, MagicMock
+
     w, jl = worker
     # 初次双开时 opened() 返回 False；连接成功后读 serial 时 opened() 返回 True
     jl.opened.side_effect = [False, True]
@@ -881,7 +903,12 @@ def test_remote_connect_uses_ip_addr_double_open(worker):
     assert True in states
     assert w.state_name() == "CONNECTED"
     assert w._last_connect_params == (
-        "STM32F030F4", "SWD", 4000, 0, "602717758", "192.168.79.1:19020"
+        "STM32F030F4",
+        "SWD",
+        4000,
+        0,
+        "602717758",
+        "192.168.79.1:19020",
     )
     info = w.get_device_info()
     assert info.get("remote_addr") == "192.168.79.1:19020"
@@ -890,6 +917,7 @@ def test_remote_connect_uses_ip_addr_double_open(worker):
 def test_remote_connect_failure_logs_friendly_error(worker):
     """远程 open 失败：emit 中文友好错误，状态回 IDLE，emit connection_state_changed(False)。"""
     import pylink.errors
+
     w, jl = worker
     jl.opened.return_value = False
     jl.open.side_effect = pylink.errors.JLinkException("Cannot connect to J-Link name 192.168.79.1")
@@ -925,4 +953,3 @@ def test_local_connect_stores_six_tuple_with_empty_remote_addr(worker):
     assert params is not None and len(params) == 6
     assert params[5] == ""
     assert w.get_device_info().get("remote_addr") == ""
-

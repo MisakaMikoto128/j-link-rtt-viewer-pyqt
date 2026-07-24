@@ -1,4 +1,5 @@
 """远程 J-Link 主机解析与可达性探测（RTT 页 / 烧录页共用）。"""
+
 from __future__ import annotations
 
 import ipaddress
@@ -7,9 +8,7 @@ import socket
 
 REMOTE_ITEM_TEXT = "远程连接"
 
-_HOSTNAME_RE = re.compile(
-    r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$"
-)
+_HOSTNAME_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$")
 
 
 def resolve_remote_host(host: str) -> str | None:

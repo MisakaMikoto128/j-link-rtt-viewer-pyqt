@@ -1,4 +1,5 @@
 """memory_service：format_hex_dump 纯函数 + read_memory/export_firmware 用 mock jlink。"""
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -85,8 +86,10 @@ def test_export_firmware_handles_partial_chunk(tmp_path):
     ]
     out_file = tmp_path / "fw.bin"
     memory_service.export_firmware(
-        jlink, save_path=str(out_file),
-        start_addr=0, size=4096 + 1000,
+        jlink,
+        save_path=str(out_file),
+        start_addr=0,
+        size=4096 + 1000,
         progress_cb=lambda c, t: None,
     )
     assert out_file.stat().st_size == 4096 + 1000
@@ -95,6 +98,7 @@ def test_export_firmware_handles_partial_chunk(tmp_path):
 # ----------------------------------------------------------------------------
 # format_hex_dump — bytes_per_row 行布局契约（被内存页 _cursor_byte_offset 依赖）
 # ----------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("bpr", [8, 16, 32])
 def test_format_hex_dump_row_layout_contract(bpr):
@@ -111,7 +115,7 @@ def test_format_hex_dump_row_layout_contract(bpr):
     assert line.startswith("0x10000000:  "), f"地址前缀必须 0xXXXXXXXX:<两空格> (line: {line!r})"
     # hex 区起始位置硬约束 — col 13
     hex_start = 13
-    assert line[hex_start:hex_start + 2] == "00"
+    assert line[hex_start : hex_start + 2] == "00"
     # 第一字节后是空格，第 4 字节后是双空格（1 个分组空格 + 1 个普通空格）
     assert line[hex_start + 2] == " "
     # byte_chars * 4 = 12 处应为分组空格（紧跟第 4 字节后的额外空格）
@@ -123,7 +127,9 @@ def test_format_hex_dump_row_layout_contract(bpr):
     for j in range(min(bpr, 16)):
         col = hex_start + j * 3 + (j // 4)
         expected = f"{j:02X}"
-        assert line[col:col + 2] == expected, f"bpr={bpr} j={j} 期望 {expected!r} 在 col={col} (got {line[col:col+2]!r})"
+        assert (
+            line[col : col + 2] == expected
+        ), f"bpr={bpr} j={j} 期望 {expected!r} 在 col={col} (got {line[col:col+2]!r})"
 
 
 def test_format_hex_dump_address_prefix_contiguous():
@@ -159,8 +165,11 @@ def test_format_hex_dump_invalid_bytes_per_row_falls_back_to_16():
 # format_as_c_array
 # ----------------------------------------------------------------------------
 
+
 def test_format_as_c_array_basic():
-    out = memory_service.format_as_c_array(bytes([0x12, 0x34, 0x56, 0x78]), name="sample", bytes_per_row=8)
+    out = memory_service.format_as_c_array(
+        bytes([0x12, 0x34, 0x56, 0x78]), name="sample", bytes_per_row=8
+    )
     assert "uint8_t sample[4] = {" in out
     assert "0x12, 0x34, 0x56, 0x78" in out
     assert out.endswith("};")
@@ -189,10 +198,15 @@ def test_format_as_c_array_empty():
 # parse_value — 8 dtypes × 2 endians + 边界条件
 # ----------------------------------------------------------------------------
 
+
 def test_parse_value_u32_le_be():
     data = bytes.fromhex("78563412")
-    assert memory_service.parse_value(data, 0, "u32", little_endian=True) == "305419896 (0x12345678)"
-    assert memory_service.parse_value(data, 0, "u32", little_endian=False) == "2018915346 (0x78563412)"
+    assert (
+        memory_service.parse_value(data, 0, "u32", little_endian=True) == "305419896 (0x12345678)"
+    )
+    assert (
+        memory_service.parse_value(data, 0, "u32", little_endian=False) == "2018915346 (0x78563412)"
+    )
 
 
 def test_parse_value_i32_negative():

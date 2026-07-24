@@ -6,9 +6,10 @@ Esc    → 关闭
 
 组件以浮动方式叠加在父容器右上角，不占用布局流。
 """
+
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QIcon, QKeyEvent, QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -38,12 +39,12 @@ _REPLACE_ONE_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" '
     'viewBox="0 0 16 16"><path fill="{c}" d="M11.5 1H5.7L1 5.7v.6l5 5h.6'
     'l4.9-5zM6 10.2L2.1 6.3 6 2.4v7.8zM14 11H9.2l-.7.7L9.2 12.4H14V11z"/>'
-    '</svg>'
+    "</svg>"
 )
 _REPLACE_ALL_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" '
     'viewBox="0 0 16 16"><path fill="{c}" d="M11.5 1H5.7L1 5.7v.6l5 5h.6'
-    'l4.9-5zM6 10.2L2.1 6.3 6 2.4v7.8zM7 15h2v-2H7v2zm4 0h2v-2h-2v2zm-8'
+    "l4.9-5zM6 10.2L2.1 6.3 6 2.4v7.8zM7 15h2v-2H7v2zm4 0h2v-2h-2v2zm-8"
     ' 0h2v-2H3v2z"/></svg>'
 )
 
@@ -73,7 +74,8 @@ class _ToggleButton(TransparentToolButton):
         self.setCheckable(True)
 
     def paintEvent(self, e) -> None:
-        from PySide6.QtGui import QPainter, QColor, QFont
+        from PySide6.QtGui import QColor, QFont, QPainter
+
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         # checked 时画高亮背景
@@ -275,28 +277,40 @@ class SearchBar(QWidget):
     def _on_search_next(self) -> None:
         t = self.le_search.text()
         if t:
-            self.search_requested.emit(t, False, self.case_sensitive(),
-                                       self.whole_word(), self.regex_enabled())
+            self.search_requested.emit(
+                t, False, self.case_sensitive(), self.whole_word(), self.regex_enabled()
+            )
 
     def _on_search_prev(self) -> None:
         t = self.le_search.text()
         if t:
-            self.search_requested.emit(t, True, self.case_sensitive(),
-                                       self.whole_word(), self.regex_enabled())
+            self.search_requested.emit(
+                t, True, self.case_sensitive(), self.whole_word(), self.regex_enabled()
+            )
 
     def _on_replace_one(self) -> None:
         kw = self.le_search.text()
         if kw:
             self.replace_requested.emit(
-                kw, self.le_replace.text(), False,
-                self.case_sensitive(), self.whole_word(), self.regex_enabled())
+                kw,
+                self.le_replace.text(),
+                False,
+                self.case_sensitive(),
+                self.whole_word(),
+                self.regex_enabled(),
+            )
 
     def _on_replace_all(self) -> None:
         kw = self.le_search.text()
         if kw:
             self.replace_requested.emit(
-                kw, self.le_replace.text(), True,
-                self.case_sensitive(), self.whole_word(), self.regex_enabled())
+                kw,
+                self.le_replace.text(),
+                True,
+                self.case_sensitive(),
+                self.whole_word(),
+                self.regex_enabled(),
+            )
 
     def _on_toggle_replace(self, checked: bool) -> None:
         self._set_replace_visible(checked)
@@ -310,9 +324,7 @@ class SearchBar(QWidget):
         self.btn_toggle_replace.blockSignals(True)
         self.btn_toggle_replace.setChecked(visible)
         self.btn_toggle_replace.blockSignals(False)
-        self.btn_toggle_replace.setIcon(
-            FluentIcon.UP if visible else FluentIcon.CHEVRON_DOWN_MED
-        )
+        self.btn_toggle_replace.setIcon(FluentIcon.UP if visible else FluentIcon.CHEVRON_DOWN_MED)
         if visible:
             self.le_replace.setFocus()
 

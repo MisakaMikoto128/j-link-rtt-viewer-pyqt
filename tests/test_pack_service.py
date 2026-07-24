@@ -3,6 +3,7 @@
 不依赖网络/真实 pack：list/delete 用 tmp 目录，download/search 用 MagicMock 替
 cmsis_pack_manager.Cache。
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -10,6 +11,7 @@ from unittest.mock import MagicMock
 
 def test_wildcard_eq():
     from core.pack_service import wildcard_eq
+
     assert wildcard_eq("stm32f030c8tx", "stm32f030c8t6") is True
     assert wildcard_eq("stm32f030c8tx", "stm32f030c8") is False  # 长度不同
     assert wildcard_eq("stm32f030c8tx", "stm32f030c8ab") is False  # 非 x 位严格
@@ -17,6 +19,7 @@ def test_wildcard_eq():
 
 def test_parse_pack_file_name():
     from core.pack_service import _parse_pack_file_name
+
     assert _parse_pack_file_name("Keil.STM32F0_DFP.1.0.0.pack") == ("Keil", "STM32F0_DFP", "1.0.0")
     assert _parse_pack_file_name("Vendor.Name.pack") == ("Vendor", "Name", "")
     assert _parse_pack_file_name("nodelimiter.pack") == ("", "nodelimiter", "")
@@ -24,6 +27,7 @@ def test_parse_pack_file_name():
 
 def test_list_installed_packs(tmp_path, monkeypatch):
     from core import pack_service
+
     monkeypatch.setattr(pack_service, "get_pack_data_path", lambda: str(tmp_path))
     (tmp_path / "Keil.STM32F0_DFP.1.0.0.pack").write_bytes(b"\x00" * 1024)
     (tmp_path / "Keil.STM32F1_DFP.4.0.0.pack").write_bytes(b"\x00" * 2048)
@@ -39,6 +43,7 @@ def test_list_installed_packs(tmp_path, monkeypatch):
 
 def test_delete_pack(tmp_path, monkeypatch):
     from core import pack_service
+
     monkeypatch.setattr(pack_service, "get_pack_data_path", lambda: str(tmp_path))
     f = tmp_path / "Keil.STM32F0_DFP.1.0.0.pack"
     f.write_bytes(b"\x00")
@@ -51,6 +56,7 @@ def test_delete_pack(tmp_path, monkeypatch):
 
 def test_get_pack_data_path_default(isolated_appdata):
     from core.pack_service import get_pack_data_path
+
     path = get_pack_data_path()
     # 默认 cmsis-pack-manager 全局目录（用户旧 pack 在此，无需迁移）
     assert "cmsis-pack-manager" in path
@@ -59,6 +65,7 @@ def test_get_pack_data_path_default(isolated_appdata):
 def test_get_pack_data_path_custom(isolated_appdata):
     from core import pack_service
     from core.config_service import ConfigService
+
     pack_service.invalidate_cache()
     pack_service.set_pack_data_path("/custom/pack/path")
     assert pack_service.get_pack_data_path() == "/custom/pack/path"
@@ -85,6 +92,7 @@ def test_download_pack_mock(monkeypatch):
 
 def test_download_pack_no_match(monkeypatch):
     from core import pack_service
+
     cache = MagicMock()
     cache.index = {}
     monkeypatch.setattr(pack_service, "get_pack_cache", lambda: cache)
@@ -94,6 +102,7 @@ def test_download_pack_no_match(monkeypatch):
 def test_download_pack_skipped_when_installed(monkeypatch, tmp_path):
     """已安装的 pack 查重跳过，返回 'skipped'，不调 download_pack_list。"""
     from core import pack_service
+
     monkeypatch.setattr(pack_service, "get_pack_data_path", lambda: str(tmp_path))
     cache = MagicMock()
     cache.index = {"STM32F103C8Tx": MagicMock()}
@@ -115,6 +124,7 @@ def test_download_pack_skipped_when_installed(monkeypatch, tmp_path):
 def test_list_installed_packs_subdir(tmp_path, monkeypatch):
     """CMSIS-Pack 下载结构 Vendor/Pack/Version.pack，list_installed_packs 递归扫描。"""
     from core import pack_service
+
     monkeypatch.setattr(pack_service, "get_pack_data_path", lambda: str(tmp_path))
     (tmp_path / "Keil" / "STM32F0xx_DFP").mkdir(parents=True)
     (tmp_path / "Keil" / "STM32F0xx_DFP" / "3.1.1.pack").write_bytes(b"\x00" * 1024)
@@ -130,6 +140,7 @@ def test_list_installed_packs_subdir(tmp_path, monkeypatch):
 def test_delete_pack_subdir(tmp_path, monkeypatch):
     """删除允许子目录相对路径，拒路径穿越。"""
     from core import pack_service
+
     monkeypatch.setattr(pack_service, "get_pack_data_path", lambda: str(tmp_path))
     f = tmp_path / "Keil" / "STM32F0xx_DFP" / "3.1.1.pack"
     f.parent.mkdir(parents=True)
@@ -144,6 +155,7 @@ def test_delete_pack_subdir(tmp_path, monkeypatch):
 def test_migrate_legacy_packs(tmp_path, monkeypatch):
     """迁移全局目录旧 pack 到 pack_data_path，保留子目录结构，已存在则跳过。"""
     from core import pack_service
+
     legacy = tmp_path / "legacy"
     (legacy / "Keil" / "STM32F0xx_DFP").mkdir(parents=True)
     (legacy / "Keil" / "STM32F0xx_DFP" / "3.1.1.pack").write_bytes(b"\x00" * 100)

@@ -8,9 +8,8 @@
 
 默认 chip：Functions + Variables 亮 → 显示 3 个（main, local_helper, g_counter）。
 """
-from __future__ import annotations
 
-from pathlib import Path
+from __future__ import annotations
 
 import pytest
 
@@ -18,6 +17,7 @@ import pytest
 @pytest.fixture
 def symbol_view(qtbot, fixtures_dir):
     from ui.symbol_table_view import SymbolTableView
+
     w = SymbolTableView()
     qtbot.addWidget(w)
     w.load(str(fixtures_dir / "blink_sym.axf"))
@@ -34,7 +34,7 @@ def test_default_chips_show_func_and_var(symbol_view):
     assert "main" in names
     assert "local_helper" in names
     assert "g_counter" in names
-    assert "blink.c" not in names           # FILE 默认不显示
+    assert "blink.c" not in names  # FILE 默认不显示
     assert symbol_view.table.rowCount() == 3
 
 
@@ -42,7 +42,7 @@ def test_toggle_file_chip_shows_file_marker(symbol_view, qtbot):
     """点亮 File markers chip 后应包含 blink.c。"""
     chip = symbol_view._cat_chips["file"]
     assert not chip.isChecked()
-    chip.setChecked(True)                   # 触发 toggled → _apply_filter
+    chip.setChecked(True)  # 触发 toggled → _apply_filter
     qtbot.wait(20)
     names = _row_names(symbol_view)
     assert "blink.c" in names
@@ -54,9 +54,9 @@ def test_toggle_off_local_binding_hides_local_symbols(symbol_view, qtbot):
     symbol_view._bind_chips["LOCAL"].setChecked(False)
     qtbot.wait(20)
     names = _row_names(symbol_view)
-    assert "main" in names                  # GLOBAL FUNC
-    assert "g_counter" in names             # GLOBAL OBJECT
-    assert "local_helper" not in names      # LOCAL
+    assert "main" in names  # GLOBAL FUNC
+    assert "g_counter" in names  # GLOBAL OBJECT
+    assert "local_helper" not in names  # LOCAL
 
 
 def test_search_filters_by_substring_case_insensitive(symbol_view, qtbot):
@@ -72,6 +72,7 @@ def test_only_functions_then_sort_by_size_desc(symbol_view, qtbot):
     symbol_view._cat_chips["var"].setChecked(False)
     qtbot.wait(20)
     from PySide6.QtCore import Qt
+
     symbol_view.table.sortByColumn(2, Qt.SortOrder.DescendingOrder)
     qtbot.wait(20)
     names = _row_names(symbol_view)
@@ -94,9 +95,10 @@ def test_load_corrupt_elf_does_not_crash(qtbot, tmp_path):
     扩展名是 axf 但内容损坏的文件。SymbolTableView.load 应消化此异常。
     """
     from ui.symbol_table_view import SymbolTableView
+
     fake = tmp_path / "bad.axf"
     fake.write_bytes(b"not an elf file at all")
     w = SymbolTableView()
     qtbot.addWidget(w)
     w.load(str(fake))
-    assert w.table.rowCount() == 0          # 解析失败 → 空表
+    assert w.table.rowCount() == 0  # 解析失败 → 空表

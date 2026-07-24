@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import functools
 from dataclasses import dataclass
+from pathlib import Path
 
 from .logger import get_logger
 
@@ -182,10 +183,10 @@ def get_pylink_target_infos() -> tuple[TargetDeviceInfo, ...]:
     return infos
 
 
-def _cache_path() -> "Path":
+def _cache_path() -> Path:
     """缓存文件路径：%APPDATA%/JLinkRTTViewer/target_devices_cache.json。"""
-    from pathlib import Path
     from core.config_service import ConfigService
+
     # 复用 ConfigService 的 %APPDATA% 路径逻辑，避免硬编码
     prefs_path = ConfigService._compute_user_prefs_path()
     return prefs_path.parent / "target_devices_cache.json"
@@ -210,6 +211,7 @@ def _jlink_dll_version() -> str:
         return _dll_version_cache
     try:
         import pylink
+
         j = pylink.JLink()
         # JLINKARM_GetDLLVersion 返回 int，如 79600 = v7.96.0
         ver = j._dll.JLINKARM_GetDLLVersion()
@@ -232,6 +234,7 @@ def _read_cache() -> tuple[TargetDeviceInfo, ...] | None:
     if _disk_cache_memory is not None:
         return _disk_cache_memory
     import json
+
     path = _cache_path()
     if not path.exists():
         return None
@@ -262,6 +265,7 @@ def _read_cache() -> tuple[TargetDeviceInfo, ...] | None:
 def _write_cache(infos: tuple[TargetDeviceInfo, ...]) -> None:
     """写磁盘缓存（原子替换，防半截写入）。"""
     import json
+
     path = _cache_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -532,6 +536,7 @@ def read_cached_target_infos_for_burner_kind(kind: str) -> tuple[TargetDeviceInf
     - 其它（cmsisdap / stlink）-> read_cached_pyocd_target_infos（进程内 cache）
     """
     from .probe.base import BURNER_KIND_JLINK
+
     if kind == BURNER_KIND_JLINK:
         return read_cached_target_infos()
     return read_cached_pyocd_target_infos()

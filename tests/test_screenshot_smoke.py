@@ -6,14 +6,14 @@
 - PNG 落到 pytest 提供的 tmp_path 下，失败时通过 `pytest -s` 看路径。
 - 真要做严格视觉回归再上 pixelmatch / pillow.ImageChops，先把脚手架跑通。
 """
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 
 def _grab(widget, path):
     """grab() 返回 (w, h, file_size)；offscreen 平台同样能拿到像素。"""
     from PySide6.QtCore import QSize
+
     widget.resize(QSize(900, 600))
     widget.adjustSize()
     pm = widget.grab()
@@ -24,14 +24,15 @@ def _grab(widget, path):
 def test_symbol_table_screenshot_non_empty(qtbot, fixtures_dir, screenshot_dir):
     """SymbolTableView 加载后截图应非空，且像素数与窗口尺寸吻合。"""
     from ui.symbol_table_view import SymbolTableView
+
     w = SymbolTableView()
     qtbot.addWidget(w)
     w.load(str(fixtures_dir / "blink_sym.axf"))
-    w.show()                              # offscreen 下 show() 仍触发 layout
+    w.show()  # offscreen 下 show() 仍触发 layout
     qtbot.waitExposed(w)
     width, height, size = _grab(w, screenshot_dir / "symbol_default.png")
     assert width >= 400 and height >= 200
-    assert size > 1000                    # 任何渲染的 PNG 都会超过这个
+    assert size > 1000  # 任何渲染的 PNG 都会超过这个
 
 
 def test_chip_toggle_changes_screenshot(qtbot, fixtures_dir, screenshot_dir):
@@ -41,6 +42,7 @@ def test_chip_toggle_changes_screenshot(qtbot, fixtures_dir, screenshot_dir):
     但本测试只是确认「过滤逻辑跑通且触发了渲染管线」。
     """
     from ui.symbol_table_view import SymbolTableView
+
     w = SymbolTableView()
     qtbot.addWidget(w)
     w.load(str(fixtures_dir / "blink_sym.axf"))
@@ -60,11 +62,11 @@ def test_chip_toggle_changes_screenshot(qtbot, fixtures_dir, screenshot_dir):
     assert size_default != size_all
 
 
-def test_flash_page_screenshot_axf_vs_bin(
-        qtbot, isolated_appdata, fixtures_dir, screenshot_dir):
+def test_flash_page_screenshot_axf_vs_bin(qtbot, isolated_appdata, fixtures_dir, screenshot_dir):
     """FlashPage 选 axf 与 bin 的截图应不同——分析面板显隐变化。"""
     from core.config_service import ConfigService
     from ui.flash_page import FlashPage
+
     cfg = ConfigService()
     page = FlashPage(cfg)
     qtbot.addWidget(page)
@@ -81,6 +83,6 @@ def test_flash_page_screenshot_axf_vs_bin(
         _, _, size_bin = _grab(page, screenshot_dir / "flash_bin.png")
 
         assert size_axf > 0 and size_bin > 0
-        assert size_axf != size_bin       # 面板显隐 → 字节数显著变化
+        assert size_axf != size_bin  # 面板显隐 → 字节数显著变化
     finally:
         page.shutdown()

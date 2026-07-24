@@ -1,7 +1,9 @@
 """主窗口：FluentWindow + 左侧导航 + JLinkWorker（外部 QThread）生命周期。"""
+
 from __future__ import annotations
 
 import base64
+from contextlib import suppress
 
 from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QThread, Slot
 from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QPainter, QPixmap, QShortcut, QShowEvent
@@ -9,12 +11,12 @@ from PySide6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, NavigationItemPosition
 
-from core.config_service import ConfigService
 from core._ui_font import (
     _sync_fluent_font_families,
     resolve_ui_family,
     sync_qss_font_locked_widgets,
 )
+from core.config_service import ConfigService
 from core.i18n_service import switch_language as _switch_language
 from core.jlink_worker import JLinkWorker
 from core.logger import get_logger
@@ -51,9 +53,7 @@ class MainWindow(FluentWindow):
         self.about_page = AboutPage(self)
 
         # Pack 管理页下载/删除/迁移后 -> Flash 页重新枚举 pyOCD target（刷新设备下拉）
-        self.pack_page.packs_changed.connect(
-            self.flash_page._on_packs_changed, Qt.QueuedConnection
-        )
+        self.pack_page.packs_changed.connect(self.flash_page._on_packs_changed, Qt.QueuedConnection)
 
         # 3. 导航 — 存储 route_key → tr_key 映射，用于语言切换时刷新
         self._nav_items: list[tuple[str, str]] = []
@@ -82,6 +82,7 @@ class MainWindow(FluentWindow):
         # 7. 窗口属性
         self.setWindowTitle(self.tr("J-Link RTT Viewer"))
         from core._paths import find_app_icon
+
         icon_path = find_app_icon()
         if icon_path is not None:
             self.setWindowIcon(QIcon(str(icon_path)))
@@ -118,10 +119,9 @@ class MainWindow(FluentWindow):
         for route_key, text_key in self._nav_items:
             item = self.navigationInterface.widget(route_key)
             if item is not None:
-                try:
+                # 某些导航 widget 可能没有 setText
+                with suppress(Exception):
                     item.setText(self.tr(text_key))
-                except Exception:
-                    pass  # 某些导航 widget 可能没有 setText
 
     def _apply_ui_font_size(self, size: int) -> None:
         """size 运行时变更入口（ConfigService.ui_font_size_changed 触发）。
@@ -248,10 +248,12 @@ class MainWindow(FluentWindow):
 
     def _cached_scaled_bg(self, pixmap: QPixmap, size: QSize, mode: str) -> QPixmap:
         """只当（源图指针/模式/尺寸）任一变化才重算缩放，否则返回缓存。"""
-        if (self._bg_cache_pixmap is not None
-                and not self._bg_cache_pixmap.isNull()
-                and self._bg_cache_mode == mode
-                and self._bg_cache_size == size):
+        if (
+            self._bg_cache_pixmap is not None
+            and not self._bg_cache_pixmap.isNull()
+            and self._bg_cache_mode == mode
+            and self._bg_cache_size == size
+        ):
             return self._bg_cache_pixmap
         if mode == "stretch":
             scaled = pixmap.scaled(size, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
@@ -295,8 +297,12 @@ class MainWindow(FluentWindow):
         avail = screen.availableGeometry()
         geo = self.frameGeometry()
         # 任意一边超出可用区域 → 重新放进去
-        if (geo.bottom() > avail.bottom() or geo.right() > avail.right()
-                or geo.top() < avail.top() or geo.left() < avail.left()):
+        if (
+            geo.bottom() > avail.bottom()
+            or geo.right() > avail.right()
+            or geo.top() < avail.top()
+            or geo.left() < avail.left()
+        ):
             new_w = min(geo.width(), avail.width())
             new_h = min(geo.height(), avail.height())
             new_x = max(avail.left(), min(geo.left(), avail.right() - new_w))

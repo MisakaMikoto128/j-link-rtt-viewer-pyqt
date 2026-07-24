@@ -1,4 +1,5 @@
 """FlashPage 与 RTT 监控页协调测试（J-Link 枚举 / 烧录器选择 / 烧录前后回连）。"""
+
 from __future__ import annotations
 
 import pytest
@@ -12,8 +13,7 @@ class FakeRttWorker(QObject):
     connect_requested = Signal(str, str, int, int, str)
     connect_remote_requested = Signal(str, str, int, int, str)
 
-    def __init__(self, state: str = "IDLE", serial: str = "",
-                 remote_addr: str = "") -> None:
+    def __init__(self, state: str = "IDLE", serial: str = "", remote_addr: str = "") -> None:
         super().__init__()
         self._state = state
         self._serial = serial
@@ -34,6 +34,7 @@ class FakeRttWorker(QObject):
 
 class _SignalSpy(QObject):
     """极简跨线程信号计数器。"""
+
     def __init__(self, signal: Signal) -> None:
         super().__init__()
         self.count = 0
@@ -47,6 +48,7 @@ class _SignalSpy(QObject):
 def flash_coord(qtbot, isolated_appdata, fixtures_dir):
     from core.config_service import ConfigService
     from ui.flash_page import FlashPage
+
     cfg = ConfigService()
     worker = FakeRttWorker()
     page = FlashPage(cfg, rtt_worker=worker)
@@ -58,6 +60,7 @@ def flash_coord(qtbot, isolated_appdata, fixtures_dir):
 
 def _process():
     from PySide6.QtCore import QCoreApplication
+
     QCoreApplication.processEvents()
 
 

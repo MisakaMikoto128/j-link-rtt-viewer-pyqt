@@ -13,12 +13,13 @@ J-Link），但本 backend 只用于非 J-Link probe--J-Link 仍走 PylinkBacken
 target_override：用户填的 device_name（如 STM32xx）。pyOCD 先查内置
 target（lowercase），再查 CMSIS-Pack（part number 原样，首次可能下载 pack）。
 """
+
 from __future__ import annotations
 
 import contextlib
-import sys
 
 from core.pack_service import get_pack_cache, wildcard_eq
+
 from .base import (
     ERASE_MODE_CHIP,
     FORMAT_BIN,
@@ -30,7 +31,6 @@ from .base import (
     VerifyMismatch,
 )
 
-
 # CMSIS-Pack part_number 的 'x' 通配匹配，单点真源在 core.pack_service.wildcard_eq。
 # 保留别名仅供测试兼容（tests/test_pyocd_backend.py import _pack_part_wildcard_eq）。
 _pack_part_wildcard_eq = wildcard_eq
@@ -38,8 +38,14 @@ _pack_part_wildcard_eq = wildcard_eq
 
 # SWD 通信失败的特征串：匹配到则给排查提示（接线 / VREF / 多 probe 冲突）。
 _SWD_ERR_KEYWORDS = (
-    "idcode", "dp error", "dp fault", "dp parity", "ap fault",
-    "transfer fault", "transfer error", "memory transfer fault",
+    "idcode",
+    "dp error",
+    "dp fault",
+    "dp parity",
+    "ap fault",
+    "transfer fault",
+    "transfer error",
+    "memory transfer fault",
 )
 
 
@@ -76,27 +82,29 @@ class PyOCDBackend:
         自动下载入口，下载到 pack_service.get_pack_data_path() 配置的目录。
         """
         from core.pack_service import download_pack
+
         return download_pack(device_name, log=self._log)
 
     # ============================================================
     # 连接
     # ============================================================
     def connect(self, params: ProbeParams) -> None:
-        from pyocd.core.helpers import ConnectHelper
         import pyocd.core.session as _sess
+        from pyocd.core.helpers import ConnectHelper
+
         # Windows 上 CMSIS-DAP v2 走 pyusb_v2_backend → libusb claim_interface 对 HID
         # 设备返回 LIBUSB_ERROR_NOT_SUPPORTED。强制 v1（hidapi）避免该问题。
         # 但 prefer_v1 会让 ST-Link 从枚举中消失（ST-Link 不是 CMSIS-DAP），所以
         # 连接 CMSIS-DAP 时临时设置，连接后恢复（不影响后续 ST-Link 连接）。
         _opts = _sess.Session.get_current().options
-        _had_prefer_v1 = _opts.is_set('cmsis_dap.prefer_v1') and _opts.get('cmsis_dap.prefer_v1')
-        _opts['cmsis_dap.prefer_v1'] = True
+        _had_prefer_v1 = _opts.is_set("cmsis_dap.prefer_v1") and _opts.get("cmsis_dap.prefer_v1")
+        _opts["cmsis_dap.prefer_v1"] = True
         try:
             self._connect_impl(params, ConnectHelper)
         finally:
             # 恢复 prefer_v1（无论成功失败，不影响后续 ST-Link 枚举）
             if not _had_prefer_v1:
-                _opts['cmsis_dap.prefer_v1'] = False
+                _opts["cmsis_dap.prefer_v1"] = False
 
     def _connect_impl(self, params: ProbeParams, ConnectHelper) -> None:
         """connect 的实现（prefer_v1 已在外层设置/恢复）。"""
@@ -105,15 +113,15 @@ class PyOCDBackend:
         # part number 通常带封装后缀（如 STM32xxTx），_resolve_target_type
         # 模糊匹配到已注册的 part number。
         target_override = self._resolve_target_type(params.device_name)
-        if target_override is None:
-            # pack 未装则自动下载（cmsis_pack_manager 查询+下载），再 resolve 一次
-            if self._ensure_pack_installed(params.device_name):
-                target_override = self._resolve_target_type(params.device_name)
+        # pack 未装则自动下载（cmsis_pack_manager 查询+下载），再 resolve 一次
+        if target_override is None and self._ensure_pack_installed(params.device_name):
+            target_override = self._resolve_target_type(params.device_name)
         if target_override is None:
             raise ProbeNotConnected(
                 f"未知 target：{params.device_name}\n"
                 f"pyOCD 库无此型号。请确认 device 与实际芯片一致，或装 pack：\n"
-                f"pyocd pack install {params.device_name}")
+                f"pyocd pack install {params.device_name}"
+            )
         options = {
             "transport": "swd" if params.interface == "SWD" else "jtag",
             "frequency": int(params.speed_khz) * 1000,
@@ -189,6 +197,7 @@ class PyOCDBackend:
         if self._params is None or self._target is None:
             raise ProbeError("not connected")
         from pyocd.flash.file_programmer import FileProgrammer
+
         p = self._params
         fmt = self._file_format(p.file_format)
         addr = p.bin_start_addr if p.file_format == FORMAT_BIN else None
@@ -217,6 +226,7 @@ class PyOCDBackend:
         if self._params is None or self._target is None:
             raise ProbeError("not connected")
         from core import flash_file_parser as fp
+
         ih = fp.to_intelhex(self._params.file_path, self._params.bin_start_addr)
         for start, end in ih.segments():
             expected = bytes(ih.tobinarray(start=start, end=end - 1))
@@ -228,7 +238,7 @@ class PyOCDBackend:
         while off < len(expected):
             n = min(CHUNK, len(expected) - off)
             got = bytes(self._target.read_memory_block8(addr + off, n))
-            if got != expected[off:off + n]:
+            if got != expected[off : off + n]:
                 raise VerifyMismatch(addr + off, n)
             off += n
 
@@ -291,6 +301,7 @@ class PyOCDBackend:
         pack 需预装：pyocd pack install "<part>*" -u
         """
         from pyocd.target import TARGET
+
         key = device_name.lower().strip()
         if not key:
             return None
@@ -298,6 +309,7 @@ class PyOCDBackend:
             return device_name
         try:
             from pyocd.target.pack.pack_target import ManagedPacks
+
             # 用 pack_service 统一的 cache（自定义 pack_data_path），否则
             # ManagedPacks 默认读 %LOCALAPPDATA%，与 pack 管理页面不同源。
             packs = ManagedPacks.get_installed_targets(cache=get_pack_cache()) or []

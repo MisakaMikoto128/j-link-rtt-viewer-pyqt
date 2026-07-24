@@ -8,9 +8,10 @@
 - 默认只亮 Functions + Variables；底部一行说明告诉用户其余类别是什么。
 - Type 列用淡色底 + 强调色文字做成 pill，区分函数/变量等。
 """
+
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QEvent
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -23,12 +24,14 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
-    FluentIcon as FIF,
     PillPushButton,
     PushButton,
     SearchLineEdit,
     StrongBodyLabel,
     TableWidget,
+)
+from qfluentwidgets import (
+    FluentIcon as FIF,
 )
 
 from core.flash_file_parser import (
@@ -42,24 +45,19 @@ _COLUMNS = ["Name", "Address", "Size", "Type", "Binding", "Section", "% 段"]
 
 # 类别 chip：key, 英文, 中文, 图标, tooltip, 默认是否亮
 _CATEGORIES = [
-    ("func",    "Functions",    "函数",     FIF.CODE,
-     "代码函数 (STT_FUNC)"),
-    ("var",     "Variables",    "变量",     FIF.TAG,
-     "全局 / 静态变量 (STT_OBJECT)"),
-    ("file",    "File markers", "文件标记", FIF.DOCUMENT,
-     "源文件名标记，编译器生成 (STT_FILE)"),
-    ("section", "Sections",     "段",       FIF.TILES,
-     "段符号，编译器生成 (STT_SECTION)"),
-    ("other",   "Other",        "其它",     FIF.MORE,
-     "无类型 / 其它符号 (STT_NOTYPE 等)"),
+    ("func", "Functions", "函数", FIF.CODE, "代码函数 (STT_FUNC)"),
+    ("var", "Variables", "变量", FIF.TAG, "全局 / 静态变量 (STT_OBJECT)"),
+    ("file", "File markers", "文件标记", FIF.DOCUMENT, "源文件名标记，编译器生成 (STT_FILE)"),
+    ("section", "Sections", "段", FIF.TILES, "段符号，编译器生成 (STT_SECTION)"),
+    ("other", "Other", "其它", FIF.MORE, "无类型 / 其它符号 (STT_NOTYPE 等)"),
 ]
 _DEFAULT_CATEGORIES = {"func", "var"}
 
 # 绑定 chip：key(=Symbol.bind), 英文, 中文, tooltip
 _BINDINGS = [
     ("GLOBAL", "Global", "全局", "全局符号 (STB_GLOBAL)"),
-    ("LOCAL",  "Local",  "局部", "局部符号 (STB_LOCAL)"),
-    ("WEAK",   "Weak",   "弱",   "弱符号 (STB_WEAK)"),
+    ("LOCAL", "Local", "局部", "局部符号 (STB_LOCAL)"),
+    ("WEAK", "Weak", "弱", "弱符号 (STB_WEAK)"),
 ]
 
 _HINT_TEXT = (
@@ -70,9 +68,9 @@ _HINT_TEXT = (
 
 # Type 列 pill 配色
 _TYPE_QCOLORS = {
-    "FUNC":    (QColor("#ede9fe"), QColor("#6d28d9")),
-    "OBJECT":  (QColor("#dbeafe"), QColor("#1d4ed8")),
-    "FILE":    (QColor("#f1f5f9"), QColor("#475569")),
+    "FUNC": (QColor("#ede9fe"), QColor("#6d28d9")),
+    "OBJECT": (QColor("#dbeafe"), QColor("#1d4ed8")),
+    "FILE": (QColor("#f1f5f9"), QColor("#475569")),
     "SECTION": (QColor("#ccfbf1"), QColor("#0f766e")),
 }
 _TYPE_QCOLOR_DEFAULT = (QColor("#f1f5f9"), QColor("#475569"))
@@ -93,7 +91,7 @@ def _category_of(sym_type: str) -> str:
 class _NumericItem(QTableWidgetItem):
     """按存入 UserRole 的数值比较，保证 Address/Size 列数值排序。"""
 
-    def __lt__(self, other: QTableWidgetItem) -> bool:  # noqa: D105
+    def __lt__(self, other: QTableWidgetItem) -> bool:
         a = self.data(Qt.ItemDataRole.UserRole)
         b = other.data(Qt.ItemDataRole.UserRole)
         if a is None or b is None:
@@ -208,7 +206,7 @@ class SymbolTableView(QWidget):
         self._lbl_show.setText(self.tr("显示 Show"))
         self._lbl_binding.setText(self.tr("绑定 Binding"))
         self.lbl_hint.setText(self.tr(_HINT_TEXT))
-        for key, en, zh, icon, tip in _CATEGORIES:
+        for key, en, zh, _icon, tip in _CATEGORIES:
             chip = self._cat_chips[key]
             chip.setText(self.tr(f"{en} {zh}"))
             chip.setToolTip(self.tr(tip))
@@ -245,7 +243,8 @@ class SymbolTableView(QWidget):
         active_cats = {k for k, c in self._cat_chips.items() if c.isChecked()}
         active_binds = {k for k, c in self._bind_chips.items() if c.isChecked()}
         rows = [
-            s for s in self._symbols
+            s
+            for s in self._symbols
             if (not kw or kw in s.name.lower())
             and _category_of(s.type) in active_cats
             and s.bind in active_binds
@@ -275,11 +274,10 @@ class SymbolTableView(QWidget):
             else:
                 pct_item = _NumericItem("-")
                 pct_item.setData(Qt.ItemDataRole.UserRole, -1.0)
-            pct_item.setTextAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            pct_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             for c, item in enumerate(
-                    (name_item, addr_item, size_item, type_item,
-                     bind_item, sec_item, pct_item)):
+                (name_item, addr_item, size_item, type_item, bind_item, sec_item, pct_item)
+            ):
                 self.table.setItem(r, c, item)
         self.table.setSortingEnabled(True)
         self.table.setUpdatesEnabled(True)
@@ -291,21 +289,27 @@ class SymbolTableView(QWidget):
         kw = self.search.text().strip().lower()
         active_cats = {k for k, c in self._cat_chips.items() if c.isChecked()}
         active_binds = {k for k, c in self._bind_chips.items() if c.isChecked()}
-        shown = len([
-            s for s in self._symbols
-            if (not kw or kw in s.name.lower())
-            and _category_of(s.type) in active_cats
-            and s.bind in active_binds
-        ])
+        shown = len(
+            [
+                s
+                for s in self._symbols
+                if (not kw or kw in s.name.lower())
+                and _category_of(s.type) in active_cats
+                and s.bind in active_binds
+            ]
+        )
         if total == 0:
             self.lbl_count.setText("")
         elif shown == total:
-            self.lbl_count.setText(self.tr("符号 symbols").replace("符号", str(total)) + f" {total}")
+            self.lbl_count.setText(
+                self.tr("符号 symbols").replace("符号", str(total)) + f" {total}"
+            )
         else:
             self.lbl_count.setText(self.tr("显示") + f" {shown} / " + self.tr("共") + f" {total}")
 
     def _copy_selected(self) -> None:
         from PySide6.QtWidgets import QApplication
+
         rows = sorted({i.row() for i in self.table.selectedItems()})
         if not rows:
             return

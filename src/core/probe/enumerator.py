@@ -22,6 +22,7 @@ JLinkARM DLL 全局单句柄**的 open()/close()/connected_emulators() 并发 �
 之后 FlashWorker 线程 import pyocd 时 aggregator 已在 sys.modules，**不再扫描**，
 也就不会在 FlashWorker 线程建 pylink.JLink。
 """
+
 from __future__ import annotations
 
 from .base import BURNER_KIND_CMSIS_DAP, BURNER_KIND_STLINK, ProbeInfo
@@ -90,9 +91,11 @@ def enumerate_pyocd_probes() -> list[ProbeInfo]:
         except Exception:
             continue
         for p in probes or []:
-            out.append(ProbeInfo(
-                kind=kind,
-                serial=getattr(p, "unique_id", "") or "",
-                product=getattr(p, "product_name", "") or kind,
-            ))
+            out.append(
+                ProbeInfo(
+                    kind=kind,
+                    serial=getattr(p, "unique_id", "") or "",
+                    product=getattr(p, "product_name", "") or kind,
+                )
+            )
     return out

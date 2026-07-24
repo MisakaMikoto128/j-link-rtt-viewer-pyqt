@@ -6,6 +6,7 @@
 更复杂的 38;5;N（256 色）/ 38;2;R;G;B（真彩）参数会被静默吞掉，但不抛错。
 返回 list[(text, AnsiAttrs)]，AnsiAttrs 是纯 dataclass，不依赖 QtGui。
 """
+
 from __future__ import annotations
 
 import re
@@ -60,9 +61,9 @@ def _apply_sgr(state: _MutAttrs, params: list[int]) -> None:
             if i + 1 < len(params):
                 mode = params[i + 1]
                 if mode == 5 and i + 2 < len(params):
-                    i += 2          # 消费 5;N
+                    i += 2  # 消费 5;N
                 elif mode == 2 and i + 4 < len(params):
-                    i += 4          # 消费 2;R;G;B
+                    i += 4  # 消费 2;R;G;B
                 elif mode in (2, 5):
                     # 不完整：消费剩余所有参数，避免泄漏
                     i = len(params) - 1
@@ -85,7 +86,7 @@ def parse_ansi(text: str) -> list[tuple[str, AnsiAttrs]]:
     for m in CSI_RE.finditer(text):
         # 截取前一段普通文本
         if m.start() > pos:
-            segments.append((text[pos:m.start()], state.freeze()))
+            segments.append((text[pos : m.start()], state.freeze()))
 
         params_str = m.group(1)
         # 含字母字符的 CSI 序列（如 \x1b[abcm）不会被正则匹配，自然作为文本流过

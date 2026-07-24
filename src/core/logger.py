@@ -5,6 +5,7 @@
 Linux/macOS 下为 XDG_STATE_HOME（默认 ~/.local/state）/JLinkRTTViewer/logs，
 测试时可通过 _log_dir_override 注入。
 """
+
 from __future__ import annotations
 
 import logging

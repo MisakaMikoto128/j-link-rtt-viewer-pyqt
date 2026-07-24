@@ -1,4 +1,5 @@
 """ANSI 转义序列解析为 (text, AnsiAttrs) 段。"""
+
 from core.ansi_parser import AnsiAttrs, parse_ansi
 
 

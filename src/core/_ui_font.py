@@ -12,9 +12,10 @@
 QApplication 默认一致；我们**两者择其先捕获的**——优先用 `main.py` 启动期捕获的
 `QApplication.font().family()`（最贴近 Qt 实际渲染默认），次选 `systemFont`。
 """
+
 from __future__ import annotations
 
-from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 _CACHED_SYSTEM_FAMILY: str | None = None
@@ -53,8 +54,12 @@ def resolve_ui_family(family: str | None) -> str:
 
 # qfluentwidgets 自带的中/日文兜底（用于气泡 font 列表里保证非拉丁字符能渲染）。
 # ui_family 单一字体在西方字体里覆盖不到中文，Qt 会按列表顺序回退，故兜底要保留。
-_CJK_FALLBACK_FAMILIES = ["Microsoft YaHei UI", "Microsoft YaHei",
-                          "PingFang SC", "Noto Sans CJK SC"]
+_CJK_FALLBACK_FAMILIES = [
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    "PingFang SC",
+    "Noto Sans CJK SC",
+]
 
 
 def _build_fluent_font_families(ui_family: str) -> list[str]:
@@ -110,7 +115,7 @@ _QSS_FONT_OVERRIDE_END = "/* UI_FONT_OVERRIDE_END */"
 # 只收项目实际用到的（右键菜单/TimePicker/InfoBar 等虽也有 qss font 锁定，
 # 但项目没用到，不纳入；用到时再加）。发现新的锁定控件就加进来。
 _QSS_FONT_LOCKED_CLASS_NAMES: tuple[str, ...] = (
-    "RadioButton",              # BUTTON qss: 14px；烧录页 SWD/JTAG
+    "RadioButton",  # BUTTON qss: 14px；烧录页 SWD/JTAG
 )
 
 
@@ -139,7 +144,7 @@ def _strip_qss_font_override(style_sheet: str) -> str:
     end = style_sheet.find(_QSS_FONT_OVERRIDE_END)
     if begin < 0 or end < 0 or end < begin:
         return style_sheet
-    return (style_sheet[:begin] + style_sheet[end + len(_QSS_FONT_OVERRIDE_END):]).rstrip()
+    return (style_sheet[:begin] + style_sheet[end + len(_QSS_FONT_OVERRIDE_END) :]).rstrip()
 
 
 def _apply_qss_font_override(widget, family: str, pt_size: int) -> None:
@@ -168,6 +173,7 @@ def sync_qss_font_locked_widgets(root, family: str, pt_size: int) -> None:
     再调一次，故不需要额外的 show 时补调机制。
     """
     from PySide6.QtWidgets import QWidget
+
     widgets: list[QWidget] = []
     if isinstance(root, QWidget):
         widgets.append(root)

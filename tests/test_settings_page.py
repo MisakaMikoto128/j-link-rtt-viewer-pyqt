@@ -3,6 +3,7 @@
 不测主题色 / 字体颜色对话框（QFontDialog/ColorDialog modal 阻塞，不适合 headless）；
 只测控件状态变更是否落 cfg + 触发对应信号。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -12,6 +13,7 @@ import pytest
 def settings_page(qtbot, isolated_appdata):
     from core.config_service import ConfigService
     from ui.settings_page import SettingsPage
+
     cfg = ConfigService()
     page = SettingsPage(cfg)
     qtbot.addWidget(page)
@@ -21,7 +23,7 @@ def settings_page(qtbot, isolated_appdata):
 def test_theme_combo_persists_value(settings_page, qtbot):
     """主题切到「深色」应落 cfg.theme = 'dark'。"""
     page, cfg = settings_page
-    page.cb_theme.setCurrentIndex(2)          # 跟随系统/浅色/深色
+    page.cb_theme.setCurrentIndex(2)  # 跟随系统/浅色/深色
     qtbot.wait(20)
     assert cfg.get("theme") == "dark"
 
@@ -151,7 +153,7 @@ def test_ui_font_family_auto_emits_empty(settings_page, qtbot):
 
 def test_settings_page_has_background_controls(settings_page):
     """SettingsPage 应包含背景图片相关控件。"""
-    page, cfg = settings_page
+    page, _cfg = settings_page
     assert hasattr(page, "le_bg_image")
     assert hasattr(page, "btn_bg_browse")
     assert hasattr(page, "btn_bg_clear")

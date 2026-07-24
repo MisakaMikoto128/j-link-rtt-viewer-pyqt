@@ -7,9 +7,10 @@
   4) 第三方依赖致谢
   5) 页脚 caption
 """
+
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QSize, QEvent
+from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -45,15 +46,24 @@ ISSUES_URL = f"{PROJECT_URL}/issues"
 
 # i18n：功能卡片数据（源文本用于 tr 查找）
 _FEATURE_DATA = [
-    (FluentIcon.COMMAND_PROMPT, "RTT 实时监控",
-     "16 通道任意切换；UTF-8 中文 + ANSI 颜色解析；"
-     "可向 MCU 发送文本 / 十六进制；搜索高亮、会话标记、节流落盘。"),
-    (FluentIcon.LIBRARY, "内存查看 / 写入",
-     "任意地址 Hex Dump，类型解析；hover 显示十进制；"
-     "diff 红色高亮；区间分块导出 .bin；高风险写内存（二次确认）。"),
-    (FluentIcon.PALETTE, "个性化设置",
-     "亮 / 暗 / 跟随系统主题；主题色自定义；"
-     "UI 与显示区字体独立调节；偏好节流落盘到 %APPDATA%。"),
+    (
+        FluentIcon.COMMAND_PROMPT,
+        "RTT 实时监控",
+        "16 通道任意切换；UTF-8 中文 + ANSI 颜色解析；"
+        "可向 MCU 发送文本 / 十六进制；搜索高亮、会话标记、节流落盘。",
+    ),
+    (
+        FluentIcon.LIBRARY,
+        "内存查看 / 写入",
+        "任意地址 Hex Dump，类型解析；hover 显示十进制；"
+        "diff 红色高亮；区间分块导出 .bin；高风险写内存（二次确认）。",
+    ),
+    (
+        FluentIcon.PALETTE,
+        "个性化设置",
+        "亮 / 暗 / 跟随系统主题；主题色自定义；"
+        "UI 与显示区字体独立调节；偏好节流落盘到 %APPDATA%。",
+    ),
 ]
 
 _ACK_ITEMS = [
@@ -141,7 +151,9 @@ class AboutPage(QWidget):
         self._btn_repo = PrimaryPushButton(FluentIcon.GITHUB, self.tr("项目仓库"), body)
         self._btn_repo.clicked.connect(lambda: self._open_url(PROJECT_URL))
         btn_row.addWidget(self._btn_repo)
-        self._btn_issue = HyperlinkButton(ISSUES_URL, self.tr("反馈 Issue"), body, FluentIcon.FEEDBACK)
+        self._btn_issue = HyperlinkButton(
+            ISSUES_URL, self.tr("反馈 Issue"), body, FluentIcon.FEEDBACK
+        )
         btn_row.addWidget(self._btn_issue)
         btn_row.addStretch(1)
         text_col.addSpacing(6)
@@ -203,7 +215,9 @@ class AboutPage(QWidget):
         col.addWidget(self._author_bio_lbl)
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-        self._btn_github = HyperlinkButton(AUTHOR_GITHUB, self.tr("GitHub 主页"), body, FluentIcon.GITHUB)
+        self._btn_github = HyperlinkButton(
+            AUTHOR_GITHUB, self.tr("GitHub 主页"), body, FluentIcon.GITHUB
+        )
         btn_row.addWidget(self._btn_github)
         btn_row.addStretch(1)
         col.addSpacing(4)
@@ -245,8 +259,10 @@ class AboutPage(QWidget):
         v.setContentsMargins(0, 8, 0, 0)
         v.setSpacing(2)
         self._footer_trademark = CaptionLabel(
-            self.tr("SEGGER® 与 J-Link® 是 SEGGER Microcontroller GmbH 的注册商标。"
-                    "本项目与 SEGGER 无任何官方关联。")
+            self.tr(
+                "SEGGER® 与 J-Link® 是 SEGGER Microcontroller GmbH 的注册商标。"
+                "本项目与 SEGGER 无任何官方关联。"
+            )
         )
         self._footer_trademark.setWordWrap(True)
         self._footer_trademark.setAlignment(Qt.AlignCenter)
@@ -273,7 +289,9 @@ class AboutPage(QWidget):
         self._btn_repo.setText(self.tr("项目仓库"))
         self._btn_issue.setText(self.tr("反馈 Issue"))
 
-        for card, (_, title, desc), desc_lbl in zip(self._feature_cards, _FEATURE_DATA, self._feature_desc_labels):
+        for card, (_, title, desc), desc_lbl in zip(
+            self._feature_cards, _FEATURE_DATA, self._feature_desc_labels, strict=False
+        ):
             card.setTitle(self.tr(title))
             desc_lbl.setText(self.tr(desc))
 
@@ -282,12 +300,14 @@ class AboutPage(QWidget):
         self._btn_github.setText(self.tr("GitHub 主页"))
 
         self._ack_card.setTitle(self.tr("第三方依赖"))
-        for r_lbl, (_, role) in zip(self._ack_role_labels, _ACK_ITEMS):
+        for r_lbl, (_, role) in zip(self._ack_role_labels, _ACK_ITEMS, strict=False):
             r_lbl.setText(self.tr(role))
 
         self._footer_trademark.setText(
-            self.tr("SEGGER® 与 J-Link® 是 SEGGER Microcontroller GmbH 的注册商标。"
-                    "本项目与 SEGGER 无任何官方关联。")
+            self.tr(
+                "SEGGER® 与 J-Link® 是 SEGGER Microcontroller GmbH 的注册商标。"
+                "本项目与 SEGGER 无任何官方关联。"
+            )
         )
 
     # ----------- helpers -----------
@@ -295,4 +315,5 @@ class AboutPage(QWidget):
     def _open_url(url: str) -> None:
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
+
         QDesktopServices.openUrl(QUrl(url))

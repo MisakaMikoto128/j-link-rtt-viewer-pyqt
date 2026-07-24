@@ -10,6 +10,7 @@
 - UI 层：把 FileParseError 转 InfoBar
 - J-Link DLL 层：地址是否真的落在芯片 Flash 范围（不在这边维护芯片表）
 """
+
 from __future__ import annotations
 
 import os
@@ -33,11 +34,11 @@ class FileParseError(Exception):
 
 @dataclass(frozen=True)
 class FileInfo:
-    fmt: str               # FORMAT_ELF / FORMAT_HEX / FORMAT_BIN
-    addr_start: int        # bin 模式由调用方提供；其它格式从文件读
-    addr_end: int          # exclusive
-    total_bytes: int       # 实际要烧的字节数
-    notes: str             # 人类可读补充
+    fmt: str  # FORMAT_ELF / FORMAT_HEX / FORMAT_BIN
+    addr_start: int  # bin 模式由调用方提供；其它格式从文件读
+    addr_end: int  # exclusive
+    total_bytes: int  # 实际要烧的字节数
+    notes: str  # 人类可读补充
 
 
 @dataclass(frozen=True)
@@ -45,9 +46,9 @@ class Symbol:
     name: str
     address: int
     size: int
-    type: str              # FUNC / OBJECT / SECTION / FILE / NOTYPE ...
-    bind: str              # LOCAL / GLOBAL / WEAK
-    section: str           # 所属 section 名（或 ABS / UNDEF / COMMON）
+    type: str  # FUNC / OBJECT / SECTION / FILE / NOTYPE ...
+    bind: str  # LOCAL / GLOBAL / WEAK
+    section: str  # 所属 section 名（或 ABS / UNDEF / COMMON）
 
 
 def detect_format(path: str) -> str:
@@ -72,15 +73,16 @@ def parse_file(path: str, bin_start_addr: int = 0) -> FileInfo:
 
 def _parse_elf(path: str) -> FileInfo:
     try:
-        from elftools.elf.elffile import ELFFile
         from elftools.common.exceptions import ELFError
+        from elftools.elf.elffile import ELFFile
     except ImportError as e:
-        raise FileParseError(f"pyelftools 未安装：{e}")
+        raise FileParseError(f"pyelftools 未安装：{e}") from e
     try:
         with open(path, "rb") as f:
             elf = ELFFile(f)
-            load_segs = [s for s in elf.iter_segments() if s["p_type"] == "PT_LOAD"
-                         and s["p_filesz"] > 0]
+            load_segs = [
+                s for s in elf.iter_segments() if s["p_type"] == "PT_LOAD" and s["p_filesz"] > 0
+            ]
             if not load_segs:
                 raise FileParseError("ELF 中无 LOAD 段")
             addrs_start = [s["p_paddr"] for s in load_segs]
@@ -94,18 +96,18 @@ def _parse_elf(path: str) -> FileInfo:
                 notes=f"{len(load_segs)} LOAD segment(s)",
             )
     except ELFError as e:
-        raise FileParseError(f"ELF 解析失败：{e}")
+        raise FileParseError(f"ELF 解析失败：{e}") from e
     except FileParseError:
         raise
     except Exception as e:
-        raise FileParseError(f"ELF 读取异常：{e}")
+        raise FileParseError(f"ELF 读取异常：{e}") from e
 
 
 def _parse_hex(path: str) -> FileInfo:
     try:
-        from intelhex import IntelHex, HexRecordError
+        from intelhex import HexRecordError, IntelHex
     except ImportError as e:
-        raise FileParseError(f"intelhex 未安装：{e}")
+        raise FileParseError(f"intelhex 未安装：{e}") from e
     try:
         ih = IntelHex()
         ih.loadhex(path)
@@ -119,11 +121,11 @@ def _parse_hex(path: str) -> FileInfo:
             notes=f"{ih.maxaddr() - ih.minaddr() + 1} address span",
         )
     except (HexRecordError, ValueError) as e:
-        raise FileParseError(f"HEX 解析失败：{e}")
+        raise FileParseError(f"HEX 解析失败：{e}") from e
     except FileParseError:
         raise
     except Exception as e:
-        raise FileParseError(f"HEX 读取异常：{e}")
+        raise FileParseError(f"HEX 读取异常：{e}") from e
 
 
 def _parse_bin(path: str, start_addr: int) -> FileInfo:
@@ -141,12 +143,14 @@ def _parse_bin(path: str, start_addr: int) -> FileInfo:
 
 # ---- 格式转换（另存为）----
 
+
 def _import_intelhex():
     try:
         from intelhex import IntelHex
+
         return IntelHex
     except ImportError as e:
-        raise FileParseError(f"intelhex 未安装：{e}")
+        raise FileParseError(f"intelhex 未安装：{e}") from e
 
 
 def to_intelhex(path: str, bin_start_addr: int = 0):
@@ -165,22 +169,23 @@ def _to_intelhex(src_path: str, src_fmt: str, bin_start_addr: int):
     IntelHex = _import_intelhex()
     if src_fmt == FORMAT_ELF:
         try:
-            from elftools.elf.elffile import ELFFile
             from elftools.common.exceptions import ELFError
+            from elftools.elf.elffile import ELFFile
         except ImportError as e:
-            raise FileParseError(f"pyelftools 未安装：{e}")
+            raise FileParseError(f"pyelftools 未安装：{e}") from e
         ih = IntelHex()
         try:
             with open(src_path, "rb") as f:
                 elf = ELFFile(f)
-                load = [s for s in elf.iter_segments()
-                        if s["p_type"] == "PT_LOAD" and s["p_filesz"] > 0]
+                load = [
+                    s for s in elf.iter_segments() if s["p_type"] == "PT_LOAD" and s["p_filesz"] > 0
+                ]
                 if not load:
                     raise FileParseError("ELF 中无 LOAD 段")
                 for s in load:
                     ih.puts(s["p_paddr"], s.data())
         except ELFError as e:
-            raise FileParseError(f"ELF 解析失败：{e}")
+            raise FileParseError(f"ELF 解析失败：{e}") from e
         return ih
     if src_fmt == FORMAT_HEX:
         ih = IntelHex()
@@ -214,11 +219,12 @@ def convert_file(src_path: str, dst_path: str, bin_start_addr: int = 0) -> str:
         else:
             ih.write_hex_file(dst_path)
     except Exception as e:
-        raise FileParseError(f"写出失败：{e}")
+        raise FileParseError(f"写出失败：{e}") from e
     return dst_path
 
 
 # ---- 符号表（仅 ELF/axf）----
+
 
 def _shndx_name(elf, shndx) -> str:
     if isinstance(shndx, str):
@@ -239,10 +245,10 @@ def read_symbols(path: str, func_and_data_only: bool = True) -> list[Symbol]:
     if fmt != FORMAT_ELF:
         raise FileParseError("仅 ELF/axf 文件含符号表")
     try:
-        from elftools.elf.elffile import ELFFile
         from elftools.common.exceptions import ELFError
+        from elftools.elf.elffile import ELFFile
     except ImportError as e:
-        raise FileParseError(f"pyelftools 未安装：{e}")
+        raise FileParseError(f"pyelftools 未安装：{e}") from e
     try:
         with open(path, "rb") as f:
             elf = ELFFile(f)
@@ -259,42 +265,45 @@ def read_symbols(path: str, func_and_data_only: bool = True) -> list[Symbol]:
                     continue
                 b = sym["st_info"]["bind"]
                 bind = b[4:] if b.startswith("STB_") else b
-                out.append(Symbol(
-                    name=sym.name,
-                    address=sym["st_value"],
-                    size=sym["st_size"],
-                    type=typ,
-                    bind=bind,
-                    section=_shndx_name(elf, sym["st_shndx"]),
-                ))
+                out.append(
+                    Symbol(
+                        name=sym.name,
+                        address=sym["st_value"],
+                        size=sym["st_size"],
+                        type=typ,
+                        bind=bind,
+                        section=_shndx_name(elf, sym["st_shndx"]),
+                    )
+                )
             return out
     except ELFError as e:
-        raise FileParseError(f"ELF 解析失败：{e}")
+        raise FileParseError(f"ELF 解析失败：{e}") from e
 
 
 # ---- 段表 / 内存占用 / ELF 元信息（仅 ELF/axf）----
+
 
 @dataclass(frozen=True)
 class Section:
     name: str
     addr: int
     size: int
-    flags: str             # "R-X" / "RW-" / "RW-(nobits)" 风格的 RWX 串
+    flags: str  # "R-X" / "RW-" / "RW-(nobits)" 风格的 RWX 串
     align: int
 
 
 @dataclass(frozen=True)
 class MemorySummary:
-    text: int              # ALLOC 且非 WRITE（代码 + 只读数据）
-    data: int              # ALLOC + WRITE + 有文件内容（已初始化数据）
-    bss: int               # ALLOC + WRITE + 无文件内容（NOBITS）
-    flash: int             # text + data（烧进 Flash 的总量）
-    ram: int               # data + bss（运行期 RAM 占用）
+    text: int  # ALLOC 且非 WRITE（代码 + 只读数据）
+    data: int  # ALLOC + WRITE + 有文件内容（已初始化数据）
+    bss: int  # ALLOC + WRITE + 无文件内容（NOBITS）
+    flash: int  # text + data（烧进 Flash 的总量）
+    ram: int  # data + bss（运行期 RAM 占用）
 
 
 @dataclass(frozen=True)
 class ElfMeta:
-    entry: int             # ELF header e_entry
+    entry: int  # ELF header e_entry
     initial_sp: int | None  # Cortex-M 向量表 [0]
     reset_handler: int | None  # Cortex-M 向量表 [1]（已去 thumb 位）
 
@@ -318,18 +327,19 @@ def _open_elf(path: str):
         from elftools.common.exceptions import ELFError
         from elftools.elf.elffile import ELFFile
     except ImportError as e:
-        raise FileParseError(f"pyelftools 未安装：{e}")
-    f = open(path, "rb")
+        raise FileParseError(f"pyelftools 未安装：{e}") from e
+    f = open(path, "rb")  # noqa: SIM115 handle returned to caller
     try:
         return f, ELFFile(f)
     except ELFError as e:
         f.close()
-        raise FileParseError(f"ELF 解析失败：{e}")
+        raise FileParseError(f"ELF 解析失败：{e}") from e
 
 
 def read_sections(path: str) -> list[Section]:
     """读 ELF 的内存相关段（SHF_ALLOC），按地址排序。无 section header 返回空。"""
     from elftools.common.exceptions import ELFError
+
     f, elf = _open_elf(path)
     try:
         out: list[Section] = []
@@ -338,22 +348,22 @@ def read_sections(path: str) -> list[Section]:
             if not (flags & _SHF_ALLOC):
                 continue
             is_nobits = sec["sh_type"] == "SHT_NOBITS"
-            rwx = ("R"
-                   + ("W" if flags & _SHF_WRITE else "-")
-                   + ("X" if flags & _SHF_EXEC else "-"))
+            rwx = "R" + ("W" if flags & _SHF_WRITE else "-") + ("X" if flags & _SHF_EXEC else "-")
             if is_nobits:
                 rwx += " (nobits)"
-            out.append(Section(
-                name=sec.name or "(无名)",
-                addr=sec["sh_addr"],
-                size=sec["sh_size"],
-                flags=rwx,
-                align=sec["sh_addralign"],
-            ))
+            out.append(
+                Section(
+                    name=sec.name or "(无名)",
+                    addr=sec["sh_addr"],
+                    size=sec["sh_size"],
+                    flags=rwx,
+                    align=sec["sh_addralign"],
+                )
+            )
         out.sort(key=lambda s: s.addr)
         return out
     except ELFError as e:
-        raise FileParseError(f"ELF 解析失败：{e}")
+        raise FileParseError(f"ELF 解析失败：{e}") from e
     finally:
         f.close()
 
@@ -361,6 +371,7 @@ def read_sections(path: str) -> list[Section]:
 def read_memory_summary(path: str) -> MemorySummary:
     """按 arm-none-eabi-size (Berkeley) 口径汇总 text/data/bss + Flash/RAM。"""
     from elftools.common.exceptions import ELFError
+
     f, elf = _open_elf(path)
     try:
         text = data = bss = 0
@@ -376,11 +387,14 @@ def read_memory_summary(path: str) -> MemorySummary:
             else:
                 text += size
         return MemorySummary(
-            text=text, data=data, bss=bss,
-            flash=text + data, ram=data + bss,
+            text=text,
+            data=data,
+            bss=bss,
+            flash=text + data,
+            ram=data + bss,
         )
     except ELFError as e:
-        raise FileParseError(f"ELF 解析失败：{e}")
+        raise FileParseError(f"ELF 解析失败：{e}") from e
     finally:
         f.close()
 
@@ -391,12 +405,12 @@ def read_elf_meta(path: str) -> ElfMeta:
     SP/reset 取最低地址 LOAD 段的前 8 字节（小端）；非 Cortex-M 或段太小则为 None。
     """
     from elftools.common.exceptions import ELFError
+
     f, elf = _open_elf(path)
     try:
         entry = elf.header["e_entry"]
         sp = reset = None
-        load = [s for s in elf.iter_segments()
-                if s["p_type"] == "PT_LOAD" and s["p_filesz"] >= 8]
+        load = [s for s in elf.iter_segments() if s["p_type"] == "PT_LOAD" and s["p_filesz"] >= 8]
         if load:
             seg = min(load, key=lambda s: s["p_paddr"])
             head = seg.data()[:8]
@@ -404,6 +418,6 @@ def read_elf_meta(path: str) -> ElfMeta:
             reset = int.from_bytes(head[4:8], "little") & ~1  # 去 thumb 位
         return ElfMeta(entry=entry, initial_sp=sp, reset_handler=reset)
     except ELFError as e:
-        raise FileParseError(f"ELF 解析失败：{e}")
+        raise FileParseError(f"ELF 解析失败：{e}") from e
     finally:
         f.close()

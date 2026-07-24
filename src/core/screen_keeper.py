@@ -2,6 +2,7 @@
 
 非 Windows 平台为 no-op。供设置页「保持屏幕常亮」勾选与启动时按配置调用。
 """
+
 from __future__ import annotations
 
 import sys

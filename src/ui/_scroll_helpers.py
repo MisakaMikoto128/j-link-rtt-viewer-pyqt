@@ -7,6 +7,7 @@
 
 两页（RTT / 内存）调用方式一致，提取避免一处改另一处漏。
 """
+
 from __future__ import annotations
 
 from PySide6.QtCore import Qt

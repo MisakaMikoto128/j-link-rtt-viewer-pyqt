@@ -4,6 +4,7 @@
 2. 所有 UI 文本用 self.tr("中文源文本") — Qt 的 QEvent.LanguageChange 自动刷新
 3. 语言切换：removeTranslator + installTranslator + 发送 LanguageChange 事件
 """
+
 from __future__ import annotations
 
 import json
@@ -76,7 +77,7 @@ class JsonTranslator(QTranslator):
     def _load(self, lang: str) -> None:
         path = _I18N_DIR / f"{lang}.json"
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 self._dict = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             self._dict = {}

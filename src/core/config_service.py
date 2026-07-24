@@ -14,7 +14,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -39,7 +39,7 @@ class ConfigService(QObject):
     background_opacity_changed = Signal(float)
     background_fill_mode_changed = Signal(str)
 
-    DEFAULTS: dict[str, Any] = {
+    DEFAULTS: ClassVar[dict[str, Any]] = {
         "target_mcu": "",
         "interface": "SWD",
         "speed_khz": 4000,
@@ -206,7 +206,7 @@ class ConfigService(QObject):
         # 优先读用户副本（可编辑），回退 bundled
         path = self._user_config_path if self._user_config_path.exists() else self._bundled_path
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 self._bundled = json.load(f)
         except Exception as e:
             self._logger.warning(f"读取 config.json 失败：{e}（path={path}）")
@@ -220,7 +220,7 @@ class ConfigService(QObject):
         if not path.exists():
             return
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 disk = json.load(f)
         except Exception as e:
             self._logger.warning(f"读取 user_prefs.json 失败：{e}")

@@ -3,12 +3,12 @@
 使用业界标准校验向量 "123456789"（ASCII 0x31-0x39）验证各算法结果。
 参考：https://reveng.sourceforge.io/crc-catalogue/all.htm
 """
+
 from __future__ import annotations
 
 import pytest
 
 from core.crc_utils import CRC_ALGORITHMS, compute_crc
-
 
 # 标准测试向量：输入 b"123456789"，各算法的预期输出
 _VECTORS: list[tuple[str, bytes]] = [
@@ -24,14 +24,12 @@ _VECTORS: list[tuple[str, bytes]] = [
 TEST_DATA = b"123456789"
 
 
-@pytest.mark.parametrize("algo_key,expected", _VECTORS,
-                         ids=[v[0] for v in _VECTORS])
+@pytest.mark.parametrize("algo_key,expected", _VECTORS, ids=[v[0] for v in _VECTORS])
 def test_crc_standard_vectors(algo_key: str, expected: bytes):
     """各算法对 '123456789' 的结果必须与标准校验向量一致。"""
     result = compute_crc(algo_key, TEST_DATA)
     assert result == expected, (
-        f"{algo_key}: 期望 {expected.hex().upper()}，"
-        f"实际 {result.hex().upper()}"
+        f"{algo_key}: 期望 {expected.hex().upper()}，" f"实际 {result.hex().upper()}"
     )
 
 
@@ -45,7 +43,7 @@ def test_crc16_modbus_empty_data():
     result = compute_crc("crc16_modbus", b"")
     # init=0xFFFF, no data processed, refOut → reflect(0xFFFF) = 0xFFFF, xorOut=0 → 0xFFFF
     # 小端序 → b"\xFF\xFF"
-    assert result == b"\xFF\xFF"
+    assert result == b"\xff\xff"
 
 
 def test_crc32_empty_data():

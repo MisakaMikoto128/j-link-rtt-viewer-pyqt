@@ -56,21 +56,27 @@ def test_pyocd_target_names_returns_sorted_uppercase():
     assert "STM32F103RC" in names or "STM32F030C8" in names
 
 
-@pytest.mark.parametrize("kind, expected", [
-    (BURNER_KIND_JLINK, get_pylink_target_names),
-    (BURNER_KIND_CMSIS_DAP, get_pyocd_target_names),
-    (BURNER_KIND_STLINK, get_pyocd_target_names),
-])
+@pytest.mark.parametrize(
+    "kind, expected",
+    [
+        (BURNER_KIND_JLINK, get_pylink_target_names),
+        (BURNER_KIND_CMSIS_DAP, get_pyocd_target_names),
+        (BURNER_KIND_STLINK, get_pyocd_target_names),
+    ],
+)
 def test_target_names_for_burner_kind_routes_correctly(kind, expected):
     """target_names_for_burner_kind delegates to the correct source."""
     assert target_names_for_burner_kind(kind) == expected()
 
 
-@pytest.mark.parametrize("kind, expected", [
-    (BURNER_KIND_JLINK, get_pylink_target_infos),
-    (BURNER_KIND_CMSIS_DAP, get_pyocd_target_infos),
-    (BURNER_KIND_STLINK, get_pyocd_target_infos),
-])
+@pytest.mark.parametrize(
+    "kind, expected",
+    [
+        (BURNER_KIND_JLINK, get_pylink_target_infos),
+        (BURNER_KIND_CMSIS_DAP, get_pyocd_target_infos),
+        (BURNER_KIND_STLINK, get_pyocd_target_infos),
+    ],
+)
 def test_target_infos_for_burner_kind_routes_correctly(kind, expected):
     """target_infos_for_burner_kind delegates to the correct source."""
     assert target_infos_for_burner_kind(kind) == expected()

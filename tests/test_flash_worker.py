@@ -4,6 +4,7 @@
 连接序列 / 接口枚举 / close 容错等实现细节测试见 test_jlink_backend.py；
 本文件聚焦 FlashWorker 的 stage 编排 + 信号透传 + 错误兜底。
 """
+
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
@@ -17,8 +18,8 @@ from core.flash_worker import (
     ERASE_MODE_SECTOR,
     FORMAT_BIN,
     FORMAT_ELF,
-    POST_ACTION_NONE,
     POST_ACTION_HALT,
+    POST_ACTION_NONE,
     POST_ACTION_RESET_RUN,
     STAGE_CONNECT,
     STAGE_DISCONNECT,
@@ -47,9 +48,14 @@ def test_constants_exposed():
 
 def test_flash_params_frozen():
     p = FlashParams(
-        file_path="/x.bin", file_format=FORMAT_BIN, bin_start_addr=0,
-        device_name="STM32", interface="SWD", speed_khz=4000,
-        erase_mode=ERASE_MODE_SECTOR, post_action=POST_ACTION_RESET_RUN,
+        file_path="/x.bin",
+        file_format=FORMAT_BIN,
+        bin_start_addr=0,
+        device_name="STM32",
+        interface="SWD",
+        speed_khz=4000,
+        erase_mode=ERASE_MODE_SECTOR,
+        post_action=POST_ACTION_RESET_RUN,
         extra_verify=False,
     )
     with pytest.raises(FrozenInstanceError):
@@ -58,9 +64,15 @@ def test_flash_params_frozen():
 
 def test_worker_signals_present():
     w = FlashWorker()
-    for name in ("flash_requested", "stop_requested",
-                 "flash_started", "flash_stage_changed",
-                 "flash_progress", "flash_log", "flash_finished"):
+    for name in (
+        "flash_requested",
+        "stop_requested",
+        "flash_started",
+        "flash_stage_changed",
+        "flash_progress",
+        "flash_log",
+        "flash_finished",
+    ):
         assert hasattr(w, name), f"missing signal: {name}"
 
 
@@ -69,11 +81,17 @@ def test_worker_signals_present():
 # monkeypatch 注入 PylinkBackend 内的 pylink.JLink
 # ============================================================
 
+
 def _params_default(**overrides):
     base = dict(
-        file_path="C:/x.axf", file_format=FORMAT_ELF, bin_start_addr=0,
-        device_name="STM32", interface="SWD", speed_khz=4000,
-        erase_mode=ERASE_MODE_SECTOR, post_action=POST_ACTION_RESET_RUN,
+        file_path="C:/x.axf",
+        file_format=FORMAT_ELF,
+        bin_start_addr=0,
+        device_name="STM32",
+        interface="SWD",
+        speed_khz=4000,
+        erase_mode=ERASE_MODE_SECTOR,
+        post_action=POST_ACTION_RESET_RUN,
         extra_verify=False,
     )
     base.update(overrides)
@@ -99,10 +117,10 @@ def _make_worker(monkeypatch, fake_jlink):
     """
     monkeypatch.setattr("core.probe.jlink_backend.pylink.JLink", lambda: fake_jlink)
     from intelhex import IntelHex
+
     ih = IntelHex()
     ih.puts(0x08000000, bytes(range(256)))
-    monkeypatch.setattr(
-        "core.flash_file_parser.to_intelhex", lambda path, addr=0: ih)
+    monkeypatch.setattr("core.flash_file_parser.to_intelhex", lambda path, addr=0: ih)
     w = FlashWorker()
     w.initialize()
     return w
@@ -123,7 +141,7 @@ def test_run_flash_success_elf_sector_reset_run(monkeypatch, qapp):
     # program 走逐段 jlink.flash（stub 段在 0x08000000）
     fake_jlink.flash.assert_called_once()
     args = fake_jlink.flash.call_args[0]
-    assert args[1] == 0x08000000   # 段物理地址
+    assert args[1] == 0x08000000  # 段物理地址
     fake_jlink.reset.assert_called()
     fake_jlink.restart.assert_called()
     # 完成
@@ -140,8 +158,8 @@ def test_run_flash_erase_only_skips_program(monkeypatch, qapp):
     qapp.processEvents()
     stages = [e[1] for e in log if e[0] == "stage"]
     assert stages == [STAGE_CONNECT, STAGE_ERASE, STAGE_DISCONNECT]
-    fake_jlink.erase.assert_called_once()          # 整片擦除
-    fake_jlink.flash.assert_not_called()           # 不烧录
+    fake_jlink.erase.assert_called_once()  # 整片擦除
+    fake_jlink.flash.assert_not_called()  # 不烧录
     fake_jlink.reset.assert_not_called()
     fake_jlink.restart.assert_not_called()
     assert log[-1] == ("finished", True, "整片擦除完成")
@@ -219,6 +237,7 @@ def test_run_flash_halt_keeps_backend_next_run_closes_old(monkeypatch, qapp):
 def test_run_flash_connect_failure(monkeypatch, qapp):
     """connect 抛异常 -> flash_finished(False, ...) 且 backend.close 被调。"""
     import pylink as _pylink
+
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = False
     fake_jlink.connect.side_effect = _pylink.JLinkException("Could not connect")
@@ -239,6 +258,7 @@ def test_run_flash_connect_failure(monkeypatch, qapp):
 def test_run_flash_program_failure(monkeypatch, qapp):
     """flash 抛异常 -> finished(False) + 错误 log 已写。"""
     import pylink as _pylink
+
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True
     fake_jlink.flash.side_effect = _pylink.JLinkException("Erase failed")
@@ -257,6 +277,7 @@ def test_run_flash_program_failure(monkeypatch, qapp):
 def test_on_stop_closes_backend_and_quits_thread(monkeypatch, qapp):
     """_on_stop 调 backend.close -> thread.quit()。"""
     from core.probe.factory import make_backend
+
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True
     w = _make_worker(monkeypatch, fake_jlink)
@@ -279,8 +300,9 @@ def test_run_flash_routes_backend_by_burner_kind(monkeypatch, qapp):
     """
     calls: list[str] = []
     fake_backend = MagicMock()
-    monkeypatch.setattr("core.flash_worker.make_backend",
-                        lambda kind, log: (calls.append(kind) or fake_backend))
+    monkeypatch.setattr(
+        "core.flash_worker.make_backend", lambda kind, log: (calls.append(kind) or fake_backend)
+    )
     w = FlashWorker()
     w.initialize()
     w._run_flash(_params_default(burner_kind="cmsisdap"))

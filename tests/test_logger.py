@@ -1,7 +1,4 @@
 """logger 单例 + 文件 handler 行为。"""
-import logging
-import tempfile
-from pathlib import Path
 
 from core import logger as logger_mod
 
@@ -71,9 +68,11 @@ def test_logger_falls_back_to_console_when_file_handler_fails(monkeypatch, tmp_p
     monkeypatch.setattr(logger_mod, "_logger", None)
     # 用一个非法路径让 RotatingFileHandler 构造失败
     bad_path = tmp_path / "nonexistent_drive_or_path"
+
     # 让 get_log_dir 返回这个路径，但通过 monkeypatch mkdir 失败
     def fail_mkdir(*args, **kwargs):
         raise PermissionError("simulated permission denied")
+
     monkeypatch.setattr(logger_mod, "_log_dir_override", bad_path)
     monkeypatch.setattr("pathlib.Path.mkdir", fail_mkdir)
 

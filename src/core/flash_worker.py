@@ -22,8 +22,8 @@ from .probe.base import (
     FORMAT_BIN,
     FORMAT_ELF,
     FORMAT_HEX,
-    POST_ACTION_NONE,
     POST_ACTION_HALT,
+    POST_ACTION_NONE,
     POST_ACTION_RESET_RUN,
     STAGE_CONNECT,
     STAGE_DISCONNECT,
@@ -44,8 +44,8 @@ __all__ = [
     "FORMAT_BIN",
     "FORMAT_ELF",
     "FORMAT_HEX",
-    "POST_ACTION_NONE",
     "POST_ACTION_HALT",
+    "POST_ACTION_NONE",
     "POST_ACTION_RESET_RUN",
     "STAGE_CONNECT",
     "STAGE_DISCONNECT",
@@ -142,6 +142,7 @@ class FlashWorker(QObject):
             return
         try:
             from core.target_discovery import get_pyocd_target_infos
+
             get_pyocd_target_infos()
         except Exception as e:
             self._logger.warning(f"pyocd target 枚举失败：{e}")
@@ -209,7 +210,9 @@ class FlashWorker(QObject):
         self.flash_started.emit()
         self._t_start = time.time()
         erase_only = p.erase_only
-        self.flash_log.emit("info", "=== Flash session ===" + ("（仅整片擦除）" if erase_only else ""))
+        self.flash_log.emit(
+            "info", "=== Flash session ===" + ("（仅整片擦除）" if erase_only else "")
+        )
         if not erase_only:
             self.flash_log.emit("info", f"File: {p.file_path} ({p.file_format})")
         self.flash_log.emit("info", f"Device: {p.device_name} | {p.interface} @ {p.speed_khz} kHz")

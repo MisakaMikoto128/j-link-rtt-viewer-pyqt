@@ -3,6 +3,7 @@
 从 test_flash_worker.py 迁来（FlashWorker 编排测试留在 test_flash_worker.py）。
 走 pylink mock，不需要实际 J-Link 硬件。
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -10,7 +11,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.probe.base import (
-    FORMAT_BIN,
     FORMAT_ELF,
     ProbeNotConnected,
     ProbeParams,
@@ -40,10 +40,10 @@ def _make_backend(monkeypatch, fake_jlink):
     monkeypatch.setattr("core.probe.jlink_backend.pylink.JLink", lambda: fake_jlink)
     # program() 用自家解析器读固件成带地址段、逐段 jlink.flash；stub 成单段假 IntelHex
     from intelhex import IntelHex
+
     ih = IntelHex()
     ih.puts(0x08000000, bytes(range(256)))
-    monkeypatch.setattr(
-        "core.flash_file_parser.to_intelhex", lambda path, addr=0: ih)
+    monkeypatch.setattr("core.flash_file_parser.to_intelhex", lambda path, addr=0: ih)
     log: list[tuple[str, str]] = []
     backend = PylinkBackend(lambda lvl, m: log.append((lvl, m)))
     return backend, log
@@ -52,6 +52,7 @@ def _make_backend(monkeypatch, fake_jlink):
 # ============================================================
 # 连接序列
 # ============================================================
+
 
 def test_connect_follows_open_close_open_dance(monkeypatch):
     """严格按 CLAUDE.md 'pylink 1.6.0 连接顺序'：open -> close -> open(serial)
@@ -77,8 +78,9 @@ def test_connect_follows_open_close_open_dance(monkeypatch):
 
 def test_connect_uses_jtag_enum_when_iface_jtag(monkeypatch):
     import pylink as _pylink
+
     fake_jlink = MagicMock()
-    fake_jlink.opened.return_value = True   # 已开，跳过双开
+    fake_jlink.opened.return_value = True  # 已开，跳过双开
     backend, _log = _make_backend(monkeypatch, fake_jlink)
 
     backend.connect(_params(interface="JTAG"))
@@ -131,6 +133,7 @@ def test_connect_offline_serial_raises_not_connected(monkeypatch):
 # erase / program / reset
 # ============================================================
 
+
 def test_erase_chip_calls_jlink_erase(monkeypatch):
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True
@@ -161,8 +164,8 @@ def test_program_flashes_segment_at_paddr(monkeypatch):
     backend.program(on_progress=lambda c, t: None)
     fake_jlink.flash.assert_called_once()
     args = fake_jlink.flash.call_args[0]
-    assert args[1] == 0x08000000      # 段物理地址
-    assert len(args[0]) == 256        # 段数据
+    assert args[1] == 0x08000000  # 段物理地址
+    assert len(args[0]) == 256  # 段数据
 
 
 def test_program_reports_progress(monkeypatch):
@@ -204,9 +207,11 @@ def test_reset_no_run_skips_restart(monkeypatch):
 # close
 # ============================================================
 
+
 def test_close_swallows_jlink_exception(monkeypatch):
     """close 抛 JLinkException 不传播（参考 CLAUDE.md 'close/rtt_stop 抛异常不致命'）。"""
     import pylink as _pylink
+
     fake_jlink = MagicMock()
     fake_jlink.close.side_effect = _pylink.JLinkException("not connected")
     backend, log = _make_backend(monkeypatch, fake_jlink)

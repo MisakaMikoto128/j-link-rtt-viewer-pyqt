@@ -8,6 +8,7 @@
 5. ConfigService + 主题色
 6. MainWindow.show()
 """
+
 from __future__ import annotations
 
 import faulthandler
@@ -18,14 +19,17 @@ from pathlib import Path
 # 定位 pylink/DLL 崩在哪个调用。尽早 enable，覆盖 worker 线程。
 _crash_log = Path.home() / "jlink_rtt_crash.log"
 try:
-    _crash_fh = open(_crash_log, "a", encoding="utf-8")
+    # 故意不 with：faulthandler 要持有文件句柄到进程结束，崩溃时才能写栈。
+    _crash_fh = open(_crash_log, "a", encoding="utf-8")  # noqa: SIM115
     faulthandler.enable(file=_crash_fh, all_threads=True)
 except Exception:
     faulthandler.enable(all_threads=True)
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QMessageBox
+# 延迟 import：必须 faulthandler.enable 之后再 import PySide6，确保 PySide6 崩溃时
+# faulthandler 已就绪。
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtGui import QIcon  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 # 确保 src 加入 path
 SRC = Path(__file__).resolve().parent
@@ -42,21 +46,25 @@ def main() -> int:
     # 冻结系统 UI 字体 family（必须在 setFont 之前）：用于「跟随系统」时还原。
     # 一旦 setFont 了具体 family，QApplication.font() 就回不去系统默认了，得靠这里捕获。
     from core._ui_font import capture_system_ui_family
+
     capture_system_ui_family()
 
     # 应用级 icon：影响任务栏 / Alt+Tab。MainWindow 自己也会 setWindowIcon
     # 触发 FluentTitleBar 更新，两者互不依赖（不存在调用顺序问题）。
     from core._paths import find_app_icon
+
     icon_path = find_app_icon()
     if icon_path is not None:
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    from core.logger import get_logger, set_log_dir
     # 用户偏好里的自定义 log_dir 要在首个 handler 创建前注入。用一个不触发
     # logger 初始化的轻量读法：直接读 user_prefs.json（ConfigService 尚未构造）。
     from core.config_service import ConfigService
+    from core.logger import get_logger, set_log_dir
+
     try:
         import json as _json
+
         _prefs_path = ConfigService._compute_user_prefs_path()
         if _prefs_path.exists():
             _log_dir_pref = _json.loads(_prefs_path.read_text(encoding="utf-8")).get("log_dir", "")
@@ -69,6 +77,7 @@ def main() -> int:
 
     try:
         import pylink
+
         pylink.JLink()  # 触发 JLinkARM.dll 加载，构造失败立即抛
     except Exception as e:
         logger.error(f"加载 JLinkARM.dll 失败：{e}")
@@ -84,21 +93,26 @@ def main() -> int:
     # 创建 pylink.JLink，与 RTT worker 的 connect 并发打 DLL 全局句柄 → 0x14 崩溃。
     try:
         from core.probe.enumerator import prepare_pyocd_for_flash
+
         prepare_pyocd_for_flash()
     except Exception as e:
         logger.warning(f"pyocd 预初始化失败（不影响 J-Link RTT）：{e}")
 
     from core.config_service import ConfigService
+
     cfg = ConfigService()
 
     from core.screen_keeper import apply_keep_screen_on
+
     if cfg.get("keep_screen_on"):
         apply_keep_screen_on(True)
 
     from core.i18n_service import init_translator
+
     init_translator(cfg.get("language"))
 
     from qfluentwidgets import Theme, setTheme, setThemeColor
+
     theme_str = cfg.get("theme")
     if theme_str == "dark":
         setTheme(Theme.DARK)
@@ -111,6 +125,7 @@ def main() -> int:
     # 全局界面字体 / 字号：QApplication.setFont 设默认字体，所有 widget 继承。
     # RTT 显示区 / 内存页 hex dump 有各自字体覆盖（_apply_font 单独 setFont）。
     from core._ui_font import resolve_ui_family
+
     _app_font = app.font()
     _ui_family = resolve_ui_family(cfg.get("ui_font_family") or "")
     if _ui_family:
@@ -121,15 +136,18 @@ def main() -> int:
     # 同步 qfluentwidgets 的 fontFamilies（气泡 ToolTip/TeachingTip 的 family 来源）。
     # 在 MainWindow 构造前设，首次悬停气泡就用对 family。
     from core._ui_font import _sync_fluent_font_families
+
     _sync_fluent_font_families(_ui_family)
 
     from ui.main_window import MainWindow
+
     win = MainWindow(cfg)
     win.show()
 
     # 启动计时基准模式：写 timestamp 后立即退出。打包后 stdout 不可用，写文件兜底。
     if "--startup-bench" in sys.argv:
         import time
+
         from PySide6.QtCore import QTimer as _QTimer
 
         def _report_ready() -> None:
@@ -137,6 +155,7 @@ def main() -> int:
             print(f"LAUNCH_READY_TS={ts}", flush=True)
             try:
                 from core.logger import get_log_dir
+
                 (get_log_dir() / "launch_bench.txt").write_text(
                     f"LAUNCH_READY_TS={ts}\n", encoding="utf-8"
                 )

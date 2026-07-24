@@ -11,8 +11,8 @@
     from core.crc_utils import compute_crc, CRC_ALGORITHMS
     crc_bytes = compute_crc("CRC-16/MODBUS", b"\\x01\\x02\\x03")
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 # 公开算法列表：(显示名, 内部 key)
 CRC_ALGORITHMS: list[tuple[str, str]] = [
@@ -118,8 +118,7 @@ def compute_crc(algorithm: str, data: bytes) -> bytes:
     if algorithm == "crc8":
         return _crc8(data).to_bytes(1, "big")
     elif algorithm == "crc16_modbus":
-        val = _crc16(data, poly=0x8005, init=0xFFFF,
-                     ref_in=True, ref_out=True)
+        val = _crc16(data, poly=0x8005, init=0xFFFF, ref_in=True, ref_out=True)
         # MODBUS CRC 是小端序（低字节在前）
         return val.to_bytes(2, "little")
     elif algorithm == "crc16_ccitt":
