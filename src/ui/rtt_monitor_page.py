@@ -99,6 +99,7 @@ from ._rtt_colors import (
     RECONNECT_COLORS,
     REMOTE_MARK_COLOR,
 )
+from ._rtt_search import SearchHandler
 from ._ui_helpers import section_separator, tip
 from .widgets.color_picker import ColorComboButton
 from .widgets.remote_host import (
@@ -125,15 +126,10 @@ class RTTMonitorPage(QWidget):
         self._build_ui()
         self._wire_signals()
         self._apply_font(cfg.get("font_family"), cfg.get("font_size"))
+        self._search_handler = SearchHandler(self.display, self.search_bar, self)
 
         # 注意：RTT 节流在 worker 侧做（_rtt_drain_timer 50ms 合并 emit），
         # UI 收到的已经是合并好的批量数据，直接 insertText，不再加一层 timer。
-
-        # 搜索匹配数节流：textChanged 每按键全 buffer 扫描太重，200ms 单次延迟
-        self._match_count_timer = QTimer(self)
-        self._match_count_timer.setSingleShot(True)
-        self._match_count_timer.setInterval(200)
-        self._match_count_timer.timeout.connect(self._do_update_match_count)
 
         # 状态栏统计：1s 一次从 worker 同步收发计数与连接时长
         # _stats_prev_bytes：上次轮询的总字节数，用于算「上一次接收」增量
@@ -1163,12 +1159,6 @@ class RTTMonitorPage(QWidget):
         self.chk_log_rec.toggled.connect(self._on_log_recording_toggled)
         # 保存当前
         self.btn_save.clicked.connect(self._on_save_clicked)
-        # 搜索栏
-        self.search_bar.search_requested.connect(self._do_search)
-        self.search_bar.options_changed.connect(self._on_search_options_changed)
-        self.search_bar.replace_requested.connect(self._do_replace)
-        self.search_bar.closed.connect(self._on_search_bar_closed)
-
         # 命令结果（错误提示）—— 同样显式 QueuedConnection
         self._worker.command_result.connect(self._on_command_result, Qt.QueuedConnection)
         self._worker.log_message.connect(self._on_log_message, Qt.QueuedConnection)
@@ -2362,207 +2352,12 @@ class RTTMonitorPage(QWidget):
 
     # ---- 搜索栏快捷键入口（由 MainWindow QShortcut 调用）----
     def on_shortcut_find(self) -> None:
-        """Ctrl+F：切换搜索栏显示/隐藏。已打开时仅聚焦。
-
-        如果显示区有选中文本，自动填入搜索框（VSCode 行为）。
-        """
-        sel = self.display.textCursor().selectedText().strip()
-        if self.search_bar.isVisible():
-            if sel:
-                self.search_bar.le_search.setText(sel)
-            self.search_bar.le_search.setFocus()
-            self.search_bar.le_search.selectAll()
-        else:
-            self.search_bar.show_search(initial_text=sel)
+        self._search_handler.on_shortcut_find()
 
     def on_shortcut_replace(self) -> None:
-        """Ctrl+H：切换搜索栏 + 展开替换行。已展开时关闭。
+        self._search_handler.on_shortcut_replace()
 
-        如果显示区有选中文本，自动填入搜索框。
-        """
-        sel = self.display.textCursor().selectedText().strip()
-        if self.search_bar.isVisible() and self.search_bar.is_replace_visible():
-            self.search_bar.close_bar()
-        else:
-            self.search_bar.show_replace(initial_text=sel)
-
-    def _on_search_bar_closed(self) -> None:
-        """搜索栏关闭时把焦点还给 display，清除高亮。"""
-        self.display.setFocus()
-        self.display.setExtraSelections([])
-
-    def _on_search_options_changed(self) -> None:
-        """搜索选项（大小写/全词/正则）变化时重新计数。"""
-        self._match_count_timer.start()
-
-    def _build_regex(self, pattern: str, whole_word: bool, regex: bool, case_sensitive: bool):
-        """构建编译好的正则表达式。返回 re.Pattern 或 None（模式无效时）。"""
-        import re
-
-        if regex:
-            try:
-                flags = 0 if case_sensitive else re.IGNORECASE
-                expr = f"\\b(?:{pattern})\\b" if whole_word else pattern
-                return re.compile(expr, flags)
-            except re.error:
-                return None
-        # 非正则：把 pattern 当字面量
-        flags = 0 if case_sensitive else re.IGNORECASE
-        expr = re.escape(pattern)
-        if whole_word:
-            expr = f"\\b{expr}\\b"
-        return re.compile(expr, flags)
-
-    def _do_search(
-        self, text: str, backward: bool, case_sensitive: bool, whole_word: bool, regex: bool
-    ) -> None:
-        pat = self._build_regex(text, whole_word, regex, case_sensitive)
-        if pat is None:
-            self.search_bar.set_match_label(self.tr("无效正则"))
-            return
-        full = self.display.toPlainText()
-        matches = list(pat.finditer(full))
-        if not matches:
-            self.search_bar.set_match_label("0/0")
-            self.display.setExtraSelections([])
-            return
-        # 找当前光标后/前的下一个匹配
-        cursor = self.display.textCursor()
-        cur_pos = cursor.selectionEnd() if not backward else cursor.selectionStart()
-        if backward:
-            target = None
-            for m in reversed(matches):
-                if m.start() < cur_pos:
-                    target = m
-                    break
-            if target is None:
-                target = matches[-1]  # 回卷到最后一个
-        else:
-            target = None
-            for m in matches:
-                if m.start() >= cur_pos:
-                    target = m
-                    break
-            if target is None:
-                target = matches[0]  # 回卷到第一个
-        # 移动光标到匹配位置
-        tc = self.display.textCursor()
-        tc.setPosition(target.start())
-        tc.setPosition(target.end(), QTextCursor.KeepAnchor)
-        self.display.setTextCursor(tc)
-        self.display.ensureCursorVisible()
-        self._update_match_position(text)
-
-    def _do_replace(
-        self,
-        text: str,
-        replacement: str,
-        replace_all: bool,
-        case_sensitive: bool,
-        whole_word: bool,
-        regex: bool,
-    ) -> None:
-        pat = self._build_regex(text, whole_word, regex, case_sensitive)
-        if pat is None:
-            self.search_bar.set_match_label(self.tr("无效正则"))
-            return
-        if replace_all:
-            # 从后往前逐段替换，保留周围文本的 QTextCharFormat（不用 setPlainText，
-            # 后者会清除所有格式导致 ANSI 染色丢失）
-            full = self.display.toPlainText()
-            matches = list(pat.finditer(full))
-            if not matches:
-                self._update_match_position(text)
-                return
-            doc = self.display.document()
-            for m in reversed(matches):
-                tc = QTextCursor(doc)
-                tc.setPosition(m.start())
-                tc.setPosition(m.end(), QTextCursor.KeepAnchor)
-                tc.insertText(replacement)  # 保留周围文本的格式
-            self._update_match_position(text)
-        else:
-            # 替换当前选中：如果当前选中文本匹配 pattern，替换它
-            cursor = self.display.textCursor()
-            if cursor.hasSelection():
-                sel = cursor.selectedText()
-                if pat.fullmatch(sel):
-                    cursor.insertText(replacement)
-            # 找下一个
-            self._do_search(text, False, case_sensitive, whole_word, regex)
-
-    def _update_match_count(self, text: str) -> None:
-        """textChanged/optionsChanged 信号槽：节流到 200ms 再算计数。"""
-        if not text:
-            self.search_bar.set_match_label("")
-            self._match_count_timer.stop()
-            self.display.setExtraSelections([])
-            return
-        self._match_count_timer.start()
-
-    def _do_update_match_count(self) -> None:
-        self._update_match_position(self.search_bar.search_text())
-
-    def _update_match_position(self, text: str) -> None:
-        """显示 "第 N 项，共 M 项"，并把全部匹配位置叠黄色 ExtraSelection。"""
-        if not text:
-            self.search_bar.set_match_label("")
-            self.display.setExtraSelections([])
-            return
-        pat = self._build_regex(
-            text,
-            self.search_bar.whole_word(),
-            self.search_bar.regex_enabled(),
-            self.search_bar.case_sensitive(),
-        )
-        if pat is None:
-            self.search_bar.set_match_label(self.tr("无效正则"))
-            self.display.setExtraSelections([])
-            return
-        full = self.display.toPlainText()
-        matches = list(pat.finditer(full))
-        cnt = len(matches)
-        if cnt == 0:
-            self.search_bar.set_match_label("0/0")
-            self.display.setExtraSelections([])
-            return
-        # 当前光标在哪个匹配中
-        cursor = self.display.textCursor()
-        cur_pos = cursor.selectionStart()
-        idx = 0
-        for i, m in enumerate(matches):
-            if m.start() <= cur_pos <= m.end():
-                idx = i + 1
-                break
-        else:
-            # 光标不在任何匹配中，找最近的
-            for i, m in enumerate(matches):
-                if m.start() >= cur_pos:
-                    idx = i + 1
-                    break
-            else:
-                idx = cnt
-        self.search_bar.set_match_label(f"{idx}/{cnt}")
-        self._highlight_matches(matches, limit=500)
-
-    def _highlight_matches(self, matches: list, limit: int = 500) -> None:
-        """匹配位置叠浅黄色背景。超过 limit 截断。"""
-        from PySide6.QtWidgets import QTextEdit
-
-        fmt = QTextCharFormat()
-        fmt.setBackground(QColor(255, 235, 100, 140))
-        selections: list = []
-        for m in matches[:limit]:
-            c = QTextCursor(self.display.document())
-            c.setPosition(m.start())
-            c.setPosition(m.end(), QTextCursor.KeepAnchor)
-            sel = QTextEdit.ExtraSelection()
-            sel.cursor = c
-            sel.format = fmt
-            selections.append(sel)
-        self.display.setExtraSelections(selections)
-
-    # 命令内部名 → 用户可读标题
+    # 命令内部名 -> 用户可读标题
     _CMD_TITLES: ClassVar[dict[str, str]] = {
         "send_data": "发送失败",
         "reset": "重置失败",
