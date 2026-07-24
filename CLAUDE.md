@@ -1184,3 +1184,17 @@ class _SignalSpy(QObject):
 判别：启动出现 `target_discovery 完成（缓存）` 日志 -> 查 worker initialize 是否无条件跑 `_run_target_discovery`。
 
 参考：`src/core/jlink_worker.py` `initialize`、`src/core/target_discovery.py` `read_cached_target_infos`（只读磁盘永不枚举，UI 线程安全）。
+
+---
+
+## UI 模块拆分（rtt_monitor_page.py 3083 -> 2535）
+
+**背景**：`rtt_monitor_page.py` 曾 3083 行，太大难导航。按职责拆出低耦合部分，主类状态机留主文件。
+
+**处理**（Step 1-2，commit `0ae7465` / `9ef221d`）：
+- **Step 1 辅助类**（3083 -> 2740）：`_VResizeHandle`/`_ColorComboButton`/`_ColorGridPopup`/`_RemoteProbeHelper`/`_TcpReachableRunnable` + ANSI 调色板/标记色/编码映射 + `_tip`/`_section_separator` 拆到 `widgets/v_resize_handle.py` / `widgets/color_picker.py` / `widgets/remote_probe.py`（合并 rtt+flash 远程探测）/ `_rtt_colors.py` / `_ui_helpers.py`（search_bar 的 `_tip` 也合并）。类名/常量名去 `_` 前缀（跨模块公开）。
+- **Step 2 搜索逻辑**（2740 -> 2535）：搜索/替换方法拆到 `_rtt_search.py` `SearchHandler(QObject)`，持有 display + search_bar + `_match_count_timer`。RTTMonitorPage 保留 `on_shortcut_find/replace` 转发（main_window 快捷键连接不变）。删死代码 `_update_match_count`。
+
+**未做（高风险，下一轮）**：`_SendBar` / `_DisplayArea` / `_CommandPanel` / `_FloatingPanel` 拆分。这些涉及核心状态（`_is_connected` / `_channel_history` / `_view_channel` / `_programmatic_scroll`）+ worker 信号 + scroll guard，CLAUDE.md 警告的 UI↔worker 信号协定 + scroll/timer 踩坑都会重新踩。建议先补集成测试覆盖 UI 交互（连接/断开/发送/显示/通道切换）再拆。
+
+**判别**：拆分时只拆「低耦合辅助组件 + 独立逻辑」（靠信号通信，不持有主类状态），不拆「主类状态机」（全局状态强耦合）。`_VResizeHandle` 曾是死代码（定义无实例化），拆出后 ruff 正确识别未用 import -- 拆分时顺便清死代码。

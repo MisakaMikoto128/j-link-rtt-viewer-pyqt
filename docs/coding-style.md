@@ -116,7 +116,9 @@ class FirmwareAnalysisView(QWidget):
 - `from __future__ import annotations` 放第一行（模块 docstring 之后）。
 - import 分组 + 组间空行：`future` -> `stdlib` -> `third party`（PySide6/qfluentwidgets/pylink）-> `local`（`from core...` / `from .`）。ruff `I001` 自动排序。
 - 常量集中模块顶部（大写），类属性常量紧跟类声明。
-- 单文件超 ~800 行考虑拆分（但 `rtt_monitor_page.py` 3083 行拆分属高风险，需先补集成测试，另开任务）。
+- 单文件超 ~800 行考虑拆分。**拆分原则**：只拆「低耦合辅助组件 + 独立逻辑」（独立 QWidget/QObject + 信号通信，不持有主类状态），不拆「主类状态机」（`_is_connected` / `_channel_history` 等全局状态强耦合）。
+- UI 页面辅助组件拆到 `widgets/`（如 `v_resize_handle` / `color_picker` / `remote_probe`），页面专用常量/逻辑拆到 `_<page>_colors.py` / `_<page>_search.py`，主页面状态机留主文件。参考 `rtt_monitor_page.py` 的拆分（3083 -> 2535，详见 CLAUDE.md「UI 模块拆分」）。
+- 拆分主类状态机（如 `_CommandPanel` / `_DisplayArea`）属高风险，需先补集成测试覆盖 UI 交互，另开任务。
 
 ## 8. 测试
 
