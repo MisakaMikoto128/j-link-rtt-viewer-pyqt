@@ -1095,3 +1095,92 @@ class _SignalSpy(QObject):
 **判别**：pyOCD flash algo 类操作（erase/program）报 "not halted as expected" / IPSR -> 在调 algo 前显式 halt。
 
 参考：`src/core/probe/pyocd_backend.py` `erase`。
+
+
+---
+
+## cmsis_pack_manager Cache：`json_path` 必须与 `data_path` 一致，否则 download_pack_list 不下载到 data_path
+
+**现象**：`download_pack` 返回成功（log "pack 下载完成"），但 `data_path` 目录完全空，`list_installed_packs` 读不到。用户"pack 下载到哪都找不到"。
+
+**原因**：`cmsis_pack_manager.Cache` 的 `json_path`（index/aliases）与 `data_path`（.pack 文件）是两个独立参数。`Cache(data_path=X)` 不传 `json_path` 时，`json_path` 用全局默认（`%LOCALAPPDATA%/cmsis-pack-manager/`）。`download_pack_list` 内部 `update_packs` 检查**全局 index**认为"已下载"（用户旧 pack 在全局），**不下载到 data_path**。`.pack` 留在全局，data_path 空。`pack_from_cache` 用 `join(data_path, vendor, pack, version.pack)` 读 data_path，找不到。
+
+**处理**：`get_pack_cache()` 传 `json_path=path, data_path=path`，index 与 .pack 同目录。`download_pack_list` 检查本地 index（空），正确下载到 data_path。实测：`json_path=data_path=tmp` 时 `download_pack_list` 2.5s 下载 .pack 到 tmp；`json_path=None` 时 tmp 空。
+
+**附带**：`get_pack_data_path()` 默认返回 `cpm.Cache(True, False).data_path`（全局目录），用户旧 pack 即显示，无需迁移。自定义路径后 `json_path=data_path=新路径`，首次搜索 `cache_descriptors` 下载索引约 2 分钟（12335 个 pdsc），非必要不改路径。
+
+判别：download_pack 返回成功但 list_installed_packs 读不到 -> 查 `json_path` 是否与 `data_path` 一致。
+
+参考：`src/core/pack_service.py` `get_pack_cache`、commit `<本轮>`。
+
+---
+
+## pack 增删后 `get_pyocd_target_infos` functools.cache 必须失效，否则目标设备列表要重启才刷新
+
+**现象**：下载 STM32F33 pack 后，固件烧录页目标设备下拉没有 STM32F33；重启进程后才出现。删除 pack 后目标设备列表不移除。
+
+**原因**：`get_pyocd_target_infos` 用 `@functools.cache`，首次枚举已装 pack 的 target 后缓存。pack 增删后 cache 不失效，`read_cached_pyocd_target_infos` 返回旧列表。进程重启 cache 重置才重新枚举。
+
+**处理**：
+1. `pack_service._invalidate_pyocd_target_cache()` 在 `download_pack`（downloaded）/ `delete_pack` / `migrate_legacy_packs`（count>0）后调 `get_pyocd_target_infos.cache_clear()`。
+2. `PackManagerPage.packs_changed = Signal()`，下载/删除/迁移后 emit。
+3. `main_window` 连接 `pack_page.packs_changed -> flash_page._on_packs_changed`。
+4. `FlashPage._on_packs_changed`：重置 `_pyocd_targets_enumerated=False` + `_maybe_enumerate_pyocd_targets()` 触发 worker 重新枚举（填新 cache）-> emit `pyocd_target_infos_ready` -> `_on_target_infos_ready` 刷新 `cmb_device`。
+
+实测：下载 STM32G0 -> cache 清空 -> 重新枚举 823->1005 targets，含 STM32G0，无需重启。
+
+判别：pack 增删后目标设备列表不变、要重启才刷新 -> 查 `get_pyocd_target_infos` 的 functools.cache 是否失效。
+
+参考：`src/core/pack_service.py` `_invalidate_pyocd_target_cache`、`src/ui/pack_manager_page.py` `packs_changed`、`src/ui/flash_page.py` `_on_packs_changed`。
+
+---
+
+## `download_pack` 返回状态字符串区分 skipped/downloaded/failed，否则已装的 pack 显示"下载完成"误导
+
+**现象**：下载已装的 pack，UI 显示"下载完成"，用户以为重复下载。
+
+**原因**：`download_pack` 查重跳过时返回 `True`，`_on_download_finished` 总显示"下载完成"，不区分"真下载"和"跳过"。
+
+**处理**：`download_pack` 返回 `str`：`"downloaded"`（新下载）/ `"skipped"`（已安装跳过）/ `"failed"`（未匹配/失败）。UI 按状态显示对应气泡（"下载完成" / "已安装，跳过下载" / "下载失败"）。
+
+参考：`src/core/pack_service.py` `download_pack`、`src/ui/pack_manager_page.py` `_on_download_finished`。
+
+---
+
+## 结果提示用 `_infobar` 气泡，不用底部 `lbl_status`（被遮挡）
+
+**现象**：Pack 管理页底部状态标签（`lbl_status`）被表格遮挡，用户看不到下载/删除结果提示。
+
+**原因**：底部 `BodyLabel` 在 scroll area 内，表格撑高后状态标签在视口外。
+
+**处理**：删 `lbl_status`，结果提示复用 `_infobar` 模块（`success/warn/error/info`，`InfoBarPosition.TOP`，不被遮挡）。过程反馈（搜索中/下载中/迁移中）用按钮文字 + 禁用（`btn.setText("…中…") + setEnabled(False)`），`_retranslate_ui` 按按钮 `isEnabled()` 状态重设文字。
+
+判别：结果提示被表格遮挡 -> 改 `_infobar` 气泡（TOP），不用底部 label。
+
+参考：`src/ui/_infobar.py`、`src/ui/pack_manager_page.py` `_on_download_finished` / `_retranslate_ui`。
+
+---
+
+## CMSIS-Pack 是专业名，UI 文案用 "CMSIS-Pack" 不用 "pack"
+
+**现象**：UI 文案写 "pack"，不专业。
+
+**原因**：CMSIS-Pack 是 ARM 的标准包格式专有名词，业界通称 "CMSIS-Pack"，不简称 "pack"。
+
+**处理**：UI 文案（`self.tr(...)` + 导航项）一律用 "CMSIS-Pack"。翻译表各语言 "CMSIS-Pack" 保持英文（专有名词不翻译），其他词正常翻译。变量名/模块名（`pack_service`/`PackInfo`）是代码约定，不改。
+
+参考：`src/ui/pack_manager_page.py`、`src/ui/main_window.py` 导航、`src/i18n/*.json`。
+
+---
+
+## target_discovery 缓存命中时 worker initialize 不跑（省启动 ~89ms GIL）
+
+**现象**：启动时 `target_discovery 完成（缓存，worker 线程）` 日志出现，用户感觉拖慢启动。
+
+**原因**：`get_pylink_target_infos` 首次读磁盘缓存 + 转换 4543 设备 ~89ms 持有 GIL，卡主线程。worker initialize 每次启动都跑（即使缓存命中）。
+
+**处理**：`jlink_worker.initialize` 检查 `_cache_path().exists()`：命中 -> 不跑 `_run_target_discovery`，直接 `emit target_infos_ready`（UI 自己读磁盘）；未命中 -> 同步跑 DLL 枚举（必须在 `_enum_timer` 前串行，否则 `connected_emulators` 与 `supported_device` 并发打 DLL 崩 0x14）。89ms 挪到 UI 打开页面时读，启动不卡。
+
+判别：启动出现 `target_discovery 完成（缓存）` 日志 -> 查 worker initialize 是否无条件跑 `_run_target_discovery`。
+
+参考：`src/core/jlink_worker.py` `initialize`、`src/core/target_discovery.py` `read_cached_target_infos`（只读磁盘永不枚举，UI 线程安全）。

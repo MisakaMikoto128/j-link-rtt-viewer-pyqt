@@ -118,6 +118,7 @@ class FlashPage(QWidget):
         # 与 RTT 页协调：烧录前先断同一台 J-Link 的 RTT，烧完回连
         self._resume_rtt_after_flash = False
         self._last_post_action = POST_ACTION_NONE
+        self._pyocd_targets_enumerated = False  # 切到 CMSIS-DAP/ST-Link 时按需触发 pyOCD target 枚举
         self._rtt_pending_disconnect = False
         self._rtt_disconnect_timeout_timer: QTimer | None = None
         self._rtt_resume_remote_addr = ""
@@ -729,6 +730,7 @@ class FlashPage(QWidget):
 
         self._sync_remote_mode_from_selection()
         self._sync_burner_status_dot()
+        self._maybe_enumerate_pyocd_targets()
 
     def _add_separator_item(self, text: str) -> None:
         """加不可选的分组分隔项。"""
@@ -843,6 +845,7 @@ class FlashPage(QWidget):
         self._refresh_device_combo()
         self.cmb_device.refresh_tooltip()
         self._sync_burner_status_dot()
+        self._maybe_enumerate_pyocd_targets()
 
     def _trigger_remote_probe(self) -> None:
         """异步探测远程主机 TCP 可达性；有在飞探测时跳过。"""
@@ -1073,6 +1076,31 @@ class FlashPage(QWidget):
         box.cancelButton.setText(self.tr("取消"))
         if box.exec():
             self._on_start_flash(erase_only=True)
+
+    def _maybe_enumerate_pyocd_targets(self) -> None:
+        """按需枚举 pyOCD target 库：仅当选中 CMSIS-DAP / ST-Link 烧录器时触发。
+
+        J-Link 模式用 pylink ``supported_device``，不需要 pyOCD target 库（省
+        ~1s CMSIS-Pack 索引加载）。用户切到 CMSIS-DAP / ST-Link 时才 emit 信号，
+        worker 线程异步枚举，不卡 UI。构造时 ``_rebuild_burner_combo`` 恢复选中
+        也会触发（cfg 默认 cmsisdap/stlink 时首次即加载）。
+        """
+        if self._pyocd_targets_enumerated:
+            return
+        if self._selected_kind in ("cmsisdap", "stlink"):
+            self._pyocd_targets_enumerated = True
+            if hasattr(self._worker, "enumerate_pyocd_targets_requested"):
+                self._worker.enumerate_pyocd_targets_requested.emit()
+
+    def _on_packs_changed(self) -> None:
+        """Pack 管理页下载/删除/迁移后，重新枚举 pyOCD target 刷新设备下拉。
+
+        ``pack_service`` 已失效 ``get_pyocd_target_infos`` 的 functools.cache，
+        这里重置枚举标志 + 触发重新枚举，worker 填新 cache 后 emit ready 刷新
+        cmb_device。无需重启进程（之前下载新 pack 后设备列表看不到，要重启）。
+        """
+        self._pyocd_targets_enumerated = False
+        self._maybe_enumerate_pyocd_targets()
 
     def _on_start_flash(self, erase_only: bool = False) -> None:
         """开始烧录 / 全片擦除。

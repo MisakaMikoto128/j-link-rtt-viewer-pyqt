@@ -81,6 +81,7 @@ class FlashWorker(QObject):
     # ---- 输入信号 ----
     flash_requested = Signal()  # 配合 set_pending_params() lock
     stop_requested = Signal()  # 关窗清理用
+    enumerate_pyocd_targets_requested = Signal()  # UI 首次打开 Flash 页触发枚举
 
     # ---- 输出信号 ----
     flash_started = Signal()
@@ -124,17 +125,27 @@ class FlashWorker(QObject):
             self._pyocd_enum_timer.start()
         self.flash_requested.connect(self._on_flash_requested)
         self.stop_requested.connect(self._on_stop)
-        # pyOCD target 库后台枚举（填充 functools.cache）。不碰 J-Link DLL（不崩），
-        # ~500ms-数秒（CMSIS-Pack 索引），放 worker 线程不卡 UI。UI 读
-        # read_cached_pyocd_* 命中 cache，收信号后刷新下拉。测试模式跳过。
-        if not os.environ.get("JLINK_RTT_TEST_MODE"):
-            try:
-                from core.target_discovery import get_pyocd_target_infos
-                get_pyocd_target_infos()
-            except Exception as e:
-                self._logger.warning(f"pyocd target 枚举失败：{e}")
-            self.pyocd_target_infos_ready.emit()
+        # pyOCD target 枚举改按需（Flash 页首次打开触发），不在启动时枚举
+        # （~1s CMSIS-Pack 索引拖慢启动）。见 _on_enumerate_pyocd_targets。
+        self.enumerate_pyocd_targets_requested.connect(self._on_enumerate_pyocd_targets)
         self._logger.info("FlashWorker initialized in worker thread")
+
+    @Slot()
+    def _on_enumerate_pyocd_targets(self) -> None:
+        """按需枚举 pyOCD target 库（Flash 页首次打开触发），填充 cache。
+
+        不碰 J-Link DLL（不崩）；~500ms-数秒（CMSIS-Pack 索引），worker 线程
+        不卡 UI。UI 读 read_cached_pyocd_* 命中 cache，收 pyocd_target_infos_ready
+        后刷新下拉。测试模式跳过。
+        """
+        if os.environ.get("JLINK_RTT_TEST_MODE"):
+            return
+        try:
+            from core.target_discovery import get_pyocd_target_infos
+            get_pyocd_target_infos()
+        except Exception as e:
+            self._logger.warning(f"pyocd target 枚举失败：{e}")
+        self.pyocd_target_infos_ready.emit()
 
     @Slot()
     def _on_enumerate_pyocd(self) -> None:

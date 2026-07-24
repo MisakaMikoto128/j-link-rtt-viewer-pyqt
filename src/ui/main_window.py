@@ -22,6 +22,7 @@ from core.logger import get_logger
 from .about_page import AboutPage
 from .flash_page import FlashPage
 from .memory_viewer_page import MemoryViewerPage
+from .pack_manager_page import PackManagerPage
 from .rtt_monitor_page import RTTMonitorPage
 from .settings_page import SettingsPage
 
@@ -45,14 +46,21 @@ class MainWindow(FluentWindow):
         self.memory_page = MemoryViewerPage(self.worker, cfg, self)
         self.flash_page = FlashPage(cfg, rtt_worker=self.worker, parent=self)
         self.flash_page._rtt_page_ref = self.rtt_page
+        self.pack_page = PackManagerPage(cfg, self)
         self.settings_page = SettingsPage(cfg, self)
         self.about_page = AboutPage(self)
+
+        # Pack 管理页下载/删除/迁移后 -> Flash 页重新枚举 pyOCD target（刷新设备下拉）
+        self.pack_page.packs_changed.connect(
+            self.flash_page._on_packs_changed, Qt.QueuedConnection
+        )
 
         # 3. 导航 — 存储 route_key → tr_key 映射，用于语言切换时刷新
         self._nav_items: list[tuple[str, str]] = []
         self._add_nav(self.rtt_page, FIF.SPEED_HIGH, "RTT 监控")
         self._add_nav(self.memory_page, FIF.CODE, "内存查看")
         self._add_nav(self.flash_page, FIF.SEND_FILL, "固件烧录")
+        self._add_nav(self.pack_page, FIF.DOWNLOAD, "CMSIS-Pack 管理")
         self.navigationInterface.addSeparator()
         self._add_nav(self.settings_page, FIF.SETTING, "设置", NavigationItemPosition.BOTTOM)
         self._add_nav(self.about_page, FIF.INFO, "关于", NavigationItemPosition.BOTTOM)
@@ -320,5 +328,9 @@ class MainWindow(FluentWindow):
             self.flash_page.shutdown()
         except Exception as e:
             self._logger.warning(f"FlashPage shutdown failed: {e}")
+        try:
+            self.pack_page.shutdown()
+        except Exception as e:
+            self._logger.warning(f"PackPage shutdown failed: {e}")
 
         event.accept()

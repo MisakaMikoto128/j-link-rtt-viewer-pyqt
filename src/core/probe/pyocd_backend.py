@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import sys
 
+from core.pack_service import get_pack_cache, wildcard_eq
 from .base import (
     ERASE_MODE_CHIP,
     FORMAT_BIN,
@@ -30,20 +31,9 @@ from .base import (
 )
 
 
-def _pack_part_wildcard_eq(pattern: str, text: str) -> bool:
-    """CMSIS-Pack part_number 的 'x' 是封装/等级通配（STM32xxTx）。
-
-    等长比较，pattern 的 'x' 匹配 text 任意单字符：
-    stm32f030c8tx ~ stm32f030c8t6 -> True；~ stm32f030c8 -> False（长度不同）。
-    """
-    if len(pattern) != len(text):
-        return False
-    for pc, tc in zip(pattern, text, strict=True):
-        if pc == "x":
-            continue
-        if pc != tc:
-            return False
-    return True
+# CMSIS-Pack part_number 的 'x' 通配匹配，单点真源在 core.pack_service.wildcard_eq。
+# 保留别名仅供测试兼容（tests/test_pyocd_backend.py import _pack_part_wildcard_eq）。
+_pack_part_wildcard_eq = wildcard_eq
 
 
 # SWD 通信失败的特征串：匹配到则给排查提示（接线 / VREF / 多 probe 冲突）。
@@ -79,6 +69,15 @@ class PyOCDBackend:
         self._target = None
         self._params: ProbeParams | None = None
 
+    def _ensure_pack_installed(self, device_name: str) -> bool:
+        """device_name 的 pack 未装时自动下载（委托 pack_service.download_pack）。
+
+        pack_service 统一 pack 存储/搜索/下载/删除逻辑。本方法仅作 connect 时的
+        自动下载入口，下载到 pack_service.get_pack_data_path() 配置的目录。
+        """
+        from core.pack_service import download_pack
+        return download_pack(device_name, log=self._log)
+
     # ============================================================
     # 连接
     # ============================================================
@@ -107,9 +106,14 @@ class PyOCDBackend:
         # 模糊匹配到已注册的 part number。
         target_override = self._resolve_target_type(params.device_name)
         if target_override is None:
+            # pack 未装则自动下载（cmsis_pack_manager 查询+下载），再 resolve 一次
+            if self._ensure_pack_installed(params.device_name):
+                target_override = self._resolve_target_type(params.device_name)
+        if target_override is None:
             raise ProbeNotConnected(
-                f"未知 target：{params.device_name}（请确认 CMSIS-Pack 已安装，"
-                f"或用 pyocd pack install 安装对应 DFP）")
+                f"未知 target：{params.device_name}\n"
+                f"pyOCD 库无此型号。请确认 device 与实际芯片一致，或装 pack：\n"
+                f"pyocd pack install {params.device_name}")
         options = {
             "transport": "swd" if params.interface == "SWD" else "jtag",
             "frequency": int(params.speed_khz) * 1000,
@@ -294,7 +298,9 @@ class PyOCDBackend:
             return device_name
         try:
             from pyocd.target.pack.pack_target import ManagedPacks
-            packs = ManagedPacks.get_installed_targets() or []
+            # 用 pack_service 统一的 cache（自定义 pack_data_path），否则
+            # ManagedPacks 默认读 %LOCALAPPDATA%，与 pack 管理页面不同源。
+            packs = ManagedPacks.get_installed_targets(cache=get_pack_cache()) or []
         except Exception:
             return None
         for dev in packs:
@@ -302,12 +308,6 @@ class PyOCDBackend:
             pl = part.lower()
             if not pl:
                 continue
-            if pl == key:
-                return part
-            # pack 的 'x' 是封装/等级通配：stm32f030c8tx ~ stm32f030c8t6
-            if _pack_part_wildcard_eq(pl, key):
-                return part
-            # 短名（stm32f030c8）-> stm32f030c8tx；或用户填更长前缀
-            if pl.startswith(key) or key.startswith(pl):
+            if pl == key or wildcard_eq(pl, key) or pl.startswith(key) or key.startswith(pl):
                 return part
         return None

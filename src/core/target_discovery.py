@@ -360,6 +360,19 @@ def get_pylink_target_names() -> tuple[str, ...]:
     return tuple(info.name for info in get_pylink_target_infos())
 
 
+def _lookup_pylink_cached_info(name: str) -> TargetDeviceInfo | None:
+    """从 pylink 磁盘缓存按名字查设备元数据（J-Link 库元数据完整）。
+
+    供 pyOCD builtin target 回退补元数据：builtin target 无 probe 时 memory_map
+    空（如 STM32F103RC 的 cls(None) 需要 probe 对象），J-Link 库元数据完整，
+    按 name 查 J-Link 缓存补 vendor/flash/ram。
+    """
+    for info in read_cached_target_infos():
+        if info.name == name:
+            return info
+    return None
+
+
 @functools.cache
 def get_pyocd_target_infos() -> tuple[TargetDeviceInfo, ...]:
     """从 pyOCD 读取内置 target + 已安装 CMSIS-Pack 的 part_number，返回排序去重元组。
@@ -388,6 +401,14 @@ def get_pyocd_target_infos() -> tuple[TargetDeviceInfo, ...]:
                 vendor = getattr(cls, "vendor", "") or ""
                 mm = getattr(cls, "memory_map", None)
             flash_addr, flash_size, ram_addr, ram_size = _extract_flash_ram_from_memory_map(mm)
+            # builtin target 无 probe 时 memory_map 空（cls(None) 需要 probe），
+            # 回退查 pylink 磁盘缓存补元数据（J-Link 库元数据完整）
+            if flash_addr is None and ram_addr is None:
+                _jlink = _lookup_pylink_cached_info(norm)
+                if _jlink is not None:
+                    vendor = vendor or _jlink.vendor
+                    flash_addr, flash_size = _jlink.flash_addr, _jlink.flash_size
+                    ram_addr, ram_size = _jlink.ram_addr, _jlink.ram_size
             infos.append(
                 TargetDeviceInfo(
                     name=norm,

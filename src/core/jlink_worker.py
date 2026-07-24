@@ -232,11 +232,15 @@ class JLinkWorker(QObject):
         self._rtt_drain_timer.timeout.connect(self._drain_rtt_buffer)
         self._rtt_drain_timer.start()
 
-        # target_discovery：worker 线程跑（主线程 supported_device 枚举损坏 DLL TLS →
-        # connect 崩 0x14）。优先读磁盘缓存（零 DLL 调用），未命中才枚举。
-        # **必须在 _enum_timer 启动前同步跑完**——singleShot(0) 会让 _enum_timer 的
-        # connected_emulators 与 supported_device 枚举并发打 DLL → 崩（实测）。
-        self._run_target_discovery()
+        # target_discovery：仅磁盘缓存不存在时同步跑 DLL 枚举（必须在 _enum_timer
+        # 前串行，否则 connected_emulators 与 supported_device 并发打 DLL 崩 0x14）。
+        # 缓存命中时跳过--UI 直接读磁盘缓存即可（零 DLL 调用），省 worker 线程
+        # 启动时间（首次读缓存+转换 ~89ms 持有 GIL，挪到 UI 打开页面时再付）。
+        from core.target_discovery import _cache_path
+        if not _cache_path().exists():
+            self._run_target_discovery()
+        else:
+            self.target_infos_ready.emit()
 
         # J-Link 设备枚举 timer：200ms 一次，worker 线程内自动广播 devices_enumerated。
         # UI 各页面只消费该信号，不各自起轮询（全局唯一轮询源）。

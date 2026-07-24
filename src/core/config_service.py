@@ -124,6 +124,8 @@ class ConfigService(QObject):
         "flash_erase_mode": "sector",  # "sector" | "chip"
         "flash_post_action": "reset_run",  # "none" | "halt" | "reset_run"
         "flash_verify": False,  # extra byte-by-byte verify
+        # CMSIS-Pack 存储目录（pyOCD 烧录用）。空串 = 默认 user_prefs 同级 packs/ 目录。
+        "pack_data_path": "",
         "flash_recent_files": [],  # 最多 10 个，时间倒序
         "flash_recent_files_mtime": {},  # path → mtime（float），用于变更提示
         # 烧录页目标设备输入历史（最近使用 8 条），与 rtt_target_history 分开。

@@ -19,8 +19,11 @@ def _stub_packs(monkeypatch, part_numbers):
         fakes.append(t)
     monkeypatch.setattr(
         "pyocd.target.pack.pack_target.ManagedPacks.get_installed_targets",
-        lambda: fakes,
+        lambda cache=None: fakes,
     )
+    # _resolve_target_type 调 pack_service.get_pack_cache()，mock 返回 None
+    # 避免 Cache 创建/读盘（测试不依赖真实 pack 存储）。
+    monkeypatch.setattr("core.probe.pyocd_backend.get_pack_cache", lambda: None)
 
 
 def test_pack_part_wildcard_eq():
