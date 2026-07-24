@@ -1046,3 +1046,52 @@ class _SignalSpy(QObject):
 **判别**：凡「某操作 = 已有流程的子集/变体」，优先加一个贯穿标记复用主流程，别复制编排（复制会漏掉 RTT 协调这类隐性步骤）。确认对话框（防误点）放按钮 handler，不进 `_on_start_flash`——保持流程函数可编程调用、可测。
 
 参考：`src/core/flash_worker.py` `FlashParams.erase_only` / `_run_flash_impl`、`src/ui/flash_page.py` `_on_erase_chip_clicked` / `_on_start_flash`、`src/core/probe/base.py` `ProbeParams.erase_only`。
+
+---
+
+## pylink/J-Link DLL 同句柄并发不安全：worker 内所有 DLL 调用必须串行（`_dll_lock`）
+
+**现象**：RTT 监控页彻底报废——选对芯片也报 `连接失败：exception: access violation writing 0x...`，随后 200ms 枚举也连环 access violation；选错芯片更直接卡死崩溃。
+
+**原因**：`7f1e0d0` 引入 worker 侧 200ms `_enum_timer`（`connected_emulators()` = `JLINKARM_EMU_GetList` USB 扫描）。pylink API 层**没有任何锁**（library.py 0 个 threading），SEGGER 也未保证同一句柄上「open/connect/rtt_read 进行中」与「USB 枚举扫描」并发安全。枚举 timer 与 connect/RTT 读循环在同一个 `self.jlink` 句柄上并发打 DLL，触发 access violation；DLL 状态损坏后连后续枚举也跟着崩。选错芯片只是让 connect 阶段更慢/更易撞上枚举拍，放大竞态。
+
+**处理**：worker 加 `self._dll_lock = threading.RLock()`，**所有** pylink DLL 调用都包进去：
+- `_on_enumerate_devices` 的 `connected_emulators()`
+- `_do_connect` 整个 connect 序列（open/close/open/rtt_start/set_tif/set_speed/connect + 内部 `_detect_num_up_channels` / `_collect_device_info`，RLock 重入安全）
+- `_do_disconnect` 的 rtt_stop/close
+- `_poll_all_channels` 的 rtt_read、`_on_send_data` 的 rtt_write
+- reset / read_memory / write_memory / export_firmware / power_on/off
+
+关键：read_thread 跑在独立 Python 线程，worker 线程跑枚举 timer 和 connect——两条线程的 DLL 调用必须经同一把锁互斥。
+
+**判别**：J-Link DLL 报 access violation / 选对芯片也崩 -> 先查是否有「周期性 DLL 调用」（枚举/轮询）与「connect/读写」在同句柄并发。修法是串行化，不是调时序/加重试。真机 smoke：枚举 5ms 一拍并发 + connect 全程同锁，connect 成功且 read 30 拍无崩。
+
+参考：`src/core/jlink_worker.py` `_dll_lock`、`scratch/probe_enum_race.py`。
+
+---
+
+## J-Link 烧 axf 变砖、hex 正常：不用 `flash_file`，逐段 `jlink.flash(data, p_paddr)`
+
+**现象**：J-Link 烧 axf 后目标无法运行，烧同固件的 hex 却正常。
+
+**原因**：pylink `flash_file` 的 ELF loader 对部分 axf 的段/入口处理不可靠（实测 STM32F030C8）。hex 只含裸「地址:数据」，不经过 ELF loader，所以正常。
+
+**处理**：`PylinkBackend.program` 改用自家解析器 `flash_file_parser.to_intelhex(path, bin_start_addr)`（ELF 按 PT_LOAD 段的 `p_paddr`、hex 原样、bin 按起始地址）读出带地址段，逐段 `self._jlink.flash(data, start)` 在正确物理地址烧录——与 hex 路径等价、行为可控，三种格式（axf/hex/bin）统一。进度按已烧字节占总字节比例上报。
+
+**判别**：某格式烧录后行为异常但另一格式正常 -> 怀疑烧录器对该格式的 loader，绕开它用「解析成带地址段 + 按地址烧裸数据」的统一路径。
+
+参考：`src/core/probe/jlink_backend.py` `program`、`src/core/flash_file_parser.py` `to_intelhex`。
+
+---
+
+## pyOCD `mass_erase` 前必须先 halt：DAPLink "IPSR=3" 偶发失败
+
+**现象**：DAPLink 全片擦除偶发 `target was not halted as expected after calling flash algorithm routine (IPSR=3)`，再试一次又成功。
+
+**原因**：pyOCD `target.mass_erase()` 内部**不先 halt**。目标正在运行时，flash algo routine 需要 CPU 处于 halt 状态才能正确执行；目标在跑 → 偶发 IPSR=3（HardFault）。第二次擦时目标状态已变，所以偶发。
+
+**处理**：`PyOCDBackend.erase(chip)` 在 `mass_erase()` 前先 `target.halt()`；halt 失败再 `reset_and_halt()` 兜底（`contextlib.suppress`），仍不行由 mass_erase 抛原始错误。ST-Link 未实测，但同理先 halt 更稳。
+
+**判别**：pyOCD flash algo 类操作（erase/program）报 "not halted as expected" / IPSR -> 在调 algo 前显式 halt。
+
+参考：`src/core/probe/pyocd_backend.py` `erase`。

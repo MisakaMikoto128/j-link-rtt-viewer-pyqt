@@ -104,20 +104,30 @@ class PylinkBackend:
         if self._params is None:
             raise ProbeError("not connected")
         p = self._params
-        addr = p.bin_start_addr if p.file_format == FORMAT_BIN else 0
 
-        def pylink_cb(action, progress_string, percentage) -> None:
-            """pylink flash_file on_progress 签名：(action, progress_string, percentage)。
+        # 用自家解析器把固件读成带地址的段，逐段 jlink.flash 在正确物理地址烧录。
+        # 不用 flash_file：其 ELF loader 对部分 axf 的段/入口处理不可靠（实测
+        # STM32F030C8 axf 烧后无法运行，同固件 hex 正常）——hex 只含裸地址数据，
+        # 所以 hex 没踩。逐段按 p_paddr 烧录与 hex 等价，行为可控。
+        from core import flash_file_parser as fp
+        ih = fp.to_intelhex(p.file_path, p.bin_start_addr)
+        segments = list(ih.segments())  # [(start, end_exclusive), ...]
+        if not segments:
+            raise ProbeError("固件无可烧录数据段")
 
-            percentage: int 0-100。无精确 byte 数，total 报 100，current 即百分比。
-            """
-            try:
-                pct = int(percentage) if percentage is not None else 0
-            except (TypeError, ValueError):
-                pct = 0
-            on_progress(pct, 100)
+        # 进度：按已烧字节占总字节比例上报（total=100 时 current 即百分比）。
+        total_bytes = sum(end - start for start, end in segments) or 1
+        done = 0
 
-        self._jlink.flash_file(p.file_path, addr, on_progress=pylink_cb)
+        for start, end in segments:
+            data = bytes(ih.tobinarray(start=start, end=end - 1))
+            if not data:
+                continue
+            self._jlink.flash(data, start)
+            done += len(data)
+            on_progress(min(100, done * 100 // total_bytes), 100)
+            self._log("info", f"flashed {len(data)} B @ 0x{start:08X}")
+        self._log("info", "program OK")
 
     # ============================================================
     # 校验（在 flash_file 内含 CRC verify 之上的逐字节二次保险）

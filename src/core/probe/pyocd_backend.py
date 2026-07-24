@@ -147,6 +147,15 @@ class PyOCDBackend:
     # ============================================================
     def erase(self, mode: str) -> None:
         if mode == ERASE_MODE_CHIP:
+            # mass_erase 的 flash algo 要求目标处于 halt；目标正在运行时偶发
+            # "target was not halted as expected after calling flash algorithm
+            # routine (IPSR=3)"（CMSIS-DAP/DAPLink 实测）。先 halt 再擦，
+            # 失败再 reset_and_halt 兜底，仍失败则由 mass_erase 抛原始错误。
+            try:
+                self._target.halt()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    self._target.reset_and_halt()
             self._target.mass_erase()
             self._log("info", "chip erase OK")
         # sector 模式由 FileProgrammer 内含，不显式 erase

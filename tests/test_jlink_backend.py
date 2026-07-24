@@ -38,6 +38,12 @@ def _params(**overrides):
 
 def _make_backend(monkeypatch, fake_jlink):
     monkeypatch.setattr("core.probe.jlink_backend.pylink.JLink", lambda: fake_jlink)
+    # program() 用自家解析器读固件成带地址段、逐段 jlink.flash；stub 成单段假 IntelHex
+    from intelhex import IntelHex
+    ih = IntelHex()
+    ih.puts(0x08000000, bytes(range(256)))
+    monkeypatch.setattr(
+        "core.flash_file_parser.to_intelhex", lambda path, addr=0: ih)
     log: list[tuple[str, str]] = []
     backend = PylinkBackend(lambda lvl, m: log.append((lvl, m)))
     return backend, log
@@ -145,20 +151,22 @@ def test_erase_sector_is_noop(monkeypatch):
     fake_jlink.erase.assert_not_called()
 
 
-def test_program_passes_bin_start_addr(monkeypatch):
-    """bin 文件 addr 用 bin_start_addr；ELF/hex 用 0。"""
+def test_program_flashes_segment_at_paddr(monkeypatch):
+    """program 逐段 jlink.flash，在 stub 段的物理地址 0x08000000 烧录。"""
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True
     backend, _log = _make_backend(monkeypatch, fake_jlink)
 
-    backend.connect(_params(file_format=FORMAT_BIN, bin_start_addr=0x20000000))
+    backend.connect(_params())
     backend.program(on_progress=lambda c, t: None)
-    args = fake_jlink.flash_file.call_args[0]
-    assert args[1] == 0x20000000
+    fake_jlink.flash.assert_called_once()
+    args = fake_jlink.flash.call_args[0]
+    assert args[1] == 0x08000000      # 段物理地址
+    assert len(args[0]) == 256        # 段数据
 
 
-def test_program_progress_callback_translated(monkeypatch):
-    """pylink (action, str, percentage) -> backend (pct, 100)。"""
+def test_program_reports_progress(monkeypatch):
+    """program 按已烧字节占总字节比例上报 (pct, 100)。"""
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True
     backend, _log = _make_backend(monkeypatch, fake_jlink)
@@ -166,13 +174,8 @@ def test_program_progress_callback_translated(monkeypatch):
     backend.connect(_params())
     received: list[tuple[int, int]] = []
     backend.program(on_progress=lambda c, t: received.append((c, t)))
-
-    # 拿到 flash_file 调用时传入的 on_progress 关键字参数并手动触发
-    cb = fake_jlink.flash_file.call_args.kwargs["on_progress"]
-    cb("erase", "50%", 42)
-    cb("program", "75%", None)   # None 百分比兜底为 0
-    assert received[-2] == (42, 100)
-    assert received[-1] == (0, 100)
+    assert received  # 单段烧完上报一次
+    assert received[-1] == (100, 100)
 
 
 def test_reset_run_calls_reset_and_restart(monkeypatch):

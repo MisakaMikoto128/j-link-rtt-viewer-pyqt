@@ -92,8 +92,17 @@ def _collect_signals(worker):
 
 
 def _make_worker(monkeypatch, fake_jlink):
-    """monkeypatch PylinkBackend 内的 pylink.JLink，返回 initialize 后的 worker。"""
+    """monkeypatch PylinkBackend 内的 pylink.JLink + to_intelhex，返回 initialize 后的 worker。
+
+    program() 现在用自家解析器把固件读成带地址段、逐段 jlink.flash（不用 flash_file），
+    测试 stub to_intelhex 返回一个单段假 IntelHex（0x08000000 起 256B）。
+    """
     monkeypatch.setattr("core.probe.jlink_backend.pylink.JLink", lambda: fake_jlink)
+    from intelhex import IntelHex
+    ih = IntelHex()
+    ih.puts(0x08000000, bytes(range(256)))
+    monkeypatch.setattr(
+        "core.flash_file_parser.to_intelhex", lambda path, addr=0: ih)
     w = FlashWorker()
     w.initialize()
     return w
@@ -111,10 +120,10 @@ def test_run_flash_success_elf_sector_reset_run(monkeypatch, qapp):
 
     stages = [e[1] for e in log if e[0] == "stage"]
     assert stages == [STAGE_CONNECT, STAGE_PROGRAM, STAGE_RESET, STAGE_DISCONNECT]
-    # flash_file 调用时 addr=0（ELF 文件内带地址）
-    fake_jlink.flash_file.assert_called_once()
-    args = fake_jlink.flash_file.call_args[0]
-    assert args[1] == 0   # addr
+    # program 走逐段 jlink.flash（stub 段在 0x08000000）
+    fake_jlink.flash.assert_called_once()
+    args = fake_jlink.flash.call_args[0]
+    assert args[1] == 0x08000000   # 段物理地址
     fake_jlink.reset.assert_called()
     fake_jlink.restart.assert_called()
     # 完成
@@ -132,7 +141,7 @@ def test_run_flash_erase_only_skips_program(monkeypatch, qapp):
     stages = [e[1] for e in log if e[0] == "stage"]
     assert stages == [STAGE_CONNECT, STAGE_ERASE, STAGE_DISCONNECT]
     fake_jlink.erase.assert_called_once()          # 整片擦除
-    fake_jlink.flash_file.assert_not_called()      # 不烧录
+    fake_jlink.flash.assert_not_called()           # 不烧录
     fake_jlink.reset.assert_not_called()
     fake_jlink.restart.assert_not_called()
     assert log[-1] == ("finished", True, "整片擦除完成")
@@ -145,8 +154,8 @@ def test_run_flash_bin_uses_bin_start_addr(monkeypatch, qapp):
     p = _params_default(file_format=FORMAT_BIN, bin_start_addr=0x20000000)
     w._run_flash(p)
     qapp.processEvents()
-    args = fake_jlink.flash_file.call_args[0]
-    assert args[1] == 0x20000000
+    # program 走逐段 jlink.flash（stub 段地址由 _make_worker 固定为 0x08000000）
+    fake_jlink.flash.assert_called_once()
 
 
 def test_run_flash_chip_erase_calls_erase_before_program(monkeypatch, qapp):
@@ -207,11 +216,11 @@ def test_run_flash_connect_failure(monkeypatch, qapp):
 
 
 def test_run_flash_program_failure(monkeypatch, qapp):
-    """flash_file 抛异常 -> finished(False) + 错误 log 已写。"""
+    """flash 抛异常 -> finished(False) + 错误 log 已写。"""
     import pylink as _pylink
     fake_jlink = MagicMock()
     fake_jlink.opened.return_value = True
-    fake_jlink.flash_file.side_effect = _pylink.JLinkException("Erase failed")
+    fake_jlink.flash.side_effect = _pylink.JLinkException("Erase failed")
     w = _make_worker(monkeypatch, fake_jlink)
     log = _collect_signals(w)
 

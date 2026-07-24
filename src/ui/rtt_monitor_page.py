@@ -851,7 +851,10 @@ class RTTMonitorPage(QWidget):
         row_target.addStretch(1)
         self.cb_target = TargetComboBox(self._cfg, "rtt_target_history", inner)
         self.cb_target.setFixedWidth(200)
-        self.cb_target.set_names_provider(get_pylink_target_names)
+        # 设备列表延迟加载：target_discovery 枚举必须在 worker 线程跑（主线程枚举
+        # 会损坏 J-Link DLL TLS → connect 崩 0x14）。构造时先给空列表，等 worker 的
+        # target_infos_ready 信号回填（见 _wire_signals）。
+        self.cb_target.set_names_provider(lambda: ())
         self.cb_target.setPlaceholderText(self.tr("目标设备"))
         self.cb_target.restore_text(str(self._cfg.get("target_mcu") or ""))
         row_target.addWidget(self.cb_target)
@@ -1519,6 +1522,13 @@ class RTTMonitorPage(QWidget):
         # 本页只连接信号消费并维护下拉列表/红点（全局唯一轮询源，不各自起 timer）。
         self._worker.devices_enumerated.connect(self._on_devices_enumerated, Qt.QueuedConnection)
 
+        # target_discovery 枚举完成（worker 线程跑完）→ 回填目标设备下拉。
+        # functools.cache 保证此时 get_pylink_target_names 直接命中缓存，
+        # 不重复枚举（也不会在主线程触发 supported_device → 崩 DLL）。
+        # 测试的 FakeWorker 可能没这个信号——hasattr 守卫。
+        if hasattr(self._worker, "target_infos_ready"):
+            self._worker.target_infos_ready.connect(self._on_target_infos_ready, Qt.QueuedConnection)
+
         # 用户手动选设备 → 持久化 + 红点同步。currentIndexChanged 只在用户
         # 真的选了 items 里某一项时触发；用户点开但没选（或列表空）不会改值。
         self.cb_jlink.currentIndexChanged.connect(self._on_jlink_selection_changed)
@@ -1526,6 +1536,11 @@ class RTTMonitorPage(QWidget):
         # 远程主机/端口输入变化：清空探测缓存 + 持久化
         self.le_remote_host.textChanged.connect(self._on_remote_input_changed)
         self.le_remote_port.textChanged.connect(self._on_remote_input_changed)
+
+    def _on_target_infos_ready(self) -> None:
+        """worker 线程 target_discovery 枚举完成 → 回填目标设备下拉（命中缓存）。"""
+        self.cb_target.set_names_provider(get_pylink_target_names)
+        self.cb_target.refresh_tooltip()
 
     def _on_jlink_selection_changed(self) -> None:
         """用户从下拉列表选了设备或远程项 → 持久化模式并同步红点/输入行。"""

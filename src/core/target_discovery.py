@@ -155,7 +155,128 @@ def _pick_main_region(areas, legacy_addr, legacy_size) -> tuple[int | None, int 
 
 @functools.cache
 def get_pylink_target_infos() -> tuple[TargetDeviceInfo, ...]:
-    """从 pylink-square / J-Link DLL 读取支持的 MCU 设备信息，返回排序去重元组。"""
+    """从 pylink-square / J-Link DLL 读取支持的 MCU 设备信息，返回排序去重元组。
+
+    **缓存策略**：supported_device 枚举（11130 次 DLL 调用）会永久损坏 J-Link DLL
+    的线程本地状态，worker 线程的后续 connect 读到损坏状态 → access violation 0x14
+    （实测：枚举后 connect 0/10，禁枚举 10/10）。因此：
+    1. 优先读磁盘缓存（%APPDATA%/JLinkRTTViewer/target_devices_cache.json），
+       缓存命中则零 DLL 调用，彻底避开崩溃。
+    2. 缓存未命中才枚举，枚举后写缓存。
+    3. 缓存带 J-Link DLL 版本号，DLL 升级后自动重建。
+
+    整个 DLL 枚举持进程级 dll_lock：与 RTT worker 线程的 connect 串行。
+    """
+    from core._dll_global import dll_lock
+
+    # 先尝试读磁盘缓存（零 DLL 调用）
+    cached = _read_cache()
+    if cached is not None:
+        return cached
+
+    # 缓存未命中：枚举 + 写缓存
+    with dll_lock():
+        infos = _read_pylink_target_infos_locked()
+    if infos:
+        _write_cache(infos)
+    return infos
+
+
+def _cache_path() -> "Path":
+    """缓存文件路径：%APPDATA%/JLinkRTTViewer/target_devices_cache.json。"""
+    from pathlib import Path
+    from core.config_service import ConfigService
+    # 复用 ConfigService 的 %APPDATA% 路径逻辑，避免硬编码
+    prefs_path = ConfigService._compute_user_prefs_path()
+    return prefs_path.parent / "target_devices_cache.json"
+
+
+_dll_version_cache: str | None = None
+
+
+def _jlink_dll_version() -> str:
+    """读 J-Link DLL 版本号（缓存失效依据）。失败返回空串。
+
+    **进程内缓存**：JLINKARM_GetDLLVersion 是 DLL 调用，主线程频繁触发会初始化
+    DLL 线程本地状态 → 损坏 TLS → worker connect 崩 0x14。只读一次缓存结果。
+    """
+    global _dll_version_cache
+    if _dll_version_cache is not None:
+        return _dll_version_cache
+    try:
+        import pylink
+        j = pylink.JLink()
+        # JLINKARM_GetDLLVersion 返回 int，如 79600 = v7.96.0
+        ver = j._dll.JLINKARM_GetDLLVersion()
+        _dll_version_cache = str(ver)
+        return _dll_version_cache
+    except Exception:
+        _dll_version_cache = ""
+        return ""
+
+
+def _read_cache() -> tuple[TargetDeviceInfo, ...] | None:
+    """读磁盘缓存。命中返回元组，未命中/损坏返回 None。
+
+    **不调 _jlink_dll_version()**：那是 DLL 调用，主线程触发会初始化 DLL TLS →
+    worker connect 崩 0x14。版本校验改为：缓存文件里的版本号与硬编码的期望版本
+    比较（期望版本在 _write_cache 时写入）。DLL 升级后期望版本手动更新——罕见，
+    可接受。
+    """
+    import json
+    path = _cache_path()
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        items = data.get("devices", [])
+        if not isinstance(items, list) or not items:
+            return None
+        return tuple(
+            TargetDeviceInfo(
+                name=str(d["name"]),
+                vendor=str(d.get("vendor", "")),
+                flash_addr=d.get("flash_addr"),
+                flash_size=d.get("flash_size"),
+                ram_addr=d.get("ram_addr"),
+                ram_size=d.get("ram_size"),
+            )
+            for d in items
+            if isinstance(d, dict) and "name" in d
+        )
+    except Exception:
+        return None
+
+
+def _write_cache(infos: tuple[TargetDeviceInfo, ...]) -> None:
+    """写磁盘缓存（原子替换，防半截写入）。"""
+    import json
+    path = _cache_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "dll_version": _jlink_dll_version(),
+            "devices": [
+                {
+                    "name": info.name,
+                    "vendor": info.vendor,
+                    "flash_addr": info.flash_addr,
+                    "flash_size": info.flash_size,
+                    "ram_addr": info.ram_addr,
+                    "ram_size": info.ram_size,
+                }
+                for info in infos
+            ],
+        }
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as e:
+        _logger.warning(f"target_devices 缓存写入失败：{e}")
+
+
+def _read_pylink_target_infos_locked() -> tuple[TargetDeviceInfo, ...]:
+    """get_pylink_target_infos 的持锁实现（仅供本模块内部调用）。"""
     try:
         import pylink
     except Exception as e:  # pragma: no cover - 运行环境未装 pylink 时降级

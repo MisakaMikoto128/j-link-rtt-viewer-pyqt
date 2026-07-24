@@ -116,6 +116,10 @@ class JLinkWorker(QObject):
     # command_result：dict → str（msg/error）。理由同 connection_state_changed：
     # 跨线程 emit dict 在 PySide6 上不可靠，会触发 setParent cross-thread 警告并卡线程。
     command_result = Signal(str, bool, str)
+    # target_discovery 完成通知：worker 线程跑完 get_pylink_target_infos 后 emit，
+    # UI（RTT 页/FlashPage）收到后回填设备下拉。枚举必须在 worker 线程跑——
+    # 主线程的 supported_device 枚举会损坏 J-Link DLL 线程本地状态 → connect 崩 0x14。
+    target_infos_ready = Signal()
     memory_read_finished = Signal(int, bytes)
     firmware_export_progress = Signal(int, int)
     firmware_export_finished = Signal(bool, str, str)
@@ -235,8 +239,27 @@ class JLinkWorker(QObject):
         self._enum_timer.timeout.connect(self._on_enumerate_devices)
         self._enum_timer.start()
 
+        # target_discovery：worker 线程跑（主线程 supported_device 枚举损坏 DLL TLS →
+        # connect 崩 0x14）。优先读磁盘缓存（零 DLL 调用），未命中才枚举。
+        # 用 singleShot(0) 延迟到事件循环，避免阻塞 initialize 的 timer 启动。
+        QTimer.singleShot(0, self._run_target_discovery)
+
         self._ready = True
         self._logger.info("JLinkWorker initialized in worker thread")
+
+    def _run_target_discovery(self) -> None:
+        """在 worker 线程跑 target_discovery（优先读缓存，未命中才枚举）。"""
+        try:
+            from core.target_discovery import get_pylink_target_infos, _cache_path
+            cache_hit = _cache_path().exists()
+            get_pylink_target_infos()
+            self.target_infos_ready.emit()
+            src = "缓存" if cache_hit else "DLL 枚举"
+            self._logger.info(f"target_discovery 完成（{src}，worker 线程）")
+        except Exception as e:
+            self._logger.warning(f"target_discovery 失败：{e}")
+            # 失败也 emit，UI 用空列表
+            self.target_infos_ready.emit()
 
     def state_name(self) -> str:
         """状态名（线程安全：Python 单赋值原子）。"""

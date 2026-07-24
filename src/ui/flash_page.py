@@ -243,9 +243,10 @@ class FlashPage(QWidget):
         self.lbl_device = BodyLabel(self.tr("目标设备:"))
         row.addWidget(self.lbl_device)
         self.cmb_device = TargetComboBox(self._cfg, "flash_device_history")
-        self.cmb_device.set_names_provider(
-            lambda: [info.name for info in target_infos_for_burner_kind(BURNER_KIND_JLINK)]
-        )
+        # 设备列表延迟加载：target_discovery 枚举必须在 worker 线程跑（主线程枚举
+        # 会损坏 J-Link DLL TLS → connect 崩 0x14）。构造时先给空列表，等 worker 的
+        # target_infos_ready 信号回填。functools.cache 保证回填时不重复枚举。
+        self.cmb_device.set_names_provider(lambda: [])
         self.cmb_device.set_target_info_lookup(self._lookup_target_info)
         self.cmb_device.restore_text(str(self._cfg.get("flash_device_name") or ""))
         self.cmb_device.textChanged.connect(self._on_target_device_changed)
@@ -270,15 +271,28 @@ class FlashPage(QWidget):
         return card
 
     def _lookup_target_info(self, name: str) -> TargetDeviceInfo | None:
-        """按名称从当前烧录器 kind 对应的设备库查询 TargetDeviceInfo。"""
+        """按名称从当前烧录器 kind 对应的设备库查询 TargetDeviceInfo。
+
+        缓存未就绪（worker 线程枚举未完成）时返回 None——此时调
+        target_infos_for_burner_kind 会在主线程触发 supported_device 枚举，
+        损坏 J-Link DLL TLS → worker connect 崩 0x14。
+        """
         name = name.strip().upper()
         if not name:
+            return None
+        # 缓存未就绪不触发枚举（worker 枚举完成后 target_infos_ready 信号回填）
+        from core.target_discovery import get_pylink_target_infos
+        if get_pylink_target_infos.cache_info().currsize == 0:
             return None
         kind = self._selected_kind if self._selected_kind and self._selected_kind != "remote" else BURNER_KIND_JLINK
         for info in target_infos_for_burner_kind(kind):
             if info.name == name:
                 return info
         return None
+
+    def _on_target_infos_ready(self) -> None:
+        """worker 线程 target_discovery 枚举完成 → 回填设备下拉（命中缓存，不重复枚举）。"""
+        self._refresh_device_combo()
 
     def _refresh_device_combo(self) -> None:
         """按当前烧录器 kind 刷新目标设备下拉的数据源。"""
@@ -499,6 +513,14 @@ class FlashPage(QWidget):
             self._rtt_worker.connection_state_changed.connect(
                 self._on_rtt_state_for_flash, _Qt.QueuedConnection
             )
+            # target_discovery 枚举完成（worker 线程跑完）→ 回填设备下拉。
+            # functools.cache 保证此时 target_infos_for_burner_kind 直接命中缓存，
+            # 不重复枚举（也不会在主线程触发 supported_device → 崩 DLL）。
+            # 测试的 FakeRttWorker 可能没这个信号——hasattr 守卫。
+            if hasattr(self._rtt_worker, "target_infos_ready"):
+                self._rtt_worker.target_infos_ready.connect(
+                    self._on_target_infos_ready, _Qt.QueuedConnection
+                )
         # pyOCD 烧录器枚举（非 J-Link，FlashWorker worker 线程 1s tick）
         self._worker.pyocd_probes_enumerated.connect(
             self._on_pyocd_burners_enumerated, _Qt.QueuedConnection

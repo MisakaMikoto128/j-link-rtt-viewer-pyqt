@@ -10,8 +10,18 @@
 """
 from __future__ import annotations
 
+import faulthandler
 import sys
 from pathlib import Path
+
+# 致命错误（access violation / segfault）时把 Python 栈 dump 到 stderr + 日志目录，
+# 定位 pylink/DLL 崩在哪个调用。尽早 enable，覆盖 worker 线程。
+_crash_log = Path.home() / "jlink_rtt_crash.log"
+try:
+    _crash_fh = open(_crash_log, "a", encoding="utf-8")
+    faulthandler.enable(file=_crash_fh, all_threads=True)
+except Exception:
+    faulthandler.enable(all_threads=True)
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
@@ -68,6 +78,15 @@ def main() -> int:
             f"加载 JLinkARM.dll 失败：\n\n{e}\n\n请确认已安装 SEGGER J-Link 驱动。",
         )
         return 1
+
+    # 主线程预 import pyocd + 打桩 J-Link plugin（必须在任何 worker 线程启动前）。
+    # 否则 FlashWorker 线程首次 import pyocd 时 aggregator plugin 扫描会在该线程
+    # 创建 pylink.JLink，与 RTT worker 的 connect 并发打 DLL 全局句柄 → 0x14 崩溃。
+    try:
+        from core.probe.enumerator import prepare_pyocd_for_flash
+        prepare_pyocd_for_flash()
+    except Exception as e:
+        logger.warning(f"pyocd 预初始化失败（不影响 J-Link RTT）：{e}")
 
     from core.config_service import ConfigService
     cfg = ConfigService()
