@@ -1,4 +1,19 @@
-"""RTT 监控页：控制栏 + 选项栏 + 显示区 + 搜索栏 + 发送栏。"""
+"""RTT 监控页：控制栏 + 选项栏 + 显示区 + 搜索栏 + 发送栏。
+
+布局（窗口缩窄时控制栏转悬浮卡片，见 _FloatingPanel）：
+- 顶部：J-Link 选择 / 目标设备 / 接口 / 速度 / RTT 通道 / 连接 / 重置
+- 选项栏：编码 / 自动滚动 / HEX 显示 / 定时发送 / CRC 脚本 / 自动断帧 ...
+- 显示区：QPlainTextEdit（ANSI 着色 + setMaximumBlockCount 限行），可拖高度
+- 发送栏：输入框 + HEX 模式 + 发送 + 历史 50 条
+
+线程模型：
+- JLinkWorker 跑在独立 QThread（main_window 创建 + moveToThread）。
+- 本页只 emit 意图信号 + 接收 worker 的状态/数据信号，不直接碰 pylink。
+- rtt_data_received 入缓冲，_flush_rtt_buffer 合并后一次性 insertText。
+
+信号协定：worker -> UI 一律 bool/int/str（不传 dict，见 CLAUDE.md）。
+字体：显示区用 font_family/font_size（等宽），独立于全局 UI 字体。
+"""
 
 from __future__ import annotations
 

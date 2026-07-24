@@ -39,8 +39,12 @@ python src/main.py
 
 ## 代码规范
 
+完整规范见 [docs/coding-style.md](docs/coding-style.md)（PEP 8/257/484 + Google style + PySide6 专项）。关键约束：
+
+- **工具链**：`venv/Scripts/ruff.exe check src tests` + `venv/Scripts/black.exe src tests` 必须零违规。中文项目已 ignore `RUF001/002/003`（全角标点噪声）。
 - **不要继承 `QThread`**：worker 走 `QObject + moveToThread` 范式，详见 [CLAUDE.md](CLAUDE.md) "QThread 必须独立于业务对象"
 - **pylink-square 锁定 1.6.0**：2.x 的 RTT API 在 SEGGER DLL 下不工作
+- **跨线程信号不传 dict/list**：只传 `bool/int/str/bytes`，复杂结构改同步方法 + lock。详见 CLAUDE.md
 - **避免提前抽象**：3 行重复可以容忍；只在 2+ 处使用且非平凡时才提取 helper
 - **`set()` 高频值必须节流**：`ConfigService` 已经有 200ms 节流，调用方直接 `cfg.set` 即可
 - **关闭事件务必 `cfg.flush()`**：不然最后 200ms 内的偏好改动会丢

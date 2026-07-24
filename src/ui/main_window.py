@@ -1,4 +1,12 @@
-"""主窗口：FluentWindow + 左侧导航 + JLinkWorker（外部 QThread）生命周期。"""
+"""主窗口：FluentWindow + 左侧导航 + JLinkWorker（外部 QThread）生命周期。
+
+职责：
+- 启动时创建 JLinkWorker + 外部 QThread + moveToThread，连接各页面信号。
+- 导航项（RTT 监控 / 内存查看 / 固件烧录 / CMSIS-Pack 管理 / 设置 / 关于）由
+  _nav_items 驱动，语言切换时 _retranslate_ui 重设文本。
+- 全局 UI 字体 / 主题色 / 背景图应用入口（_apply_ui_font / _apply_theme）。
+- closeEvent：保存窗口几何 -> cfg.flush() -> worker.stop_requested -> thread.wait。
+"""
 
 from __future__ import annotations
 
