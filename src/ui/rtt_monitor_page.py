@@ -71,13 +71,12 @@ from qfluentwidgets import (
 
 from core.ansi_parser import AnsiAttrs, parse_ansi
 from core.config_service import ConfigService
-from core.crc_utils import CRC_ALGORITHMS, compute_crc
+from core.crc_utils import CRC_ALGORITHMS
 from core.jlink_worker import (
     CHANNEL_ALL,
     CHANNEL_DEFAULT,
     RESET_MODE_HALT,
     JLinkWorker,
-    encode_send_payload,
 )
 from core.target_discovery import read_cached_target_names
 
@@ -94,6 +93,7 @@ from ._rtt_colors import (
     REMOTE_MARK_COLOR,
 )
 from ._rtt_search import SearchHandler
+from ._send_bar import SendBar, SendBarControls
 from ._ui_helpers import section_separator, tip
 from .widgets.color_picker import ColorComboButton
 from .widgets.floating_panel import FloatingPanel
@@ -119,6 +119,32 @@ class RTTMonitorPage(QWidget):
         self._cfg = cfg
 
         self._build_ui()
+        self._send_bar = SendBar(
+            SendBarControls(
+                te_send=self.te_send,
+                btn_send=self.btn_send,
+                btn_hex_tx_down=self.btn_hex_tx_down,
+                chk_crc_script=self.chk_crc_script,
+                cb_crc_algo=self.cb_crc_algo,
+                chk_show_send_text=self.chk_show_send_text,
+                btn_frame_help=self.btn_frame_help,
+                chk_auto_frame=self.chk_auto_frame,
+                le_frame_timeout=self.le_frame_timeout,
+                chk_timed_send=self.chk_timed_send,
+                le_timed_interval=self.le_timed_interval,
+                btn_timed_unit=self.btn_timed_unit,
+            ),
+            self._cfg,
+            self,
+        )
+        self._send_bar.send_requested.connect(self._worker.send_data_requested)
+        self._send_bar.echo_requested.connect(self._echo_sent_text)
+        self._send_bar.stats_changed.connect(
+            lambda total, last: self.lbl_status_tx.setText(
+                self.tr("发送: {total} - {last}").format(total=total, last=last)
+            )
+        )
+        self._send_bar.warn_requested.connect(lambda title, msg: _infobar.warn(self, title, msg))
         self._wire_signals()
         self._apply_font(cfg.get("font_family"), cfg.get("font_size"))
         self._search_handler = SearchHandler(self.display, self.search_bar, self)
@@ -164,8 +190,6 @@ class RTTMonitorPage(QWidget):
         self._remote_probe_helper.probe_done.connect(self._on_remote_probe_done)
 
         # 发送字节统计缓存（跨连接累计；_update_stats 从 worker 同步）
-        self._send_total_bytes = 0
-        self._send_last_bytes = 0
 
         # 多通道历史缓冲（切通道显示各自历史的关键）：
         # - _channel_buffers[ch]：该通道已接收的纯文本，上限 rtt_channel_history_chars（默认 200k）
@@ -184,9 +208,6 @@ class RTTMonitorPage(QWidget):
         self._time_mod = _time_mod
 
         # 定时发送：QTimer + pending 标志（未连接时勾选 → 连接后自动启动）
-        self._timed_send_pending = False
-        self._timed_send_timer = QTimer(self)
-        self._timed_send_timer.timeout.connect(self._on_timed_send_fire)
 
         # 按当前 reset_mode 设置按钮文字 + 订阅 cfg 变化实时刷新
         self._apply_reset_mode_to_button(cfg.get("reset_mode"))
@@ -538,19 +559,6 @@ class RTTMonitorPage(QWidget):
         self.le_frame_timeout.setTextMargins(0, 0, 22, 0)
         self.btn_frame_help = ToolButton(FluentIcon.QUESTION, inner)
         self.btn_frame_help.setFixedSize(_CTRL_H, _CTRL_H)
-        self.btn_frame_help.clicked.connect(self._on_frame_help_clicked)
-        self._frame_help_title = self.tr("自动断帧")
-        self._frame_help_content = (
-            self.tr("接收超时设置（1~200 毫秒），默认 20ms。")
-            + "\n\n"
-            + self.tr("在接收连续数据流时，如果相邻两批数据的接收时间间隔")
-            + "\n"
-            + self.tr("超过设定值，则判定为一帧数据结束，自动插入换行。")
-            + "\n\n"
-            + self.tr("自动断帧：启用后，每个数据帧显示后自动添加换行符，")
-            + "\n"
-            + self.tr("便于区分不同帧。")
-        )
         _frame_group = QWidget(inner)
         _frame_group.setStyleSheet("background: transparent;")
         _fg_lay = QHBoxLayout(_frame_group)
@@ -562,7 +570,6 @@ class RTTMonitorPage(QWidget):
         row_frame.addStretch(1)
         row_frame.addWidget(_frame_group)
         v.addLayout(row_frame)
-        self.chk_auto_frame.toggled.connect(self._on_auto_frame_toggled)
 
         # ---- 标记 / 保存 / 清空（归入接收设置区域）----
         self.le_mark = EditableComboBox(inner)
@@ -972,22 +979,18 @@ class RTTMonitorPage(QWidget):
         # 用户手动滚动 → 取消 chk_auto_scroll 勾选；用 _programmatic_scroll 标志
         # 区分程序性 setValue 和用户拖动
         self.display.verticalScrollBar().valueChanged.connect(self._on_display_scrolled)
-        self.btn_hex_tx_down.toggled.connect(self._on_hex_send_toggled)
         # 左侧面板"十六进制发送" ↔ 收窄工具栏 btn_hex_tx_down 双向同步（同一状态两个入口）
         self.chk_hex_left.setChecked(self.btn_hex_tx_down.isChecked())
         self.chk_hex_left.toggled.connect(self.btn_hex_tx_down.setChecked)
         self.btn_hex_tx_down.toggled.connect(self.chk_hex_left.setChecked)
-        self.btn_send.clicked.connect(self._on_send_clicked)
         self.btn_reset_stats.clicked.connect(self._on_reset_stats_clicked)
-        self.chk_timed_send.toggled.connect(self._on_timed_send_toggled)
 
         # 发送文本框：Enter = 发送；Shift+Enter = 换行
         _send_enter_shortcut = QShortcut(QKeySequence(Qt.Key_Return | Qt.Key_Enter), self.te_send)
         _send_enter_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
-        _send_enter_shortcut.activated.connect(self._on_send_clicked)
+        _send_enter_shortcut.activated.connect(self._send_bar._on_send_clicked)
 
         # CRC 脚本：勾选时显示红色提示条
-        self.chk_crc_script.toggled.connect(self._on_crc_script_toggled)
         self.cb_crc_algo.currentIndexChanged.connect(
             lambda idx: self._cfg.set("send_script_index", idx)
         )
@@ -1481,9 +1484,7 @@ class RTTMonitorPage(QWidget):
         """清零发送 / 接收计数（会话时长保留）。"""
         self._worker.reset_counts()
         self._stats_prev_bytes = 0
-        self._send_total_bytes = 0
-        self._send_last_bytes = 0
-        self.lbl_status_tx.setText(self.tr("发送: 0 - 0"))
+        self._send_bar.reset_send_stats()
         self.lbl_status_rx.setText(self.tr("接收: 0 - 0"))
 
     def _on_channel_changed(self, ch: int) -> None:
@@ -1522,59 +1523,6 @@ class RTTMonitorPage(QWidget):
         else:
             tip(self.sp_channel, self.tr("全部 = 合并查看所有通道；发送走最近选中的具体通道"))
 
-    def _on_send_clicked(self) -> None:
-        if not self._is_connected:
-            _infobar.warn(
-                self, self.tr("未连接目标"), self.tr("请先连接 J-Link 和目标设备后再发送")
-            )
-            return
-        text = self.te_send.toPlainText().strip()
-        if not text:
-            return
-        is_hex = self.btn_hex_tx_down.isChecked()
-
-        # 脚本：勾选后按 cb_crc_algo 所选追加后缀 -- CRC 算法 或 自动换行
-        if self.chk_crc_script.isChecked():
-            script_idx = self.cb_crc_algo.currentIndex()
-            if script_idx >= len(CRC_ALGORITHMS):
-                # 「自动换行」：非 HEX 模式追加换行符（字符取自设置页「换行符」）
-                if not is_hex:
-                    text += self._cfg.get("send_line_ending")
-            else:
-                try:
-                    _, algo_key = CRC_ALGORITHMS[script_idx]
-                    payload = encode_send_payload(text, is_hex)
-                    crc_bytes = compute_crc(algo_key, payload)
-                    full_payload = payload + crc_bytes
-                    # 追加 CRC 后以 HEX 方式发送
-                    text = " ".join(f"{b:02X}" for b in full_payload)
-                    is_hex = True
-                except Exception as exc:
-                    _infobar.warn(self, self.tr("CRC 错误"), str(exc))
-                    return
-
-        self._worker.send_data_requested.emit(text, is_hex)
-        # 发送字节统计：发送时即时刷新（不走 1s 轮询，避免延迟）
-        sent_bytes = len(encode_send_payload(text, is_hex))
-        self._send_total_bytes += sent_bytes
-        self._send_last_bytes = sent_bytes
-        self.lbl_status_tx.setText(
-            self.tr("发送: {total} - {last}").format(
-                total=self._send_total_bytes, last=self._send_last_bytes
-            )
-        )
-        # 加入历史（去重 + 末尾追加）—— 存用户原始输入，不存换行符和 CRC 追加后的
-        orig_text = self.te_send.toPlainText().strip()
-        hist = list(self._cfg.get("send_history") or [])
-        if orig_text in hist:
-            hist.remove(orig_text)
-        hist.append(orig_text)
-        self._cfg.set("send_history", hist)
-
-        # 发送回显：勾选"显示发送字符串"后每次发送在显示区追加一行染色文本
-        if self.chk_show_send_text.isChecked():
-            self._echo_sent_text(orig_text)
-
     def _append_styled_line(
         self, text: str, color: str, *, bold: bool = False, force_scroll: bool = False
     ) -> None:
@@ -1588,8 +1536,7 @@ class RTTMonitorPage(QWidget):
         即使关闭自动滚动也跟到末尾）；其余按 chk_auto_scroll 决定。
 
         注意：这类「非 RTT 数据」的染色行只入显示区，**不写入 _channel_buffers /
-        _all_rtt_buffer**——它们不是通道数据，切通道重建视图时不应复现（会话标记 /
-        回显属于"当时的显示状态"，不是设备数据流）。
+        _all_rtt_buffer**--它们不是通道数据，切通道重建视图时不应复现。
         """
         sb = self.display.verticalScrollBar()
         at_bottom = sb.value() >= sb.maximum() - 4
@@ -1607,156 +1554,14 @@ class RTTMonitorPage(QWidget):
                 sb.setValue(sb.maximum())
 
     def _echo_sent_text(self, text: str) -> None:
-        """在显示区追加一行 » 开头的回显文本，颜色由用户选中的 btn_send_color 决定。
+        """在显示区追加一行 » 开头的回显文本，颜色由 send_text_color 决定。
 
         插入与自动滚动由 _append_styled_line 统一处理。
         """
         self._append_styled_line(
-            f"\u00bb {text}\n",
+            f"» {text}\n",
             self._cfg.get("send_text_color") or DEFAULT_SEND_ECHO_COLOR,
         )
-
-    def _on_crc_script_toggled(self, checked: bool) -> None:
-        """CRC 脚本 checkbox 切换：顶部边框上色 + 由上而下的红色渐变背景。
-        需要同时覆盖 :focus 和 :hover 状态，否则获得焦点/鼠标悬浮时顶部颜色
-        被 qfluentwidgets 默认的状态样式覆盖掉。
-        """
-        if checked:
-            self._te_send_orig_ss = self.te_send.styleSheet()
-            _crc_css = (
-                "\nQPlainTextEdit {"
-                "  border-top: 2px solid #cc3300;"
-                "  background: qlineargradient("
-                "    x1:0, y1:0, x2:0, y2:1,"
-                "    stop:0 rgba(204,51,0,0.14),"
-                "    stop:0.05 rgba(204,51,0,0.06),"
-                "    stop:0.1 rgba(204,51,0,0.02),"
-                "    stop:0.15 rgba(204,51,0,0));"
-                "}"
-                "\nQPlainTextEdit:hover {"
-                "  border-top: 2px solid #cc3300;"
-                "}"
-                "\nQPlainTextEdit:focus {"
-                "  border-top: 2px solid #cc3300;"
-                "}"
-            )
-            self.te_send.setStyleSheet(self._te_send_orig_ss + _crc_css)
-        else:
-            orig = getattr(self, "_te_send_orig_ss", None)
-            if orig is not None:
-                self.te_send.setStyleSheet(orig)
-                self._te_send_orig_ss = None
-
-    def _on_hex_send_toggled(self, checked: bool) -> None:
-        """HEX 发送模式切换：双向转换发送框内容。
-
-        checked=True  → 文本 → HEX："hello" → "68 65 6C 6C 6F"
-        checked=False → HEX → 文本："68 65 6C 6C 6F" → "hello"
-        转换失败（非法 HEX）则保留原文。
-        """
-        self._cfg.set("hex_send_mode", checked)
-        cur = self.te_send.toPlainText()
-        if not cur:
-            return
-        if checked:
-            # 文本 → HEX
-            try:
-                raw = cur.encode("utf-8")
-                hex_str = " ".join(f"{b:02X}" for b in raw)
-                self.te_send.setPlainText(hex_str)
-            except Exception:
-                pass
-        else:
-            # HEX → 文本
-            try:
-                cleaned = cur.replace(" ", "").replace("\n", "").replace("\r", "")
-                if len(cleaned) % 2 != 0:
-                    cleaned += "0"
-                raw = bytes.fromhex(cleaned)
-                self.te_send.setPlainText(raw.decode("utf-8", errors="replace"))
-            except ValueError:
-                pass  # 非法 HEX，保留原文
-
-    def _on_frame_help_clicked(self) -> None:
-        """? 按钮点击：弹出 PopupTeachingTip，点击外部自动关闭。"""
-        from qfluentwidgets import (
-            PopupTeachingTip,
-            TeachingTipTailPosition,
-            TeachingTipView,
-        )
-
-        view = TeachingTipView(
-            title=self.tr("自动断帧"),
-            content=self._frame_help_content,
-            isClosable=True,
-            tailPosition=TeachingTipTailPosition.TOP,
-        )
-        self._frame_tip = PopupTeachingTip.make(
-            view,
-            target=self.btn_frame_help,
-            duration=-1,
-            tailPosition=TeachingTipTailPosition.TOP,
-            parent=self,
-        )
-        view.closed.connect(self._frame_tip.close)
-
-    # ---- 自动断帧 ----
-    def _on_auto_frame_toggled(self, checked: bool) -> None:
-        """自动断帧 checkbox 切换：选中 = 功能启用，参数锁定（禁用编辑）。"""
-        self.le_frame_timeout.setEnabled(not checked)
-        self.btn_frame_help.setEnabled(not checked)
-
-    def _get_frame_timeout_ms(self) -> int:
-        """从 LineEdit 解析自动断帧超时值，夹到 [1, 200]。"""
-        try:
-            return max(1, min(200, int(self.le_frame_timeout.text())))
-        except (ValueError, AttributeError):
-            return 20
-
-    # ---- 定时发送 ----
-    def _on_timed_send_toggled(self, checked: bool) -> None:
-        """定时发送 checkbox 切换：选中 = 功能启用，参数锁定（禁用编辑）。"""
-        self.le_timed_interval.setEnabled(not checked)
-        self.btn_timed_unit.setEnabled(not checked)
-        if checked:
-            if not self._is_connected:
-                _infobar.warn(
-                    self, self.tr("提示"), self.tr("未连接目标，定时发送将在连接后自动启动")
-                )
-                self._timed_send_pending = True
-                return
-            self._start_timed_send_timer()
-        else:
-            self._timed_send_timer.stop()
-            self._timed_send_pending = False
-
-    def _get_timed_interval_sec(self) -> float:
-        """从 LineEdit 解析定时发送间隔，夹到 [0.001, 999]。"""
-        try:
-            v = float(self.le_timed_interval.text())
-            return max(0.001, min(999.0, v))
-        except (ValueError, AttributeError):
-            return 1.0
-
-    def _start_timed_send_timer(self) -> None:
-        """按当前 interval 启动/重启定时器。"""
-        self._timed_send_timer.stop()
-        interval_ms = max(1, int(self._get_timed_interval_sec() * 1000))
-        self._timed_send_timer.setInterval(interval_ms)
-        self._timed_send_timer.start()
-        self._timed_send_pending = False
-
-    def _on_timed_send_fire(self) -> None:
-        """定时器回调：自动触发发送。"""
-        if not self._is_connected:
-            self._timed_send_timer.stop()
-            self._timed_send_pending = True
-            return
-        # 如果用户改了间隔，实时生效
-        interval_ms = max(1, int(self._get_timed_interval_sec() * 1000))
-        if self._timed_send_timer.interval() != interval_ms:
-            self._timed_send_timer.setInterval(interval_ms)
-        self._on_send_clicked()
 
     def _on_state_changed(self, connected: bool) -> None:
         from datetime import datetime
@@ -1882,6 +1687,7 @@ class RTTMonitorPage(QWidget):
                 self.btn_connect.setText(self.tr("连接"))
 
     def _set_connected_ui(self, info: dict) -> None:
+        self._send_bar.set_connected(True)
         self._is_connected = True
         self.btn_connect.setEnabled(True)
         self.btn_connect.setText(self.tr("断开"))
@@ -1898,10 +1704,6 @@ class RTTMonitorPage(QWidget):
         self._connected_target = target
         self.lbl_status_state.setText(self.tr("● 已连接 {target}").format(target=target))
         self.lbl_status_state.setStyleSheet("color: #2ecc71;")
-        # 定时发送：连接后自动恢复（如果 checkbox 仍勾选且 pending）
-        if self._timed_send_pending and self.chk_timed_send.isChecked():
-            self._start_timed_send_timer()
-
         self.btn_toolbar_connect.setChecked(True)
         self.btn_toolbar_connect.setIcon(FluentIcon.PAUSE)
 
@@ -1921,6 +1723,7 @@ class RTTMonitorPage(QWidget):
             self.btn_connect.setEnabled(False)
 
     def _set_disconnected_ui(self) -> None:
+        self._send_bar.set_connected(False)
         self._is_connected = False
         self.btn_connect.setEnabled(True)
         self.btn_connect.setText(self.tr("连接"))
@@ -1940,8 +1743,6 @@ class RTTMonitorPage(QWidget):
         self.btn_toolbar_connect.setIcon(FluentIcon.PLAY)
         # 断开后清空最后一次已知的远程地址
         self._last_remote_addr = ""
-        # 断开时停止定时发送
-        self._timed_send_timer.stop()
         # 断开后 tooltip 从「MCU 实际上报 N」回到通用说明
         self._update_channel_tooltip()
         # 断开时刷新一次红点（避免当前值已离线但红点没同步）
@@ -2015,7 +1816,7 @@ class RTTMonitorPage(QWidget):
             self._view_channel != CHANNEL_ALL
             and self.chk_auto_frame.isChecked()
             and self._last_rx_time > 0
-            and (now - self._last_rx_time) * 1000 > self._get_frame_timeout_ms()
+            and (now - self._last_rx_time) * 1000 > self._send_bar._get_frame_timeout_ms()
         ):
             # 插入换行分隔不同帧
             sb_pre = self.display.verticalScrollBar()
@@ -2320,19 +2121,7 @@ class RTTMonitorPage(QWidget):
         self.chk_hex_display.setText(self.tr("十六进制显示"))
         tip(self.chk_hex_display, self.tr("将接收到的每个字节以大写的 HEX 格式显示"))
         self.chk_auto_frame.setText(self.tr("自动断帧"))
-        # 自动断帧帮助内容
-        self._frame_help_title = self.tr("自动断帧")
-        self._frame_help_content = (
-            self.tr("接收超时设置（1~200 毫秒），默认 20ms。")
-            + "\n\n"
-            + self.tr("在接收连续数据流时，如果相邻两批数据的接收时间间隔")
-            + "\n"
-            + self.tr("超过设定值，则判定为一帧数据结束，自动插入换行。")
-            + "\n\n"
-            + self.tr("自动断帧：启用后，每个数据帧显示后自动添加换行符，")
-            + "\n"
-            + self.tr("便于区分不同帧。")
-        )
+        self._send_bar.retranslate()
 
         # 标记 / 清除 / 保存
         self.le_mark.setPlaceholderText(self.tr("会话标记文本…"))
@@ -2378,7 +2167,7 @@ class RTTMonitorPage(QWidget):
         tip(self.lbl_status_tx, self.tr("发送总数 - 上一次发送（字节）"))
         self.lbl_status_tx.setText(
             self.tr("发送: {total} - {last}").format(
-                total=self._send_total_bytes, last=self._send_last_bytes
+                total=self._send_bar._send_total_bytes, last=self._send_bar._send_last_bytes
             )
         )
         # 连接状态：按当前态重设（连接态含 target）

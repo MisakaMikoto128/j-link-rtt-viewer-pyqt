@@ -257,8 +257,8 @@ def test_timed_send_not_connected_shows_pending(rtt_page, qtbot):
     assert not page._is_connected
     page.chk_timed_send.setChecked(True)
     qtbot.wait(20)
-    assert page._timed_send_pending is True
-    assert not page._timed_send_timer.isActive()
+    assert page._send_bar._timed_send_pending is True
+    assert not page._send_bar._timed_send_timer.isActive()
 
 
 def test_timed_send_connected_starts_timer(rtt_page, qtbot):
@@ -267,10 +267,10 @@ def test_timed_send_connected_starts_timer(rtt_page, qtbot):
     page._set_connected_ui(worker.get_device_info())
     page.chk_timed_send.setChecked(True)
     qtbot.wait(20)
-    assert page._timed_send_timer.isActive()
+    assert page._send_bar._timed_send_timer.isActive()
     page.chk_timed_send.setChecked(False)
     qtbot.wait(20)
-    assert not page._timed_send_timer.isActive()
+    assert not page._send_bar._timed_send_timer.isActive()
 
 
 # ---- 自动断帧 ----
