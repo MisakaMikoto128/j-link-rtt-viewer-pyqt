@@ -11,10 +11,11 @@ UI 布局（4 个 Card，透明 ScrollArea 整页包裹）：
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, QThread, QThreadPool, QTimer
+from PySide6.QtCore import QEvent, QFileSystemWatcher, Qt, QThread, QThreadPool, QTimer
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -62,6 +63,7 @@ from core.target_discovery import (
 
 from . import _infobar
 from ._scroll_helpers import make_transparent_scroll
+from ._ui_helpers import tip
 from .firmware_analysis_view import FirmwareAnalysisView, FlashOccupancyBar
 from .widgets.remote_host import (
     REMOTE_ITEM_TEXT,
@@ -126,6 +128,21 @@ class FlashPage(QWidget):
         self._selected_serial: str = ""
         self._selected_kind: str = ""
         self._selected_product: str = ""
+
+        # 固件文件变化监控：QFileSystemWatcher 监听当前选中固件的 mtime 变化（系统级文件
+        # 事件，非轮询）。编译器写文件通常先 unlink+rename 原子替换，watcher 会 emit
+        # fileChanged；为应对「删旧建新」导致 watcher 失效，辅以 1s 防抖 timer 复查 mtime
+        # 并按需重新 addPath。检测到变化时：橙色提示 + （若启用自动烧录）触发烧录。
+        # _auto_burn_armed：刚选中/烧录完成后置 False，避免同一变化重复触发自动烧录；
+        # 仅下一次 fileChanged 事件才触发。
+        self._file_watcher: QFileSystemWatcher | None = None
+        self._watched_path: str = ""
+        self._watched_mtime: float = 0.0
+        self._auto_burn_armed = False
+        self._file_recheck_timer = QTimer(self)
+        self._file_recheck_timer.setSingleShot(True)
+        self._file_recheck_timer.setInterval(1000)
+        self._file_recheck_timer.timeout.connect(self._recheck_file_mtime)
 
         # 独立 worker + 独立 QThread（和 JLinkWorker 完全无关）
         self._thread = QThread(self)
@@ -317,12 +334,11 @@ class FlashPage(QWidget):
         self.btn_save_as = PushButton(self.tr("另存为…"))
         self.btn_save_as.setToolTip(self.tr("把当前固件转换为 .bin / .hex 另存"))
         row.addWidget(self.btn_save_as)
-        self.lbl_mtime_flag = BodyLabel("")
-        self.lbl_mtime_flag.setStyleSheet("color: #d97706;")  # amber
-        row.addWidget(self.lbl_mtime_flag)
         layout.addLayout(row)
 
-        # format + range
+        # format + range + 固件变化状态指示（放在 range 行末尾）
+        # 状态色：绿=正常（已识别最新）/ 橙=检测到固件已更新（mtime 比对）。
+        # 附带文件修改日期（不翻译日期格式）。
         row2 = QHBoxLayout()
         row2.addWidget(BodyLabel("Format:"))
         self.lbl_format = BodyLabel(self.tr("(无)"))
@@ -331,9 +347,11 @@ class FlashPage(QWidget):
         row2.addWidget(BodyLabel("Range:"))
         self.lbl_range = BodyLabel(self.tr("(无)"))
         row2.addWidget(self.lbl_range, 1)
+        self.lbl_mtime_flag = BodyLabel("")
+        row2.addWidget(self.lbl_mtime_flag)
         layout.addLayout(row2)
 
-        # bin start addr (仅 bin 模式可编辑)
+        # row3：bin 起始地址 + 「固件变化后自动烧录」RadioButton
         row3 = QHBoxLayout()
         self.lbl_bin_addr = BodyLabel(self.tr("Bin 起始地址:"))
         row3.addWidget(self.lbl_bin_addr)
@@ -342,6 +360,10 @@ class FlashPage(QWidget):
         self.edit_bin_addr.setMaximumWidth(180)
         row3.addWidget(self.edit_bin_addr)
         row3.addStretch(1)
+        self.rb_auto_burn = RadioButton(self.tr("固件变化后自动烧录"))
+        tip(self.rb_auto_burn, self.tr("使能后每次固件重新编译发生变化时自动触发烧录"))
+        self.rb_auto_burn.setChecked(bool(self._cfg.get("auto_burn_on_change")))
+        row3.addWidget(self.rb_auto_burn)
         layout.addLayout(row3)
 
         # Flash 占用条：加载固件（任意格式）后显示其在目标 Flash 中的位置/占比，
@@ -494,6 +516,9 @@ class FlashPage(QWidget):
             lambda i: self._cfg.set("flash_post_action", _POST_LABELS[i][1])
         )
         self.chk_verify.toggled.connect(lambda v: self._cfg.set("flash_verify", bool(v)))
+        self.rb_auto_burn.toggled.connect(
+            lambda v: self._cfg.set("auto_burn_on_change", bool(v))
+        )
 
         # 文件
         self.btn_browse.clicked.connect(self._on_browse)
@@ -964,6 +989,8 @@ class FlashPage(QWidget):
                 self.analysis_view.clear()
                 self.flash_bar.clear()
                 self.symbol_card.setVisible(False)
+            # 切到空/不存在文件 -> 清旧 watcher，避免监听已丢弃的路径
+            self._watch_file("")
             return
         recent = list(self._cfg.get("flash_recent_files") or [])
         if not recent or recent[0] != text:
@@ -1027,16 +1054,123 @@ class FlashPage(QWidget):
             self.analysis_view.sections.clear()
             self.symbol_card.setVisible(False)
 
-        # mtime 比对
+        # mtime 比对：留旧 mtime 作为基线，初次选中固件时 prev_mt 有值（历史）
+        # 才判定「已更新」，无基线则记为本基线（视为已读完最新，下次变化才算更新）。
         mt_map = dict(self._cfg.get("flash_recent_files_mtime") or {})
         cur_mt = os.path.getmtime(path)
         prev_mt = mt_map.get(path)
-        if prev_mt is not None and cur_mt > prev_mt + 0.5:
-            self.lbl_mtime_flag.setText("● Updated")
-        else:
-            self.lbl_mtime_flag.setText("")
+        self._watched_mtime = cur_mt
+        # 初次选中固件时 _auto_burn_armed=False（不重复触发）；本次 mtime 基线已记录
+        self._update_mtime_flag(
+            prev_mtime=prev_mt, cur_mtime=cur_mt, armed_initial=False, path=path
+        )
         mt_map[path] = cur_mt
         self._cfg.set("flash_recent_files_mtime", mt_map)
+        # 挂 watcher 监听后续变化（编译写文件触发 fileChanged）
+        self._watch_file(path)
+
+    def _update_mtime_flag(
+        self,
+        *,
+        prev_mtime: float | None,
+        cur_mtime: float,
+        armed_initial: bool,
+        path: str,
+    ) -> None:
+        """刷新固件变化指示器颜色 + 文案 + 自动烧录触发。
+
+        - prev_mtime 为 None（首次见此文件）-> 绿色（视为已识别最新），不 armed
+        - prev_mtime 非空且 cur_mtime > prev + 0.5（文件被改过）-> 橙色「已更新」
+          若 _auto_burn_armed 为真则触发自动烧录一次，否则置 armed 等下次
+        - armed_initial=True 时不视为变化（_watch_file 初次挂监控用，防止 false 立即触发）
+        文案附带文件修改日期（不翻译日期格式）。
+        """
+        from datetime import datetime
+
+        bright_green = "#2ecc71"
+        amber = "#d97706"
+        if prev_mtime is None or armed_initial:
+            # 初次/刚挂监控视为已识别最新 -> 绿
+            self.lbl_mtime_flag.setStyleSheet(f"color: {bright_green};")
+            date_str = datetime.fromtimestamp(cur_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            self.lbl_mtime_flag.setText(self.tr("● 已识别 {date}").format(date=date_str))
+            if not armed_initial:
+                self._auto_burn_armed = True
+            return
+        if cur_mtime > prev_mtime + 0.5:
+            # 检测到固件已更新 -> 橙 + 「已更新」
+            self.lbl_mtime_flag.setStyleSheet(f"color: {amber};")
+            date_str = datetime.fromtimestamp(cur_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            self.lbl_mtime_flag.setText(
+                self.tr("● 已更新 {date}").format(date=date_str)
+            )
+            if self._auto_burn_armed and self.rb_auto_burn.isChecked():
+                self._auto_burn_armed = False  # 一次变化只触发一次
+                self._on_start_flash()
+        else:
+            # 未变 -> 绿
+            self.lbl_mtime_flag.setStyleSheet(f"color: {bright_green};")
+            date_str = datetime.fromtimestamp(cur_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            self.lbl_mtime_flag.setText(self.tr("● 已识别 {date}").format(date=date_str))
+
+    def _watch_file(self, path: str) -> None:
+        """挂 QFileSystemWatcher 监听文件 mtime 变化（编译完成触发 fileChanged）。"""
+        if self._file_watcher is not None:
+            # 清旧 watcher（含 directory/file），释放信号
+            with contextlib.suppress(RuntimeError):
+                self._file_watcher.fileChanged.disconnect(self._on_watched_file_changed)
+            self._file_watcher.removePaths(
+                self._file_watcher.files() + self._file_watcher.directories()
+            )
+        self._file_watcher = QFileSystemWatcher(self)
+        self._watched_path = path
+        need_watching = bool(path) and os.path.exists(path)
+        if need_watching:
+            self._file_watcher.addPath(path)
+            # 同时监听父目录 -- 应对「编译写文件用 unlink+rename 原子替换」导致 path 监控失效：
+            # 目录的 directoryChanged 会触发，我们据此重新 addPath 并复查 mtime。
+            parent = str(Path(path).parent)
+            if parent and os.path.isdir(parent):
+                self._file_watcher.addPath(parent)
+            self._file_watcher.fileChanged.connect(self._on_watched_file_changed)
+            self._file_watcher.directoryChanged.connect(self._schedule_recheck)
+
+    def _on_watched_file_changed(self, _path: str) -> None:
+        """QFileSystemWatcher fileChanged：文件被写/替换 -> 触发变化处理。
+
+        用 1s 防抖 timer（编译可能多次写），保证最后一次写完再比对 mtime。
+        """
+        self._file_recheck_timer.start()
+
+    def _schedule_recheck(self, _dir: str) -> None:
+        """父目录 directoryChanged（编译 unlink+rename 时触发）：复查文件 mtime。"""
+        self._file_recheck_timer.start()
+
+    def _recheck_file_mtime(self) -> None:
+        """1s 防抖后复查当前监控文件的 mtime，按变/不变刷新指示器 + 自动烧录。"""
+        path = self._watched_path
+        if not path or not os.path.exists(path):
+            # 文件被删（编译中可能短暂失踪）-> 不立即清，等下一次 directoryChanged 重挂
+            self._file_recheck_timer.start()  # 继续等
+            return
+        try:
+            cur_mt = os.path.getmtime(path)
+        except OSError:
+            return
+        prev_mt = self._watched_mtime
+        if cur_mt != prev_mt:
+            # 真变化 -> 更新指示器（armed_initial=False 允许触发自动烧录）
+            self._update_mtime_flag(
+                prev_mtime=prev_mt, cur_mtime=cur_mt, armed_initial=False, path=path
+            )
+            # 记新基线 mtime 到 cfg 缓存
+            mt_map = dict(self._cfg.get("flash_recent_files_mtime") or {})
+            mt_map[path] = cur_mt
+            self._cfg.set("flash_recent_files_mtime", mt_map)
+            self._watched_mtime = cur_mt
+        # watcher 可能因 unlink+rename 失效，补挂一次（addPath 幂等，已存在不会重复加）
+        if self._file_watcher is not None and path not in self._file_watcher.files():
+            self._file_watcher.addPath(path)
 
     def _toggle_log(self) -> None:
         vis = not self.txt_log.isVisible()
@@ -1304,6 +1438,20 @@ class FlashPage(QWidget):
             self.lbl_stage.setText(self.tr("完成 ✓"))
             self.progress.setValue(100)
             _infobar.success(self, self.tr("操作成功"), summary)
+            # 烧录成功 -> 固件视为"已识别最新"（绿 + 日期），armed 置真等下次变化
+            self._auto_burn_armed = True
+            path = self._watched_path
+            if path and os.path.exists(path):
+                try:
+                    self._watched_mtime = os.path.getmtime(path)
+                    self._update_mtime_flag(
+                        prev_mtime=None,
+                        cur_mtime=self._watched_mtime,
+                        armed_initial=True,
+                        path=path,
+                    )
+                except OSError:
+                    pass
         else:
             self.lbl_stage.setText(self.tr("失败 ✖"))
             # 失败时自动展开详情 + 写固定建议文案
@@ -1330,6 +1478,7 @@ class FlashPage(QWidget):
             self.cmb_burner,
             self.le_remote_host,
             self.le_remote_port,
+            self.rb_auto_burn,
         ):
             w.setEnabled(enabled)
         self.btn_flash.setEnabled(enabled)
@@ -1364,6 +1513,8 @@ class FlashPage(QWidget):
         self.btn_save_as.setToolTip(self.tr("把当前固件转换为 .bin / .hex 另存"))
         self.btn_copy_log.setText(self.tr("复制日志"))
         self.chk_verify.setText(self.tr("额外 byte-by-byte verify（慢一倍）"))
+        self.rb_auto_burn.setText(self.tr("固件变化后自动烧录"))
+        tip(self.rb_auto_burn, self.tr("使能后每次固件重新编译发生变化时自动触发烧录"))
 
         # 动态按钮文案
         if self._is_running:

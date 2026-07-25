@@ -128,6 +128,7 @@ class ConfigService(QObject):
         "flash_erase_mode": "sector",  # "sector" | "chip"
         "flash_post_action": "reset_run",  # "none" | "halt" | "reset_run"
         "flash_verify": False,  # extra byte-by-byte verify
+        "auto_burn_on_change": False,  # 固件变化后自动烧录（flash 页 RadioButton）
         # CMSIS-Pack 存储目录（pyOCD 烧录用）。空串 = 默认 user_prefs 同级 packs/ 目录。
         "pack_data_path": "",
         "flash_recent_files": [],  # 最多 8 个，时间倒序
