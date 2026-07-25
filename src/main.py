@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import faulthandler
 import sys
+import threading
 from pathlib import Path
 
 # 致命错误（access violation / segfault）时把 Python 栈 dump 到 stderr + 日志目录，
@@ -30,6 +31,25 @@ except Exception:
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QIcon  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+
+# 平台缓存后台预热：darkdetect（被 qfluentwidgets.common.config 拉入）在 Windows 上
+# 首调 platform.release() 读注册表 ~40ms，连帯 import platform/subprocess/socket ~19ms。
+# 在 PySide6 import 之后起 daemon 线程预热（PySide6 import 释放 GIL 期间并行完成），
+# 主线程后续 import darkdetect 时 platform.release() 已缓存、相关模块已在 sys.modules，
+# 实测 dev 启动 -164ms（7.1%）。只读注册表查询，幂等可重入，失败不影响主线程。
+
+
+def _warm_platform_cache() -> None:
+    try:
+        import platform
+
+        platform.release()
+        platform.version()
+    except Exception:
+        pass  # 预热失败不影响主线程（darkdetect 会再调一次，只是慢 ~40ms）
+
+
+threading.Thread(target=_warm_platform_cache, name="platform-warm", daemon=True).start()
 
 # 确保 src 加入 path
 SRC = Path(__file__).resolve().parent
