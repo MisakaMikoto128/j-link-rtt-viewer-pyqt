@@ -103,5 +103,4 @@
 - `target_discovery` 缓存命中时 worker `initialize` 不跑（省启动 ~89ms GIL）
 - 断开后状态栏闪回旧值：worker 必须在 `emit(False)` 前清零 `_session_start_ts`（断开态标记）；收发计数跨断开保留
 - UI 模块拆分记录（`rtt_monitor_page.py` 3083 → 1929，Step 1-5 详见 pitfalls.md）
-- **TODO：发版前敲定作者信息** — `src/ui/about_page.py` 顶部 `AUTHOR_NAME = "待定"` / `AUTHOR_GITHUB`
 - RTT 通道选错时显示区无内容 — 确认 SpinBox 通道与 MCU 端 `SEGGER_RTT_printf(N,...)` 一致

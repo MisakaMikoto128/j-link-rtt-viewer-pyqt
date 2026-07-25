@@ -4,6 +4,61 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-25
+
+### Features
+
+- **📦 CMSIS-Pack 管理页面** - 新增独立页面管理 CMSIS-Pack：下载/迁移/查重 + 目标设备实时刷新；`cmsis_pack_manager.Cache` 的 `json_path` 与 `data_path` 一致性保证 download 落盘正确；pack 增删后 `get_pyocd_target_infos` 的 `functools.cache` 失效（避免目标列表要重启才刷新）；`download_pack` 返回 `skipped`/`downloaded`/`failed` 三态区分；结果提示用 `_infobar` 气泡（TOP），不被表格遮挡；已安装/下载卡片撑满页面垂直空间。
+- **🔌 多烧录器烧录** - 支持 J-Link + ST-Link/CMSIS-DAP via pyOCD 烧录；FlashWorker backend 按 `FlashParams.burner_kind` 动态创建（`make_backend`），不预建固定 jlink；pyOCD `target_override` 支持 CMSIS-Pack `part_number` 'x' 封装通配匹配；pyOCD SWD 通信失败给出接线排查提示 + 连接后校验 DP IDCODE；`mass_erase` 前先 `halt()`（DAPLink "IPSR=3" 偶发失败）。
+- **🎯 多 J-Link + 目标设备增强** - 多 J-Link 按 serial 连接 + auto_reconnect 串行匹配（`SerialNumber` 是唯一稳定 ID）；目标设备自动发现，下拉限制 8 条 + 页面历史；cfg serial 与在线设备不匹配时保持离线占位 + 红点，不自动切其它在线设备；烧录器下拉 label 单点真源（`_burner_label(kind, serial, product)`）。
+- **📁 固件变化检测 + 自动烧录** - 固件变化检测改用 QFileSystemWatcher（替代 mtime 轮询），变化指示重设计，支持检测到变化后自动烧录。
+- **🗑️ 全片擦除** - 烧录页新增全片擦除功能，复用烧录流程（`erase_only` 标记贯穿），不另写一套。
+- **📊 紧凑 Flash 占用条** - 烧录页新增紧凑 Flash 占用条；修复 Flash 容量/地址数据错误（用 `supported_device` 的 `aFlashArea` Size 最大区域，不信 legacy `FlashAddr/FlashSize`）。
+- **💾 控件状态持久化** - RTT/Flash 页面控件状态跨重启保留 + 日志记录提示 + 固件文件选择修正（`EditableComboBox.setCurrentText(不在 items 的文本)` 是 no-op 的坑）。
+- **⏱️ 自动断帧阈值持久化** - 自动断帧空闲阈值（`auto_frame_timeout`）跨重启保留。
+
+### Performance
+
+- **🚀 启动速度优化（dev 2.97s -> 1.79s，-39.8%）**
+  - **pyocd 预热后台化** - `prepare_pyocd_for_flash(background=True)` 在主线程 PySide6 import 后立即起 daemon 线程预热，dev 直接 python 启动 2.97s -> 2.52s。
+  - **平台缓存后台预热** - daemon 线程预调 `platform.release()` / `platform.version()` 填 win32_ver 缓存，2.52s -> 2.46s。
+  - **5 个非默认页懒构造** - `_LazyPageWrapper` + `built` Signal：非默认页首次 showEvent 时才构造，2.46s -> 1.92s；懒页首次构建后通过 `built` Signal 补应用全局字体。
+  - **worker_thread.start 移到构造末尾** - 让 pyocd 预热有更多时间，1.92s -> 1.79s；`wait_for_pyocd_prepare` 仍在 worker 启动前（DLL 安全）。
+- **🐍 Python 3.13 推荐** - CI 矩阵纳入 3.13；Python 版本对比文档（3.11/3.13/3.14/3.15 实测，3.15a8 hid DLL 测试 fail）。
+
+### Fixes
+
+- **💥 J-Link DLL 并发崩溃（access violation 0x14）** - DLL 同句柄并发不安全：所有 pylink DLL 调用必须串行经 `_dll_lock`（RLock）。
+- **💥 0xc000001d 崩溃** - pyocd 预热 wait 误从 MainWindow 移到 FlashPage 构造，预热线程 `import pyocd.probe.aggregator` 扫描时 `JLinkProbePlugin.should_load -> pylink.JLink()` 碰 DLL，与 RTT worker `connected_emulators()` 并发崩 0xc000001d。已回退（commit 5a3b55f -> 37bda17）；`wait_for_pyocd_prepare` 必须在任何 worker 启动前（含 RTT worker）。
+- **🐛 设备下拉时序竞态** - 设备下拉时序竞态、烧录后暂停、DAPLink 烧录修复。
+- **🐛 懒页字体初始化遗漏** - 懒页首次构建后未应用全局字体（qfluentwidgets 控件用 QSS 默认字号），通过 `built` Signal -> `_on_lazy_page_built` 重应用字体修复。
+- **🐛 RTT 监控页设备下拉宽度** - 修正 J-Link 设备选择下拉框的宽度。
+
+### Refactor
+
+- **🔧 RTT 监控页 UI 拆分（Step 1-5）** - `rtt_monitor_page.py` 3083 -> 1929 行（-37%）：Step 1 拆出辅助类到独立模块；Step 2 拆出 SearchHandler；Step 3 拆出 SendBar；Step 4 拆出 DisplayArea + 清理死代码；Step 5 拆出 FloatingPanel。
+
+### Docs
+
+- **📖 README 全面重写** - 安装 / 使用 / 打包 / 性能 / 技术栈；start.bat 加 venv/.venv 守卫 + 补 uv 路径。
+- **📖 通用性能优化 playbook** - `docs/perf-optimization-playbook.md`：通用启动/运行时性能优化方法，任何 Python 项目可借鉴；§2.4 标注 DLL 竞态踩坑（本项目已回退）。
+- **📖 Python 版本对比** - `docs/python-version-comparison.md`：3.11/3.13/3.14/3.15 实测对比（subagent worktree 隔离）。
+- **📖 启动/运行时优化调研报告** - A-class 5 + B-class 7 优化手段调研。
+- **📖 CLAUDE.md 拆分** - 拆为索引（本文件）+ 正文（`docs/pitfalls.md`），常驻 context 降 ~90%。
+- **📖 编码规范文档** - `docs/coding-style.md` + 核心 UI 模块 docstring 补全。
+- **📖 standalone packager 对比报告** - Nuitka vs alternatives（Nuitka 启动最快，保持现状）。
+- **📖 pitfalls 更新** - 新增 pyocd 预热 wait 移走导致 0xc000001d 崩、`aFlashArea` Size 最大区域、`EditableComboBox` 坑等多条经验。
+
+### Testing
+
+- **🧪 UI 拆分兜底测试** - 4 个端到端集成测试（拆分 Step 3/4/6 兜底）；382 测试全过（发版前最终验证 66s）。
+
+### Engineering
+
+- **🛠 start.bat venv 守卫** - start.bat 加 venv/.venv 守卫，避免误激活错误 venv。
+- **🛠 CI 矩阵纳入 Python 3.13** - 同步 standalone 版本号 + CI 矩阵纳入 3.13。
+- **🛠 ruff/black 全量修复** - ruff 配置修正 + 全量 lint 修复 + black 格式化。
+
 ## [0.7.0] — 2026-07-20
 
 ### Features
@@ -213,7 +268,8 @@
 - 配置写盘 200ms 节流，关窗 flush，避免拖窗/调字号每帧刷盘
 - 详细工程踩坑笔记见 [CLAUDE.md](CLAUDE.md)
 
-[Unreleased]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/compare/v0.3.0...v0.5.0
