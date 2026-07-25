@@ -15,7 +15,7 @@ from contextlib import suppress
 
 from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QThread, Slot
 from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QPainter, QPixmap, QShortcut, QShowEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, NavigationItemPosition
 
@@ -35,6 +35,55 @@ from .memory_viewer_page import MemoryViewerPage
 from .pack_manager_page import PackManagerPage
 from .rtt_monitor_page import RTTMonitorPage
 from .settings_page import SettingsPage
+
+
+class _LazyPageWrapper(QWidget):
+    """推迟真实 Page 的 import + 构造到首次 show（或显式 page() 调用）。
+
+    用于加速启动：5 个非默认页（Memory/Flash/Pack/Settings/About）在 nav 首次
+    点击时才构建，省 ~400ms dev 启动（实测 per-page 构造时间：Flash 229 / Settings
+    102 / Memory 77 / About 39 ms，Pack 类似量级）。RTT 页是默认页 + 全局快捷键
+    依赖，不懒。
+
+    objectName 在构造时设好（与真实 Page 的 objectName 一致），FluentWindow 的
+    nav 路由不依赖真实 Page 构建时机。closeEvent 调 shutdown() 时若未构建则跳过
+    （NoneGuard），已构建则转发给真实 Page。
+
+    跨页依赖（flash._rtt_page_ref、pack.packs_changed -> flash._on_packs_changed）
+    由 MainWindow 在工厂方法 + dirty 中转里处理，见 _build_flash_page /
+    _build_pack_page / _on_packs_changed。
+    """
+
+    def __init__(self, object_name: str, factory, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName(object_name)
+        self._factory = factory
+        self._page = None
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self._layout = layout
+
+    def page(self):
+        """显式获取真实 Page，触发构建（幂等）。"""
+        if self._page is None:
+            self._page = self._factory()
+            self._layout.addWidget(self._page)
+        return self._page
+
+    @property
+    def is_built(self) -> bool:
+        return self._page is not None
+
+    def showEvent(self, event: QShowEvent) -> None:
+        # 首次 show 触发构建（用户点击 nav 切到本页）。
+        self.page()
+        super().showEvent(event)
+
+    def shutdown(self) -> None:
+        """转发 shutdown，未构建则跳过。"""
+        if self._page is not None and hasattr(self._page, "shutdown"):
+            self._page.shutdown()
 
 
 class MainWindow(FluentWindow):
@@ -58,16 +107,21 @@ class MainWindow(FluentWindow):
         self.worker_thread.start()
 
         # 2. 各页面
+        #    RTT 立即建（默认页 + 全局快捷键依赖）；其余 5 页懒构造（首次进 nav 才
+        #    import + 构造，省 ~400ms dev 启动，见 _LazyPageWrapper docstring）。
+        #    跨页依赖（flash._rtt_page_ref、pack.packs_changed -> flash）在工厂
+        #    方法 + dirty 中转里处理（_build_flash_page / _build_pack_page / _on_packs_changed）。
+        self._packs_dirty = False  # pack 改动在 flash 未构建时记 dirty，flash 首次构建时补刷
         self.rtt_page = RTTMonitorPage(self.worker, cfg, self)
-        self.memory_page = MemoryViewerPage(self.worker, cfg, self)
-        self.flash_page = FlashPage(cfg, rtt_worker=self.worker, parent=self)
-        self.flash_page._rtt_page_ref = self.rtt_page
-        self.pack_page = PackManagerPage(cfg, self)
-        self.settings_page = SettingsPage(cfg, self)
-        self.about_page = AboutPage(self)
-
-        # Pack 管理页下载/删除/迁移后 -> Flash 页重新枚举 pyOCD target（刷新设备下拉）
-        self.pack_page.packs_changed.connect(self.flash_page._on_packs_changed, Qt.QueuedConnection)
+        self.memory_page = _LazyPageWrapper(
+            "memory-viewer", lambda: MemoryViewerPage(self.worker, self._cfg, self), self
+        )
+        self.flash_page = _LazyPageWrapper("flashPage", self._build_flash_page, self)
+        self.pack_page = _LazyPageWrapper("pack-manager", self._build_pack_page, self)
+        self.settings_page = _LazyPageWrapper(
+            "settings", lambda: SettingsPage(self._cfg, self), self
+        )
+        self.about_page = _LazyPageWrapper("about", lambda: AboutPage(self), self)
 
         # 3. 导航 — 存储 route_key → tr_key 映射，用于语言切换时刷新
         self._nav_items: list[tuple[str, str]] = []
@@ -116,6 +170,34 @@ class MainWindow(FluentWindow):
         cfg.background_image_path_changed.connect(self._on_background_image_path_changed)
         cfg.background_opacity_changed.connect(self._on_background_opacity_changed)
         cfg.background_fill_mode_changed.connect(self._on_background_fill_mode_changed)
+
+    def _build_flash_page(self) -> FlashPage:
+        """FlashPage 工厂（懒构造）：构造后设 _rtt_page_ref，并补刷 pack dirty。"""
+        fp = FlashPage(self._cfg, rtt_worker=self.worker, parent=self)
+        fp._rtt_page_ref = self.rtt_page
+        # pack 改动若发生在 flash 构建前，构建后补刷一次（下拉不会漏更新）。
+        if self._packs_dirty:
+            fp._on_packs_changed()
+            self._packs_dirty = False
+        return fp
+
+    def _build_pack_page(self) -> PackManagerPage:
+        """PackManagerPage 工厂（懒构造）：连接 packs_changed -> 中转槽。"""
+        pp = PackManagerPage(self._cfg, self)
+        pp.packs_changed.connect(self._on_packs_changed, Qt.QueuedConnection)
+        return pp
+
+    def _on_packs_changed(self) -> None:
+        """pack 改动中转：flash 已构建则直接刷，否则记 dirty 待 flash 构建时补刷。
+
+        pack 操作（下载/删除/迁移 CMSIS-Pack）才 emit packs_changed，此时 pack 必然
+        已构建；flash 可能尚未构建（用户没点过固件烧录页）。dirty 保证 flash 首次
+        构建时拿到最新 pack 状态，不丢信号。
+        """
+        if self.flash_page.is_built:
+            self.flash_page.page()._on_packs_changed()
+        else:
+            self._packs_dirty = True
 
     def _add_nav(self, widget, icon, text_key, position=NavigationItemPosition.TOP) -> None:
         """添加导航项并记录 route_key → tr_key 映射。"""
