@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import time
-from contextlib import contextmanager
 from typing import ClassVar
 
 from PySide6.QtCore import (
@@ -29,14 +28,9 @@ from PySide6.QtCore import (
     QTimer,
 )
 from PySide6.QtGui import (
-    QColor,
-    QFont,
-    QFontDatabase,
     QKeySequence,
     QResizeEvent,
     QShortcut,
-    QTextCharFormat,
-    QTextCursor,
 )
 from PySide6.QtWidgets import (
     QFrame,
@@ -69,7 +63,6 @@ from qfluentwidgets import (
     TransparentToolButton,
 )
 
-from core.ansi_parser import AnsiAttrs, parse_ansi
 from core.config_service import ConfigService
 from core.crc_utils import CRC_ALGORITHMS
 from core.jlink_worker import (
@@ -81,10 +74,8 @@ from core.jlink_worker import (
 from core.target_discovery import read_cached_target_names
 
 from . import _infobar
+from ._display_area import DisplayArea, DisplayAreaControls
 from ._rtt_colors import (
-    ANSI_QCOLORS,
-    DEFAULT_BG_QCOLOR,
-    DEFAULT_FG_QCOLOR,
     DEFAULT_SEND_ECHO_COLOR,
     DISCONNECT_ALERT_COLOR,
     ENCODING_LABEL_MAP,
@@ -106,9 +97,6 @@ from .widgets.remote_host import (
 from .widgets.remote_probe import RemoteProbeHelper, TcpReachableRunnable
 from .widgets.search_bar import SearchBar
 from .widgets.target_combo_box import TargetComboBox
-
-_FONT_SIZE_MIN = 8
-_FONT_SIZE_MAX = 32
 
 
 class RTTMonitorPage(QWidget):
@@ -137,8 +125,21 @@ class RTTMonitorPage(QWidget):
             self._cfg,
             self,
         )
+        self._display_area = DisplayArea(
+            DisplayAreaControls(
+                display=self.display,
+                chk_auto_scroll=self.chk_auto_scroll,
+                chk_auto_frame=self.chk_auto_frame,
+                chk_hex_display=self.chk_hex_display,
+                le_mark=self.le_mark,
+                lbl_font_size=self.lbl_font_size,
+            ),
+            self._cfg,
+            self._send_bar,
+            self,
+        )
         self._send_bar.send_requested.connect(self._worker.send_data_requested)
-        self._send_bar.echo_requested.connect(self._echo_sent_text)
+        self._send_bar.echo_requested.connect(self._display_area.echo_sent_text)
         self._send_bar.stats_changed.connect(
             lambda total, last: self.lbl_status_tx.setText(
                 self.tr("发送: {total} - {last}").format(total=total, last=last)
@@ -146,7 +147,7 @@ class RTTMonitorPage(QWidget):
         )
         self._send_bar.warn_requested.connect(lambda title, msg: _infobar.warn(self, title, msg))
         self._wire_signals()
-        self._apply_font(cfg.get("font_family"), cfg.get("font_size"))
+        self._display_area.apply_font(cfg.get("font_family"), cfg.get("font_size"))
         self._search_handler = SearchHandler(self.display, self.search_bar, self)
 
         # 注意：RTT 节流在 worker 侧做（_rtt_drain_timer 50ms 合并 emit），
@@ -164,11 +165,6 @@ class RTTMonitorPage(QWidget):
         # 初始化编码状态显示
         self._update_encoding_label(cfg.get("rtt_encoding") or "utf-8")
         cfg.rtt_encoding_changed.connect(self._update_encoding_label)
-
-        # 自动滚动状态：True 表示 sb.setValue 由程序触发（autoscroll 跟新数据），
-        # False 表示用户手动滚动。区分两者用来同步 chk_auto_scroll 复选框。
-        # 用法：with self._programmatic_scroll_guard(): sb.setValue(...)
-        self._programmatic_scroll = False
 
         # 真状态（worker 端的连接状态镜像）。按钮文字是呈现，不能当状态判断；
         # 由 _on_state_changed 维护。
@@ -191,36 +187,17 @@ class RTTMonitorPage(QWidget):
 
         # 发送字节统计缓存（跨连接累计；_update_stats 从 worker 同步）
 
-        # 多通道历史缓冲（切通道显示各自历史的关键）：
-        # - _channel_buffers[ch]：该通道已接收的纯文本，上限 rtt_channel_history_chars（默认 200k）
-        # - _all_rtt_buffer：全部通道按到达顺序合并的文本（「全部通道」视图用），同上限
-        # - _view_channel：当前视图通道（-1=全部）；_send_channel：实际发送通道（恒为具体通道）
-        # 清空按钮 / 通道切换只重建显示，不改缓冲；缓冲由「清除」按钮一并清空。
-        self._channel_buffers: dict[int, str] = {}
-        self._all_rtt_buffer: str = ""
-        self._view_channel: int = self._cfg.get("rtt_channel")
-        self._send_channel: int = self._view_channel if self._view_channel >= 0 else CHANNEL_DEFAULT
-
-        # 自动断帧：上次接收数据的时间戳
-        import time as _time_mod
-
-        self._last_rx_time: float = 0.0
-        self._time_mod = _time_mod
+        # 发送通道（恒为具体通道；与显示区视图通道 _view_channel 解耦--后者由
+        # DisplayArea 持有，「全部通道」视图时仍走最近选中的具体通道发送）。
+        # _view_channel 由 DisplayArea 自己从 cfg 读取初始化，主类不持有。
+        _view_channel = self._cfg.get("rtt_channel")
+        self._send_channel: int = _view_channel if _view_channel >= 0 else CHANNEL_DEFAULT
 
         # 定时发送：QTimer + pending 标志（未连接时勾选 → 连接后自动启动）
 
         # 按当前 reset_mode 设置按钮文字 + 订阅 cfg 变化实时刷新
         self._apply_reset_mode_to_button(cfg.get("reset_mode"))
         cfg.reset_mode_changed.connect(self._apply_reset_mode_to_button)
-
-    @contextmanager
-    def _programmatic_scroll_guard(self):
-        """围栏：with 块内的 sb.setValue 不会触发 _on_display_scrolled 取消勾选。"""
-        self._programmatic_scroll = True
-        try:
-            yield
-        finally:
-            self._programmatic_scroll = False
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -574,7 +551,6 @@ class RTTMonitorPage(QWidget):
         # ---- 标记 / 保存 / 清空（归入接收设置区域）----
         self.le_mark = EditableComboBox(inner)
         self.le_mark.setPlaceholderText(self.tr("会话标记文本…"))
-        self._mark_history: list[str] = []
         v.addWidget(self.le_mark)
 
         row_mark = QHBoxLayout()
@@ -783,7 +759,6 @@ class RTTMonitorPage(QWidget):
         self.btn_toolbar_clear = ToolButton(FluentIcon.DELETE, self._toolbar)
         self.btn_toolbar_clear.setFixedSize(36, 30)
         tip(self.btn_toolbar_clear, self.tr("清除显示"))
-        self.btn_toolbar_clear.clicked.connect(self._on_clear_clicked)
 
         # 保存
         self.btn_toolbar_save = ToolButton(FluentIcon.SAVE, self._toolbar)
@@ -969,16 +944,19 @@ class RTTMonitorPage(QWidget):
         self.btn_connect.clicked.connect(self._on_connect_clicked)
         self.btn_reset.clicked.connect(self._on_reset_clicked)
         self.btn_reset_halt.clicked.connect(self._on_reset_halt_clicked)
-        self.btn_clear.clicked.connect(self._on_clear_clicked)
+        self.btn_clear.clicked.connect(self._display_area.on_clear_clicked)
+        self.btn_toolbar_clear.clicked.connect(self._display_area.on_clear_clicked)
         self.chk_pause.toggled.connect(self._worker.set_pause_receive_requested.emit)
         self.chk_power.toggled.connect(self._worker.set_power_output_requested.emit)
         self.sp_channel.valueChanged.connect(self._on_channel_changed)
-        self.chk_auto_scroll.toggled.connect(self._on_auto_scroll_toggled)
+        self.chk_auto_scroll.toggled.connect(self._display_area.on_auto_scroll_toggled)
         # 收窄模式：悬浮卡片开关
         self.btn_panel_toggle.toggled.connect(self._on_panel_toggle_toggled)
         # 用户手动滚动 → 取消 chk_auto_scroll 勾选；用 _programmatic_scroll 标志
         # 区分程序性 setValue 和用户拖动
-        self.display.verticalScrollBar().valueChanged.connect(self._on_display_scrolled)
+        self.display.verticalScrollBar().valueChanged.connect(
+            self._display_area.on_display_scrolled
+        )
         # 左侧面板"十六进制发送" ↔ 收窄工具栏 btn_hex_tx_down 双向同步（同一状态两个入口）
         self.chk_hex_left.setChecked(self.btn_hex_tx_down.isChecked())
         self.chk_hex_left.toggled.connect(self.btn_hex_tx_down.setChecked)
@@ -999,24 +977,26 @@ class RTTMonitorPage(QWidget):
         self.btn_send_color.colorChanged.connect(lambda c: self._cfg.set("send_text_color", c))
 
         # 字号 ± 按钮：直接走 cfg.set → font_changed → _apply_font
-        self.btn_font_minus.clicked.connect(lambda: self._adjust_font_size(-1))
-        self.btn_font_plus.clicked.connect(lambda: self._adjust_font_size(+1))
+        self.btn_font_minus.clicked.connect(lambda: self._display_area.adjust_font_size(-1))
+        self.btn_font_plus.clicked.connect(lambda: self._display_area.adjust_font_size(+1))
 
         # 插入会话标记（点按钮触发；EditableComboBox 不暴露 lineEdit，
         # Enter 键需通过 ComboBox.activated 信号——但 fluent 实现略有差异，
         # 用户用按钮足够）
-        self.btn_mark.clicked.connect(self._on_insert_mark)
+        self.btn_mark.clicked.connect(self._display_area.on_insert_mark)
 
         # 显式 QueuedConnection：worker 线程 → 主线程槽，避免 PySide6 在
         # 「emit 调用从 native threading.Thread 发起」场景下误判 sender thread 走 DirectConnection。
-        self._worker.rtt_data_received.connect(self._on_rtt_data, Qt.QueuedConnection)
+        self._worker.rtt_data_received.connect(
+            self._display_area.on_rtt_data, Qt.QueuedConnection
+        )
         self._worker.connection_state_changed.connect(self._on_state_changed, Qt.QueuedConnection)
         self._worker.unexpected_disconnect.connect(
             self._on_unexpected_disconnect, Qt.QueuedConnection
         )
         self._worker.reconnect_status.connect(self._on_reconnect_status, Qt.QueuedConnection)
 
-        self._cfg.font_changed.connect(self._apply_font)
+        self._cfg.font_changed.connect(self._display_area.apply_font)
         self._cfg.max_display_lines_changed.connect(self.display.setMaximumBlockCount)
 
         # 日志记录
@@ -1314,7 +1294,7 @@ class RTTMonitorPage(QWidget):
                 self._set_disconnected_ui()  # 幂等
                 self._worker.disconnect_requested.emit()
                 self._pending_reconnect = True
-                self._append_styled_line(
+                self._display_area.append_styled_line(
                     self.tr("设备连接丢失，等待恢复后自动重连…") + "\n",
                     PENDING_RECONNECT_COLOR,
                     bold=True,
@@ -1493,13 +1473,13 @@ class RTTMonitorPage(QWidget):
         -1 = 全部通道（合并视图）；>=0 = 具体通道（同时成为发送通道）。
         显示区历史不清——worker 始终读所有通道，UI 按通道缓存历史，切换只是换视图。
         """
-        self._view_channel = ch
+        self._display_area.set_view_channel(ch)
         if ch >= 0:
             self._send_channel = ch
         self._cfg.set("rtt_channel", ch)
         self._worker.set_rtt_channel_requested.emit(ch)
         self._update_send_ch_hint()
-        self._render_view()
+        self._display_area.render_view()
         self._update_stats()  # 接收统计立即按新通道口径刷新（不等 1s tick）
 
     def _update_send_ch_hint(self) -> None:
@@ -1507,7 +1487,7 @@ class RTTMonitorPage(QWidget):
         if not hasattr(self, "lbl_send_ch_hint") or not hasattr(self, "_send_channel"):
             return
         self.lbl_send_ch_hint.setText(self.tr("发送通道: {ch}").format(ch=self._send_channel))
-        self.lbl_send_ch_hint.setVisible(self._view_channel == CHANNEL_ALL)
+        self.lbl_send_ch_hint.setVisible(self._display_area.get_view_channel() == CHANNEL_ALL)
 
     def _update_channel_tooltip(self) -> None:
         """刷新 RTT 通道 SpinBox 的 tooltip。
@@ -1523,46 +1503,6 @@ class RTTMonitorPage(QWidget):
         else:
             tip(self.sp_channel, self.tr("全部 = 合并查看所有通道；发送走最近选中的具体通道"))
 
-    def _append_styled_line(
-        self, text: str, color: str, *, bold: bool = False, force_scroll: bool = False
-    ) -> None:
-        """在显示区末尾追加一行染色文本（自动滚动判断 + 程序性滚动围栏）。
-
-        发送回显 / 会话标记 / 意外断开红字提示 三处同形态：都是把一段带颜色的
-        文本追加到显示区末尾。统一在此处理 at_bottom 判断 + 换行 + cursor +
-        QTextCharFormat，避免每处各写一份而漏 reset 程序性滚动标志。
-
-        force_scroll=True 时不看 chk_auto_scroll（会话标记：用户主动插入，
-        即使关闭自动滚动也跟到末尾）；其余按 chk_auto_scroll 决定。
-
-        注意：这类「非 RTT 数据」的染色行只入显示区，**不写入 _channel_buffers /
-        _all_rtt_buffer**--它们不是通道数据，切通道重建视图时不应复现。
-        """
-        sb = self.display.verticalScrollBar()
-        at_bottom = sb.value() >= sb.maximum() - 4
-        cursor = self.display.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        if cursor.columnNumber() != 0:
-            cursor.insertText("\n")
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(color))
-        if bold:
-            fmt.setFontWeight(QFont.Bold)
-        cursor.insertText(text, fmt)
-        if at_bottom and (force_scroll or self.chk_auto_scroll.isChecked()):
-            with self._programmatic_scroll_guard():
-                sb.setValue(sb.maximum())
-
-    def _echo_sent_text(self, text: str) -> None:
-        """在显示区追加一行 » 开头的回显文本，颜色由 send_text_color 决定。
-
-        插入与自动滚动由 _append_styled_line 统一处理。
-        """
-        self._append_styled_line(
-            f"» {text}\n",
-            self._cfg.get("send_text_color") or DEFAULT_SEND_ECHO_COLOR,
-        )
-
     def _on_state_changed(self, connected: bool) -> None:
         from datetime import datetime
 
@@ -1576,7 +1516,7 @@ class RTTMonitorPage(QWidget):
             if self._cfg.get("auto_mark_on_connect"):
                 target = info.get("target_device", "—")
                 ts = datetime.now().strftime("%H:%M:%S")
-                self._insert_mark_text(
+                self._display_area.insert_mark_text(
                     self.tr("已连接 {target} @ {ts}").format(target=target, ts=ts)
                 )
         else:
@@ -1586,11 +1526,11 @@ class RTTMonitorPage(QWidget):
                 ts = datetime.now().strftime("%H:%M:%S")
                 remote_addr = prev_info.get("remote_addr", "")
                 if remote_addr:
-                    self._insert_mark_text(
+                    self._display_area.insert_mark_text(
                         self.tr("已断开远程 J-Link {addr} @ {ts}").format(addr=remote_addr, ts=ts)
                     )
                 else:
-                    self._insert_mark_text(self.tr("已断开 @ {ts}").format(ts=ts))
+                    self._display_area.insert_mark_text(self.tr("已断开 @ {ts}").format(ts=ts))
 
     def _update_channel_range_from_worker(self) -> None:
         """连接成功后按 MCU 上报的上行通道数收紧 SpinBox 上限（下限恒 -1=全部）。
@@ -1613,7 +1553,8 @@ class RTTMonitorPage(QWidget):
         # no-op 不发信号），所以不能靠信号同步。若 clamp 后的值与 _view_channel 不一致，
         # 直接复用 _on_channel_changed 同步三处状态（_view_channel/_send_channel/cfg/
         # worker/重渲染）。「全部通道」(-1) 永不拉回——对任何 MCU 都合法。
-        if clamped != self._view_channel and self._view_channel != CHANNEL_ALL:
+        vc = self._display_area.get_view_channel()
+        if clamped != vc and vc != CHANNEL_ALL:
             self._on_channel_changed(clamped)
         self._update_channel_tooltip()
 
@@ -1632,7 +1573,7 @@ class RTTMonitorPage(QWidget):
             msg = f"{ts} -> {self.tr('远程 J-Link')} {self._last_remote_addr} {self.tr('连接意外断开')}\n"
         else:
             msg = f"{ts} -> {device} {self.tr('连接意外断开')}\n"
-        self._append_styled_line(msg, DISCONNECT_ALERT_COLOR, bold=True)
+        self._display_area.append_styled_line(msg, DISCONNECT_ALERT_COLOR, bold=True)
         self._request_disconnect(pending_reconnect=True)
 
     def _on_auto_reconnect_toggled(self, checked: bool) -> None:
@@ -1667,7 +1608,7 @@ class RTTMonitorPage(QWidget):
             line = self.tr("自动重连已取消")
         else:
             return
-        self._append_styled_line(
+        self._display_area.append_styled_line(
             f"{ts} -> {line}\n", RECONNECT_COLORS.get(kind, "#888888"), bold=True
         )
 
@@ -1711,7 +1652,7 @@ class RTTMonitorPage(QWidget):
         remote_addr = info.get("remote_addr", "")
         self._last_remote_addr = remote_addr
         if remote_addr:
-            self._append_styled_line(
+            self._display_area.append_styled_line(
                 f"──── {self.tr('已连接远程 J-Link {addr} (S/N: {sn})').format(addr=remote_addr, sn=info.get('jlink_serial', '-'))} ────\n",
                 REMOTE_MARK_COLOR,
                 bold=True,
@@ -1758,7 +1699,8 @@ class RTTMonitorPage(QWidget):
         """
         if not hasattr(self, "lbl_status_duration"):
             return
-        ch = None if self._view_channel == CHANNEL_ALL else self._view_channel
+        vc = self._display_area.get_view_channel()
+        ch = None if vc == CHANNEL_ALL else vc
         st = self._worker.get_stats(ch)
         total_b, start_ts = st["bytes"], st["session_start_ts"]
         # 接收：总数 - 上一次接收增量（自上次轮询起的新增字节）
@@ -1773,7 +1715,7 @@ class RTTMonitorPage(QWidget):
                 self.tr("时长: {duration}").format(duration="00:00:00")
             )
             return
-        secs = int(self._time_mod.time() - start_ts)
+        secs = int(time.time() - start_ts)
         hh, mm, ss = secs // 3600, (secs % 3600) // 60, secs % 60
         self.lbl_status_duration.setText(
             self.tr("时长: {duration}").format(duration=f"{hh:02d}:{mm:02d}:{ss:02d}")
@@ -1783,204 +1725,6 @@ class RTTMonitorPage(QWidget):
         if hasattr(self, "lbl_status_encoding"):
             display: str = ENCODING_LABEL_MAP.get(encoding, encoding.upper())
             self.lbl_status_encoding.setText(self.tr("编码: {name}").format(name=display))
-
-    def _on_rtt_data(self, channel: int, text: str) -> None:
-        """worker 50ms 合并后按通道推来的数据：先按通道入历史缓冲，再决定渲染。
-
-        - 缓冲：_channel_buffers[ch] 存该通道历史，_all_rtt_buffer 存合并历史，
-          上限 rtt_channel_history_chars（默认 200k，超出丢最旧）。
-        - 渲染：仅当数据通道与当前视图匹配才实时插入显示区
-          （全部通道视图 = 任何通道都渲染）。
-        """
-        if not text:
-            return
-
-        # 1) 按通道入历史缓冲（无论当前是否查看，保证切通道后历史完整）
-        limit = int(self._cfg.get("rtt_channel_history_chars") or 200000)
-        buf = self._channel_buffers.get(channel, "") + text
-        if len(buf) > limit:
-            buf = buf[-limit:]
-        self._channel_buffers[channel] = buf
-        self._all_rtt_buffer += text
-        if len(self._all_rtt_buffer) > limit:
-            self._all_rtt_buffer = self._all_rtt_buffer[-limit:]
-
-        # 2) 视图不匹配：只入缓冲，不渲染（数据已由 worker 按通道合并，此处是纯显示分支）
-        if self._view_channel != CHANNEL_ALL and channel != self._view_channel:
-            return
-
-        # 3) 实时渲染（当前视图通道的数据）
-        # 自动断帧：仅「非全部通道」视图启用——多通道合并视图里时间间隙没有帧语义
-        now = self._time_mod.time()
-        if (
-            self._view_channel != CHANNEL_ALL
-            and self.chk_auto_frame.isChecked()
-            and self._last_rx_time > 0
-            and (now - self._last_rx_time) * 1000 > self._send_bar._get_frame_timeout_ms()
-        ):
-            # 插入换行分隔不同帧
-            sb_pre = self.display.verticalScrollBar()
-            at_b = sb_pre.value() >= sb_pre.maximum() - 4
-            tc = self.display.textCursor()
-            tc.movePosition(QTextCursor.End)
-            if tc.columnNumber() != 0:
-                tc.insertText("\n")
-            if at_b and self.chk_auto_scroll.isChecked():
-                with self._programmatic_scroll_guard():
-                    sb_pre.setValue(sb_pre.maximum())
-        self._last_rx_time = now
-
-        # 自动滚动判断必须在插入文本前
-        sb = self.display.verticalScrollBar()
-        at_bottom = sb.value() >= sb.maximum() - 4
-
-        cursor = self.display.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.beginEditBlock()
-        try:
-            if self.chk_hex_display.isChecked():
-                # HEX 显示：将文本编码为字节，每字节大写 HEX + 空格
-                try:
-                    raw = text.encode(self._cfg.get("rtt_encoding") or "utf-8", errors="replace")
-                except LookupError:
-                    raw = text.encode("utf-8", errors="replace")
-                hex_str = " ".join(f"{b:02X}" for b in raw)
-                cursor.insertText(hex_str + " ")
-            else:
-                for seg, attrs in parse_ansi(text):
-                    cursor.insertText(seg, self._fmt(attrs))
-        finally:
-            cursor.endEditBlock()
-
-        if at_bottom and self.chk_auto_scroll.isChecked():
-            with self._programmatic_scroll_guard():
-                sb.setValue(sb.maximum())
-
-    def _render_view(self) -> None:
-        """切通道后重建显示区：把当前视图通道的历史缓冲重新 ANSI 解析 + 渲染。
-
-        重建是一次性的（切通道动作），渲染后滚到底。搜索高亮 / 匹配计数属于旧文档，
-        重建后清空（搜索栏本身保留，用户可重新搜索）。
-        """
-        if self._view_channel == CHANNEL_ALL:
-            text = self._all_rtt_buffer
-        else:
-            text = self._channel_buffers.get(self._view_channel, "")
-        self.display.setExtraSelections([])
-        self.display.clear()
-        if not text:
-            return
-        cursor = self.display.textCursor()
-        if self.chk_hex_display.isChecked():
-            try:
-                raw = text.encode(self._cfg.get("rtt_encoding") or "utf-8", errors="replace")
-            except LookupError:
-                raw = text.encode("utf-8", errors="replace")
-            cursor.insertText(" ".join(f"{b:02X}" for b in raw) + " ")
-        else:
-            for seg, attrs in parse_ansi(text):
-                cursor.insertText(seg, self._fmt(attrs))
-        with self._programmatic_scroll_guard():
-            self.display.verticalScrollBar().setValue(self.display.verticalScrollBar().maximum())
-
-    def _on_clear_clicked(self) -> None:
-        """清除按钮：显示区 + 所有通道历史缓冲一并清空（明确丢弃历史）。"""
-        self.display.clear()
-        self._channel_buffers.clear()
-        self._all_rtt_buffer = ""
-
-    def _on_auto_scroll_toggled(self, checked: bool) -> None:
-        """checkbox 勾选/取消：持久化 + 勾选时立即跳到底并恢复跟踪。"""
-        self._cfg.set("auto_scroll", checked)
-        if checked:
-            sb = self.display.verticalScrollBar()
-            with self._programmatic_scroll_guard():
-                sb.setValue(sb.maximum())
-
-    def _on_display_scrolled(self, _value: int) -> None:
-        """display 滚动条 valueChanged：双向同步 chk_auto_scroll。
-        - 已勾选 + 用户上滚离开底部 → 取消勾选（停止自动滚动）
-        - 未勾选 + 用户滚回底部 → 重新勾选（恢复自动滚动）
-        程序性 sb.setValue() 不触发（_programmatic_scroll_guard 过滤）。
-        """
-        if self._programmatic_scroll:
-            return
-        sb = self.display.verticalScrollBar()
-        at_bottom = sb.value() >= sb.maximum() - 4
-        is_checked = self.chk_auto_scroll.isChecked()
-        if is_checked and not at_bottom:
-            self._set_auto_scroll_silent(False)
-        elif not is_checked and at_bottom:
-            self._set_auto_scroll_silent(True)
-
-    def _set_auto_scroll_silent(self, checked: bool) -> None:
-        """改 checkbox + 落 cfg，但不触发 _on_auto_scroll_toggled 回调
-        （避免它再发起一次程序性 setValue 形成回环）。"""
-        self.chk_auto_scroll.blockSignals(True)
-        self.chk_auto_scroll.setChecked(checked)
-        self.chk_auto_scroll.blockSignals(False)
-        self._cfg.set("auto_scroll", checked)
-
-    def _insert_mark_text(self, text: str) -> None:
-        """在显示区追加一行视觉分隔的标记。颜色由 cfg.mark_color 决定。
-
-        text="" → 插入纯分隔线 ──────。
-        被用户点 "插入标记" + 连接/断开自动标记共用。
-        """
-        line = f"──── {text} ────" if text else "─" * 50
-        self._append_styled_line(
-            line + "\n",
-            self._cfg.get("mark_color") or "#ffff55",
-            bold=True,
-            force_scroll=True,
-        )
-
-    def _on_insert_mark(self) -> None:
-        text = self.le_mark.currentText().strip()
-        if text:
-            if text in self._mark_history:
-                self._mark_history.remove(text)
-            self._mark_history.append(text)
-            self._mark_history = self._mark_history[-10:]
-            self.le_mark.clear()
-            self.le_mark.addItems(reversed(self._mark_history))
-        self._insert_mark_text(text)
-        # qfluentwidgets EditableComboBox 没有 clearEditText()——用 setCurrentText 替代
-        self.le_mark.setCurrentText("")
-
-    def _fmt(self, attrs: AnsiAttrs) -> QTextCharFormat:
-        # 注意：QColor 必须从预构造表查（ANSI_QCOLORS），不要 QColor(hex_string)。
-        # RTT 高吞吐时本函数每段都调，每次构造 QColor 是不必要的 syscall + alloc。
-        fmt = QTextCharFormat()
-        if attrs.fg:
-            fmt.setForeground(ANSI_QCOLORS.get(attrs.fg, DEFAULT_FG_QCOLOR))
-        if attrs.bg:
-            fmt.setBackground(ANSI_QCOLORS.get(attrs.bg, DEFAULT_BG_QCOLOR))
-        if attrs.bold:
-            # 用 setFontWeight 而非 setFont(fmt.font())——后者会把字号也设回
-            # QTextCharFormat 默认值（通常远小于 widget 字号），导致 bold
-            # 段落字号被缩水。setFontWeight 只改 weight，字号继承 widget。
-            fmt.setFontWeight(QFont.Bold)
-        return fmt
-
-    def _apply_font(self, family: str, size: int) -> None:
-        font = QFont(family, size)
-        if font.family() != family:
-            # 字体回落到等宽字体
-            font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
-            font.setPointSize(size)
-        self.display.setFont(font)
-        # 标记专属字体：全局界面字号热更新时跳过，保持等宽 + RTT 专用字号
-        self.display.setProperty("_custom_font", True)
-        # 同步右上角字号显示
-        if hasattr(self, "lbl_font_size"):
-            self.lbl_font_size.setText(str(size))
-
-    def _adjust_font_size(self, delta: int) -> None:
-        cur = int(self._cfg.get("font_size"))
-        new = max(_FONT_SIZE_MIN, min(_FONT_SIZE_MAX, cur + delta))
-        if new != cur:
-            self._cfg.set("font_size", new)
 
     # ------------------------------------------------------------------
     # 日志记录 / 保存当前 / 搜索 / 错误提示

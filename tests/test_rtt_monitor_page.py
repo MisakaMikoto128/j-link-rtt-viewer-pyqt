@@ -181,7 +181,7 @@ def test_rtt_data_received_appends_to_display(rtt_page, qtbot):
 def test_insert_mark_text_writes_session_marker(rtt_page, qtbot):
     """_insert_mark_text 应在 display 追加 ──── text ──── 分隔行。"""
     page, _, _ = rtt_page
-    page._insert_mark_text("已连接 STM32 @ 12:34:56")
+    page._display_area.insert_mark_text("已连接 STM32 @ 12:34:56")
     text = page.display.toPlainText()
     assert "──── 已连接 STM32 @ 12:34:56 ────" in text
 
@@ -202,7 +202,7 @@ def test_programmatic_scroll_guard_blocks_auto_scroll_uncheck(rtt_page, qtbot):
     page, _, _ = rtt_page
     assert page.chk_auto_scroll.isChecked()
     sb = page.display.verticalScrollBar()
-    with page._programmatic_scroll_guard():
+    with page._display_area.programmatic_scroll_guard():
         sb.setValue(0)  # 模拟程序性回滚到顶部
     qtbot.wait(20)
     # 仍勾选 — guard 内的滚动事件被 _on_display_scrolled 忽略
@@ -457,7 +457,7 @@ def test_all_channels_view_merges_and_send_hint(rtt_page, qtbot):
 
     page.sp_channel.setValue(-1)  # 全部通道
     qtbot.wait(20)
-    assert page._view_channel == -1
+    assert page._display_area._view_channel == -1
     assert page._send_channel == 1, "全部通道视图不应改动发送通道"
     # isVisible() 在父 widget 未 show 时恒 False；显隐状态用 isHidden() 判定
     assert not page.lbl_send_ch_hint.isHidden()
@@ -482,13 +482,13 @@ def test_clear_button_clears_channel_buffers(rtt_page, qtbot):
     worker.rtt_data_received.emit(0, "ch0-data\n")
     worker.rtt_data_received.emit(1, "ch1-data\n")
     qtbot.wait(30)
-    assert page._channel_buffers.get(0)
-    assert page._channel_buffers.get(1)
+    assert page._display_area._channel_buffers.get(0)
+    assert page._display_area._channel_buffers.get(1)
     page.btn_clear.click()
     qtbot.wait(20)
     assert page.display.toPlainText() == ""
-    assert page._channel_buffers == {}
-    assert page._all_rtt_buffer == ""
+    assert page._display_area._channel_buffers == {}
+    assert page._display_area._all_rtt_buffer == ""
 
 
 # ============================================================
@@ -504,14 +504,14 @@ def test_overflow_channel_pulled_back_on_connect(rtt_page, qtbot):
     worker._num_up = 1  # MCU 只有通道 0
     page.sp_channel.setValue(4)  # 用户故意选 4
     qtbot.wait(20)
-    assert page._view_channel == 4
+    assert page._display_area._view_channel == 4
 
     worker.connection_state_changed.emit(True)
     qtbot.wait(30)
     # 上限收紧到 0，且显式拉回 → 三处一致
     assert page.sp_channel.maximum() == 0
     assert page.sp_channel.value() == 0
-    assert page._view_channel == 0, "超出上限后 _view_channel 应同步拉回 0"
+    assert page._display_area._view_channel == 0, "超出上限后 _view_channel 应同步拉回 0"
     assert page._send_channel == 0
 
     # 此时通道 0 数据应正常显示（bug 修复前因 _view_channel=4 过滤而空白）
@@ -529,7 +529,7 @@ def test_all_channel_not_pulled_back_on_connect(rtt_page, qtbot):
     worker.connection_state_changed.emit(True)
     qtbot.wait(30)
     assert page.sp_channel.value() == -1, "全部通道不应因连接被退出"
-    assert page._view_channel == -1
+    assert page._display_area._view_channel == -1
 
 
 # ============================================================

@@ -1187,16 +1187,17 @@ class _SignalSpy(QObject):
 
 ---
 
-## UI 模块拆分（rtt_monitor_page.py 3083 -> 2185）
+## UI 模块拆分（rtt_monitor_page.py 3083 -> 1929）
 
 **背景**：`rtt_monitor_page.py` 曾 3083 行，太大难导航。按职责拆出低耦合部分，主类状态机留主文件。
 
-**处理**（Step 1-3 + Step 5，commit `0ae7465` / `9ef221d` / `42e8351` / `7b17f02`）：
-- **Step 1 辅助类**（3083 -> 2740）：`_VResizeHandle`/`_ColorComboButton`/`_ColorGridPopup`/`_RemoteProbeHelper`/`_TcpReachableRunnable` + ANSI 调色板/标记色/编码映射 + `_tip`/`_section_separator` 拆到 `widgets/v_resize_handle.py` / `widgets/color_picker.py` / `widgets/remote_probe.py`（合并 rtt+flash 远程探测）/ `_rtt_colors.py` / `_ui_helpers.py`（search_bar 的 `_tip` 也合并）。类名/常量名去 `_` 前缀（跨模块公开）。
+**处理**（Step 1-5，commit `0ae7465` / `9ef221d` / `42e8351` / `7b17f02` / `<本轮>`）：
+- **Step 1 辅助类**（3083 -> 2740）：`_ColorComboButton`/`_ColorGridPopup`/`_RemoteProbeHelper`/`_TcpReachableRunnable` + ANSI 调色板/标记色/编码映射 + `_tip`/`_section_separator` 拆到 `widgets/color_picker.py` / `widgets/remote_probe.py`（合并 rtt+flash 远程探测）/ `_rtt_colors.py` / `_ui_helpers.py`（search_bar 的 `_tip` 也合并）。类名/常量名去 `_` 前缀（跨模块公开）。`_VResizeHandle` 当时一并拆出但**从未被实例化**（死代码），后续已删 `widgets/v_resize_handle.py`--拆分时不要"预判性拆出"没人用的组件。
 - **Step 2 搜索逻辑**（2740 -> 2535）：搜索/替换方法拆到 `_rtt_search.py` `SearchHandler(QObject)`，持有 display + search_bar + `_match_count_timer`。RTTMonitorPage 保留 `on_shortcut_find/replace` 转发（main_window 快捷键连接不变）。删死代码 `_update_match_count`。
 - **Step 5 悬浮卡片**（2535 -> 2396）：`FloatingPanel(QObject)` 拆到 `widgets/floating_panel.py`，持有卡片 widget + 透明度/位移动画，暴露 `card_widget`/`content_layout`/`show_card`/`hide_card`/`reposition`/`stop_animations` 接口。RTTMonitorPage 负责 `_config_panel` reparent + 何时 show/hide。删 7 个方法。修 `QGraphicsOpacityEffect` import（`QtWidgets` 非 `QtGui`）。
-- **Step 3 发送栏**（2396 -> 2185）：`SendBar(QObject)` 拆到 `_send_bar.py`，持有 12 控件引用（`SendBarControls` dataclass）+ cfg，信号通信（`send_requested`/`echo_requested`/`stats_changed`/`warn_requested`）。`_append_styled_line`/`_echo_sent_text` 留主类（显示区逻辑）。`_set_connected_ui`/`_set_disconnected_ui` 调 `set_connected`（测试绕过 `_on_state_changed` 也能更新 SendBar）。集成测试兜底（`test_integration_*` 4 个）。
+- **Step 3 发送栏**（2396 -> 2185）：`SendBar(QObject)` 拆到 `_send_bar.py`，持有 12 控件引用（`SendBarControls` dataclass）+ cfg，信号通信（`send_requested`/`echo_requested`/`stats_changed`/`warn_requested`）。`_append_styled_line`/`_echo_sent_text` 当时留主类（显示区逻辑，Step 4 一并移走）。`_set_connected_ui`/`_set_disconnected_ui` 调 `set_connected`（测试绕过 `_on_state_changed` 也能更新 SendBar）。集成测试兜底（`test_integration_*` 4 个）。
+- **Step 4 显示区**（2185 -> 1929）：`DisplayArea(QObject)` 拆到 `_display_area.py`，持有 display + 5 控件引用（`DisplayAreaControls` dataclass：chk_auto_scroll/chk_auto_frame/chk_hex_display/le_mark/lbl_font_size）+ cfg + send_bar 引用（单向，用于 `_get_frame_timeout_ms` 自动断帧）。移走 13 个方法（on_rtt_data/render_view/on_clear_clicked/on_auto_scroll_toggled/on_display_scrolled/_set_auto_scroll_silent/append_styled_line/echo_sent_text/insert_mark_text/on_insert_mark/_fmt/apply_font/adjust_font_size）+ 6 个状态（_channel_buffers/_all_rtt_buffer/_view_channel/_programmatic_scroll/_last_rx_time/_mark_history）。纯被动：worker.rtt_data_received -> on_rtt_data；按钮 clicked -> on_*。主类编排方法（`_on_channel_changed`/`_update_stats`/`_update_channel_range_from_worker`/`_update_send_ch_hint`）通过 `get_view_channel()`/`set_view_channel()` 读写视图通道，`render_view()` 触发重渲染，`append_styled_line()`/`insert_mark_text()` 给 `_on_unexpected_disconnect`/`_on_reconnect_status`/`_on_state_changed` 调。测试引用 `page._display_area._view_channel` 等（8 处）。
 
-**未做（高风险，下一轮）**：`_DisplayArea` / `_CommandPanel` 拆分。`_DisplayArea` 的 `_on_rtt_data`（72 行）+ `_channel_buffers`/`_all_rtt_buffer`/`_view_channel`/`_programmatic_scroll` 核心状态被 `_on_state_changed`/`_on_channel_changed` 直接读写；`_CommandPanel` 含 `_is_connected` + 设备枚举 + 连接/断开 + `_build_left_panel` 458 行 UI 重组。建议每个单独一轮 + 真机 smoke。
+**未做（高风险，下一轮）**：`_CommandPanel` 拆分。含 `_is_connected` + 设备枚举 + 连接/断开 + `_build_left_panel` 458 行 UI 重组。建议单独一轮 + 真机 smoke。
 
-**判别**：拆分时只拆「低耦合辅助组件 + 独立逻辑」（靠信号通信，不持有主类状态），不拆「主类状态机」（全局状态强耦合）。`_VResizeHandle` 曾是死代码（定义无实例化），拆出后 ruff 正确识别未用 import -- 拆分时顺便清死代码。
+**判别**：拆分时只拆「低耦合辅助组件 + 独立逻辑」（靠信号通信，不持有主类状态），不拆「主类状态机」（全局状态强耦合）。`_VResizeHandle` 曾是死代码（定义无实例化），拆出后 ruff 正确识别未用 import -- 拆分时顺便清死代码。Step 4 的 `_view_channel` 被主类 5+ 处读写，用 `get_view_channel()`/`set_view_channel()` 暴露而非属性代理（避免 `__getattr__` 转发反模式）；`_time_mod` 主类 `_update_stats` 仍要用，直接 `import time` + `time.time()`，不留 `self._time_mod` 别名。

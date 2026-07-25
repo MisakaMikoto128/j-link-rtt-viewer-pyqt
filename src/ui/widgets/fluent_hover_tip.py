@@ -1,7 +1,7 @@
 """Fluent 风格的「跟随鼠标」hover tooltip。
 
 qfluentwidgets 的 `ToolTipFilter` 只支持「相对固定 widget 定位」的静态 tooltip；
-但内存查看页 / RTT 页的 hover 提示需要：
+但内存查看页的 hover 提示需要：
   1. 内容随鼠标位置动态计算（逐字节解析、逐行信息）；
   2. 位置跟随鼠标而不是相对某个固定控件。
 

@@ -72,8 +72,6 @@ class ConfigService(QObject):
         "auto_scroll": True,
         "power_output": False,
         "log_recording": False,
-        # RTT 页 display 的固定高度（px）；用户拖 _VResizeHandle 时持久化更新
-        "rtt_display_height": 500,
         # 会话标记颜色（用户插入标记 + 连接/断开自动标记共用）；hex string
         "mark_color": "#ffff55",
         # 发送回显颜色：勾选"显示发送字符串"后在显示区追加的 » 行颜色；hex string
