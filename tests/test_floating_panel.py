@@ -76,11 +76,11 @@ def test_normal_mode_panel_in_layout_card_hidden(rtt_page, qtbot):
     """正常模式：面板在 main_split 布局中，悬浮卡片隐藏，toggle 按钮不可见。"""
     page, _, _ = rtt_page
     assert page._config_visible is True
-    assert page._floating_card.isVisible() is False
+    assert page._floating_panel.card_widget().isVisible() is False
     assert page._toolbar.isVisible() is False
     assert page.btn_panel_toggle.isVisible() is False
     # 面板的 parent 应该不是悬浮卡片（在布局中）
-    assert page._config_panel.parent() is not page._floating_card
+    assert page._config_panel.parent() is not page._floating_panel.card_widget()
 
 
 # ── 收窄模式 ──────────────────────────────────────────────────────
@@ -95,9 +95,9 @@ def test_narrow_mode_panel_reparented_to_card(rtt_page, qtbot):
     assert page._toolbar.isVisible() is True
     assert page.btn_panel_toggle.isVisible() is True
     # 面板已 reparent 到悬浮卡片
-    assert page._config_panel.parent() is page._floating_card
+    assert page._config_panel.parent() is page._floating_panel.card_widget()
     # 卡片默认隐藏
-    assert page._floating_card.isVisible() is False
+    assert page._floating_panel.card_widget().isVisible() is False
     assert page.btn_panel_toggle.isChecked() is False
 
 
@@ -108,7 +108,7 @@ def test_toggle_button_shows_card(rtt_page, qtbot):
     qtbot.wait(50)
     page.btn_panel_toggle.setChecked(True)
     qtbot.wait(300)  # 等动画完成
-    assert page._floating_card.isVisible() is True
+    assert page._floating_panel.card_widget().isVisible() is True
     assert page.btn_panel_toggle.isChecked() is True
 
 
@@ -121,7 +121,7 @@ def test_toggle_button_hides_card(rtt_page, qtbot):
     qtbot.wait(300)
     page.btn_panel_toggle.setChecked(False)
     qtbot.wait(300)
-    assert page._floating_card.isVisible() is False
+    assert page._floating_panel.card_widget().isVisible() is False
     assert page.btn_panel_toggle.isChecked() is False
 
 
@@ -136,7 +136,7 @@ def test_card_popup_does_not_exit_narrow_mode(rtt_page, qtbot):
     assert page._config_visible is False
     assert page._toolbar.isVisible() is True
     # 面板仍在卡片中
-    assert page._config_panel.parent() is page._floating_card
+    assert page._config_panel.parent() is page._floating_panel.card_widget()
 
 
 def test_back_to_normal_mode_restores_panel(rtt_page, qtbot):
@@ -150,11 +150,11 @@ def test_back_to_normal_mode_restores_panel(rtt_page, qtbot):
     page._set_config_panel_visible(True)
     qtbot.wait(50)
     assert page._config_visible is True
-    assert page._floating_card.isVisible() is False
+    assert page._floating_panel.card_widget().isVisible() is False
     assert page.btn_panel_toggle.isChecked() is False
     assert page._toolbar.isVisible() is False
     # 面板回到布局
-    assert page._config_panel.parent() is not page._floating_card
+    assert page._config_panel.parent() is not page._floating_panel.card_widget()
 
 
 def test_card_content_is_same_panel_widget(rtt_page, qtbot):
@@ -181,7 +181,7 @@ def test_card_show_animation_only_x_direction(rtt_page, qtbot):
     # 在动画开始前捕获 start value
     page.btn_panel_toggle.setChecked(True)
     # 立即检查动画的 start/end value（动画刚启动）
-    pos_anim = page._card_pos_anim
+    pos_anim = page._floating_panel._pos_anim
     start_val = pos_anim.startValue()
     end_val = pos_anim.endValue()
     assert start_val is not None and end_val is not None
