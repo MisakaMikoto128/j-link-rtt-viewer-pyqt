@@ -1005,7 +1005,8 @@ class JLinkWorker(QObject):
             self._log_file = open(  # noqa: SIM115 log file held until _close_log_file
                 self._log_path, "a", encoding="utf-8", buffering=1
             )
-            self.command_result.emit("log_recording", True, "")
+            # msg 传文件路径：UI 据此弹 InfoBar + 「打开文件夹」按钮（停止时 msg 空）
+            self.command_result.emit("log_recording", True, self._log_path)
         except Exception as e:
             self._logger.error(f"开始日志记录失败：{e}")
             self.command_result.emit("log_recording", False, str(e))

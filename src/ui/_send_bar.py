@@ -56,6 +56,23 @@ class SendBar(QObject):
         self._frame_tip = None
         self._frame_help_title = self.tr("自动断帧")
         self._frame_help_content = self._build_frame_help_content()
+        # 恢复持久化状态（在连接信号之前，setChecked 不触发 slot 副作用）
+        controls.chk_auto_frame.setChecked(bool(cfg.get("auto_frame")))
+        controls.chk_timed_send.setChecked(bool(cfg.get("timed_send")))
+        controls.le_timed_interval.setText(str(cfg.get("timed_send_interval") or "1.0"))
+        controls.chk_show_send_text.setChecked(bool(cfg.get("show_send_text")))
+        controls.chk_crc_script.setChecked(bool(cfg.get("crc_script_enabled")))
+        # 勾选态下参数控件锁定（复现 _on_*_toggled 的副作用，构造时手动补）
+        if controls.chk_auto_frame.isChecked():
+            controls.le_frame_timeout.setEnabled(False)
+            controls.btn_frame_help.setEnabled(False)
+        if controls.chk_timed_send.isChecked():
+            controls.le_timed_interval.setEnabled(False)
+            controls.btn_timed_unit.setEnabled(False)
+            self._timed_send_pending = True  # 未连接 -> 连接后自动启动
+        # chk_crc_script 勾选时的样式由 _on_crc_script_toggled 负责，构造时补一次
+        if controls.chk_crc_script.isChecked():
+            self._on_crc_script_toggled(True)
         # 连接控件信号
         controls.btn_send.clicked.connect(self._on_send_clicked)
         controls.chk_crc_script.toggled.connect(self._on_crc_script_toggled)
@@ -63,6 +80,14 @@ class SendBar(QObject):
         controls.btn_frame_help.clicked.connect(self._on_frame_help_clicked)
         controls.chk_auto_frame.toggled.connect(self._on_auto_frame_toggled)
         controls.chk_timed_send.toggled.connect(self._on_timed_send_toggled)
+        # 持久化纯状态控件（无 slot 副作用，直接落 cfg）
+        controls.chk_show_send_text.toggled.connect(
+            lambda c: cfg.set("show_send_text", c)
+        )
+        # 定时发送间隔：textChanged 节流落盘（cfg.set 自带 200ms 节流）
+        controls.le_timed_interval.textChanged.connect(
+            lambda t: cfg.set("timed_send_interval", t)
+        )
 
     # ---- 公开接口 ----
 
@@ -153,7 +178,8 @@ class SendBar(QObject):
             self.echo_requested.emit(orig_text)
 
     def _on_crc_script_toggled(self, checked: bool) -> None:
-        """CRC 脚本 checkbox 切换：顶部边框上色 + 由上而下的红色渐变背景。"""
+        """CRC 脚本 checkbox 切换：持久化 + 顶部边框上色 + 由上而下的红色渐变背景。"""
+        self._cfg.set("crc_script_enabled", checked)
         if checked:
             self._te_send_orig_ss = self._c.te_send.styleSheet()
             _crc_css = (
@@ -234,7 +260,8 @@ class SendBar(QObject):
         view.closed.connect(self._frame_tip.close)
 
     def _on_auto_frame_toggled(self, checked: bool) -> None:
-        """自动断帧 checkbox 切换：选中 = 功能启用，参数锁定（禁用编辑）。"""
+        """自动断帧 checkbox 切换：持久化 + 选中 = 功能启用，参数锁定（禁用编辑）。"""
+        self._cfg.set("auto_frame", checked)
         self._c.le_frame_timeout.setEnabled(not checked)
         self._c.btn_frame_help.setEnabled(not checked)
 
@@ -248,7 +275,8 @@ class SendBar(QObject):
     # ---- 定时发送 ----
 
     def _on_timed_send_toggled(self, checked: bool) -> None:
-        """定时发送 checkbox 切换：选中 = 功能启用，参数锁定（禁用编辑）。"""
+        """定时发送 checkbox 切换：持久化 + 选中 = 功能启用，参数锁定（禁用编辑）。"""
+        self._cfg.set("timed_send", checked)
         self._c.le_timed_interval.setEnabled(not checked)
         self._c.btn_timed_unit.setEnabled(not checked)
         if checked:

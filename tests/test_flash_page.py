@@ -80,18 +80,18 @@ def test_select_nonexistent_path_does_not_crash_or_persist(flash_page, tmp_path)
     assert before == after
 
 
-def test_recent_files_capped_at_10(flash_page, tmp_path):
-    """最近文件列表上限 10——继续添加最旧的应被淘汰。"""
-    # 造 12 个真实存在的文件
+def test_recent_files_capped_at_8(flash_page, tmp_path):
+    """最近文件列表上限 8——继续添加最旧的应被淘汰。"""
+    # 造 10 个真实存在的文件
     paths = []
-    for i in range(12):
+    for i in range(10):
         p = tmp_path / f"f{i}.bin"
         p.write_bytes(b"\x00" * 4)
         paths.append(str(p))
     for p in paths:
         flash_page._select_file(p)
     recent = flash_page._cfg.get("flash_recent_files")
-    assert len(recent) == 10
+    assert len(recent) == 8
     # 最后选的应在最前，最旧的两个被淘汰
     assert recent[0] == paths[-1]
     assert paths[0] not in recent

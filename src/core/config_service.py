@@ -69,7 +69,13 @@ class ConfigService(QObject):
         "log_dir": "",  # 空 → 用默认 %APPDATA%/JLinkRTTViewer/logs
         "window_geometry": "",  # base64 of QByteArray
         "hex_send_mode": False,
+        "hex_display": False,  # 十六进制显示（接收侧 chk_hex_display）
         "auto_scroll": True,
+        "auto_frame": False,  # 自动断帧（chk_auto_frame）
+        "timed_send": False,  # 定时发送（chk_timed_send）
+        "timed_send_interval": "1.0",  # 定时发送间隔（秒，le_timed_interval 文本）
+        "show_send_text": False,  # 显示发送字符串（chk_show_send_text，发送回显）
+        "crc_script_enabled": False,  # 脚本勾选（chk_crc_script；cb_crc_algo 索引见 send_script_index）
         "power_output": False,
         "log_recording": False,
         # 会话标记颜色（用户插入标记 + 连接/断开自动标记共用）；hex string
@@ -124,7 +130,7 @@ class ConfigService(QObject):
         "flash_verify": False,  # extra byte-by-byte verify
         # CMSIS-Pack 存储目录（pyOCD 烧录用）。空串 = 默认 user_prefs 同级 packs/ 目录。
         "pack_data_path": "",
-        "flash_recent_files": [],  # 最多 10 个，时间倒序
+        "flash_recent_files": [],  # 最多 8 个，时间倒序
         "flash_recent_files_mtime": {},  # path → mtime（float），用于变更提示
         # 烧录页目标设备输入历史（最近使用 8 条），与 rtt_target_history 分开。
         "flash_device_history": [],

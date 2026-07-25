@@ -309,7 +309,7 @@ class FlashPage(QWidget):
 
         row = QHBoxLayout()
         row.addWidget(BodyLabel("File:"))
-        self.cmb_file = EditableComboBox()  # 最近 10 文件下拉
+        self.cmb_file = EditableComboBox()  # 最近 8 文件下拉
         self.cmb_file.setMinimumWidth(360)
         row.addWidget(self.cmb_file, 1)
         self.btn_browse = PushButton(self.tr("浏览…"))
@@ -943,13 +943,17 @@ class FlashPage(QWidget):
         if path in recent:
             recent.remove(path)
         recent.insert(0, path)
-        recent = recent[:10]
+        recent = recent[:8]
         self._cfg.set("flash_recent_files", recent)
         self._rebuild_file_combo(recent, select_index=0)
         self._parse_and_show(path, silent=False)
 
     def _on_file_text_changed(self, text: str) -> None:
-        """用户从下拉选择 / 手动输入路径：仅解析显示，不改最近文件顺序。"""
+        """用户从下拉选择 / 手动输入路径：置顶到 recent + 解析显示。
+
+    置顶后下次重启选中 recent[0] = 上次选的文件。不重建下拉（避免
+    lineEdit 抖动）；下拉 items 顺序下次重启时按 cfg 重建。
+    """
         text = text.strip()
         if not text or not os.path.exists(text):
             if not text:
@@ -961,6 +965,13 @@ class FlashPage(QWidget):
                 self.flash_bar.clear()
                 self.symbol_card.setVisible(False)
             return
+        recent = list(self._cfg.get("flash_recent_files") or [])
+        if not recent or recent[0] != text:
+            if text in recent:
+                recent.remove(text)
+            recent.insert(0, text)
+            recent = recent[:8]
+            self._cfg.set("flash_recent_files", recent)
         self._parse_and_show(text, silent=True)
 
     def _parse_and_show(self, path: str, silent: bool = False) -> None:

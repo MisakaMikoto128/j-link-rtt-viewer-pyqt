@@ -513,6 +513,7 @@ class RTTMonitorPage(QWidget):
         # HEX 显示
         self.chk_hex_display = CheckBox(self.tr("十六进制显示"))
         self.chk_hex_display.setFixedHeight(_CTRL_H)
+        self.chk_hex_display.setChecked(bool(self._cfg.get("hex_display")))
         tip(self.chk_hex_display, self.tr("将接收到的每个字节以大写的 HEX 格式显示"))
         v.addWidget(self.chk_hex_display)
 
@@ -732,9 +733,12 @@ class RTTMonitorPage(QWidget):
         self.btn_hex_rx_up.setFixedSize(56, 30)
         tip(self.btn_hex_rx_up, self.tr("接收 HEX 显示切换"))
         self.btn_hex_rx_up.setCheckable(True)
-        # 同步 chk_hex_display ↔ btn_hex_rx_up（纯 UI 状态，不持久化）
+        # 同步 chk_hex_display ↔ btn_hex_rx_up（同一状态两个入口；持久化走
+        # chk_hex_display.toggled -> cfg.set("hex_display")，_wire_signals 里连）
         self.btn_hex_rx_up.toggled.connect(self.chk_hex_display.setChecked)
         self.chk_hex_display.toggled.connect(self.btn_hex_rx_up.setChecked)
+        # 同步初始状态（chk_hex_display 已在 _build_left_panel 按 cfg 恢复）
+        self.btn_hex_rx_up.setChecked(self.chk_hex_display.isChecked())
 
         # HEX 发送模式（收窄工具栏入口）—— 与 btn_hex_rx_up 同款可勾选 ToolButton，
         # 而非之前的 CheckBox，保证接收/发送两个 HEX 入口视觉一致
@@ -950,6 +954,7 @@ class RTTMonitorPage(QWidget):
         self.chk_power.toggled.connect(self._worker.set_power_output_requested.emit)
         self.sp_channel.valueChanged.connect(self._on_channel_changed)
         self.chk_auto_scroll.toggled.connect(self._display_area.on_auto_scroll_toggled)
+        self.chk_hex_display.toggled.connect(lambda c: self._cfg.set("hex_display", c))
         # 收窄模式：悬浮卡片开关
         self.btn_panel_toggle.toggled.connect(self._on_panel_toggle_toggled)
         # 用户手动滚动 → 取消 chk_auto_scroll 勾选；用 _programmatic_scroll 标志
@@ -1773,10 +1778,40 @@ class RTTMonitorPage(QWidget):
     }
 
     def _on_command_result(self, cmd: str, ok: bool, msg: str) -> None:
+        # 日志记录开始：msg=文件路径 -> 弹 InfoBar + 「打开文件夹」按钮；
+        # 停止（ok=True, msg 空）/ 失败（ok=False）走下方通用分支
+        if cmd == "log_recording" and ok and msg:
+            self._show_log_recording_started(msg)
+            return
         if ok:
             return
         title = self.tr(self._CMD_TITLES.get(cmd, "操作失败"))
         _infobar.warn(self, title, msg or self.tr("未知错误"), duration=3000)
+
+    def _show_log_recording_started(self, log_path: str) -> None:
+        """日志记录开始：InfoBar 提示文件路径 + 「打开文件夹」按钮。
+
+        worker 在 _on_start_log 成功后通过 command_result(msg=路径) 回传；
+        用户勾选「实时日志记录」后立刻看到文件保存位置，可一键打开文件夹。
+        """
+        from pathlib import Path
+
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        from qfluentwidgets import InfoBar, InfoBarPosition, PushButton
+
+        folder = str(Path(log_path).parent)
+        bar = InfoBar.success(
+            self.tr("日志记录已开始"),
+            str(Path(log_path)),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=6000,
+            isClosable=True,
+        )
+        btn = PushButton(self.tr("打开文件夹"))
+        btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(folder)))
+        bar.addWidget(btn)
 
     def _on_log_message(self, level: str, msg: str) -> None:
         """worker → UI 日志投递。level: error/warning/info。
