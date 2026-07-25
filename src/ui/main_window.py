@@ -13,7 +13,7 @@ from __future__ import annotations
 import base64
 from contextlib import suppress
 
-from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QThread, Slot
+from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QThread, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QPainter, QPixmap, QShortcut, QShowEvent
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 from qfluentwidgets import FluentIcon as FIF
@@ -54,6 +54,12 @@ class _LazyPageWrapper(QWidget):
     _build_pack_page / _on_packs_changed。
     """
 
+    # 首次构建完成时发信号：MainWindow 连接用于补应用全局字体（启动时
+    # _apply_ui_font 遍历 QApplication.allWidgets() 漏掉未构建的懒页 widget，
+    # 懒页构建后其内部 qfluentwidgets 控件用 QSS 默认字号，必须补一次 setFont
+    # + sync_qss_font_locked_widgets 才能跟随用户字体设置）。
+    built = Signal()
+
     def __init__(self, object_name: str, factory, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName(object_name)
@@ -69,6 +75,7 @@ class _LazyPageWrapper(QWidget):
         if self._page is None:
             self._page = self._factory()
             self._layout.addWidget(self._page)
+            self.built.emit()
         return self._page
 
     @property
@@ -122,6 +129,19 @@ class MainWindow(FluentWindow):
             "settings", lambda: SettingsPage(self._cfg, self), self
         )
         self.about_page = _LazyPageWrapper("about", lambda: AboutPage(self), self)
+
+        # 懒页首次构建后补应用全局字体：启动时 _apply_ui_font 遍历 allWidgets 漏掉
+        # 未构建的懒页，懒页构建后其 qfluentwidgets 控件用 QSS 默认字号，必须补一次
+        # setFont + sync_qss_font_locked_widgets 才跟随用户字体设置（否则字体/字号
+        # 要等用户手动改一次字体大小才正确）。
+        for w in (
+            self.memory_page,
+            self.flash_page,
+            self.pack_page,
+            self.settings_page,
+            self.about_page,
+        ):
+            w.built.connect(self._on_lazy_page_built)
 
         # 3. 导航 — 存储 route_key → tr_key 映射，用于语言切换时刷新
         self._nav_items: list[tuple[str, str]] = []
@@ -198,6 +218,17 @@ class MainWindow(FluentWindow):
             self.flash_page.page()._on_packs_changed()
         else:
             self._packs_dirty = True
+
+    def _on_lazy_page_built(self) -> None:
+        """懒页首次构建后补应用全局字体（用 cfg 当前值，幂等）。
+
+        启动时 _apply_ui_font 遍历 QApplication.allWidgets() 漏掉未构建的懒页
+        widget；懒页构建后其 qfluentwidgets 控件用 QSS 默认字号，必须补一次
+        setFont + sync_qss_font_locked_widgets 才跟随用户字体设置。
+        """
+        self._apply_ui_font(
+            self._cfg.get("ui_font_family") or "", int(self._cfg.get("ui_font_size") or 9)
+        )
 
     def _add_nav(self, widget, icon, text_key, position=NavigationItemPosition.TOP) -> None:
         """添加导航项并记录 route_key → tr_key 映射。"""
