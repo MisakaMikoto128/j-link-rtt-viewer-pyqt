@@ -100,8 +100,15 @@ class MainWindow(FluentWindow):
         self._logger = get_logger()
 
         # 1. 创建 worker + 独立 QThread（不是 worker 自己继承 QThread！）
-        #    RTT worker 不碰 pyocd，不需等 pyocd 预热；pyocd 预热（防 DLL 竞态）的
-        #    wait 兜底改在 FlashPage 构造内（FlashWorker 启动前），见 _build_flash_page。
+        #    worker 启动前必须等 pyocd 后台预热完成（main.py 早期起的 daemon 线程）：
+        #    预热线程 import pyocd.probe.aggregator 扫描时会调 JLinkProbePlugin.should_load
+        #    -> _get_jlink -> pylink.JLink()，碰 JLinkARM DLL 全局句柄；若此时 RTT worker
+        #    已启动并跑 connected_emulators()，两线程并发打同一 DLL 句柄 ->
+        #    0xc000001d / access violation（根因见 core.probe.enumerator docstring）。
+        #    FlashPage 构造内还有一次 wait 兜底（FlashWorker 启动前），见 _build_flash_page。
+        from core.probe.enumerator import wait_for_pyocd_prepare
+
+        wait_for_pyocd_prepare()
         self.worker_thread = QThread(self)
         self.worker = JLinkWorker()
         self.worker.set_initial_encoding(cfg.get("rtt_encoding"))
