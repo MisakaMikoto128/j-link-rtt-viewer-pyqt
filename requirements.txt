@@ -6,6 +6,7 @@ pylink-square==1.6.0   # 必须用 1.6.0；2.x 有 breaking API change，RTT 不
 pytest>=8.0
 pytest-qt>=4.4
 nuitka>=2.0
+# 实测 CPython 3.13 启动比 3.11 快 ~14%、382 测试全过；推荐用 3.13 venv 跑 build_nuitka*.bat（见 docs/python-version-comparison.md）
 
 # firmware flashing
 pyelftools>=0.29
