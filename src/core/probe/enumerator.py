@@ -25,6 +25,8 @@ JLinkARM DLL 全局单句柄**的 open()/close()/connected_emulators() 并发 �
 
 from __future__ import annotations
 
+from threading import Thread
+
 from .base import BURNER_KIND_CMSIS_DAP, BURNER_KIND_STLINK, ProbeInfo
 
 # 只扫这两类；J-Link / Picoprobe / remote 一律不碰。
@@ -35,23 +37,56 @@ _PROBE_CLASS_PATHS: dict[str, str] = {
 }
 
 _pyocd_prepared = False
+_prepare_thread: Thread | None = None  # 后台预热线程（main.py 早期起、worker 启动前 join）
 
 
-def prepare_pyocd_for_flash() -> None:
+def prepare_pyocd_for_flash(*, background: bool = False) -> Thread | None:
     """主线程预 import pyocd + 打桩 J-Link plugin（幂等，失败静默）。
 
     **必须在任何 worker 线程启动前、于主线程调用**（main.py）。若拖到 FlashWorker
     线程首次 import pyocd，aggregator 扫描就会在该线程建 pylink.JLink（见模块 docstring
     的根因分析）。失败静默：pyocd 内部结构变化只是回到「可能并发」的旧行为，不影响
     CMSIS-DAP/ST-Link 枚举本身。
+
+    ``background=True``（main.py 启动期用）：在本线程之外的 daemon 子线程跑预热，
+    并把扫描**与主线程后续 import/构造并行**。该子线程满足安全充要条件：「扫描在
+    worker_thread.start() 之前结束」——调用方必须在 worker 启动前调
+    :func:`wait_for_pyocd_prepare` join。扫描发生在该预热线程而非 FlashWorker 线程，
+    且此时无任何 worker 在跑 → 无 DLL 并发。
     """
+    global _pyocd_prepared, _prepare_thread
+    if _pyocd_prepared:
+        return None
+    if background and _prepare_thread is None:
+        _prepare_thread = Thread(target=_do_prepare_pyocd, name="pyocd-prepare", daemon=True)
+        _prepare_thread.start()
+        return _prepare_thread
+    # 非后台：同步执行（worker 已启动 / 测试环境 / 兜底）
+    _do_prepare_pyocd()
+    return None
+
+
+def wait_for_pyocd_prepare(timeout: float = 30.0) -> bool:
+    """等后台预热线程结束（worker_thread.start 之前调用）。返回是否在超时内完成。"""
+    global _prepare_thread
+    t = _prepare_thread
+    if t is None:
+        return True  # 没起后台线程（同步路径已跑完）
+    t.join(timeout=timeout)
+    done = not t.is_alive()
+    if done:
+        _prepare_thread = None
+    return done
+
+
+def _do_prepare_pyocd() -> None:
     global _pyocd_prepared
     if _pyocd_prepared:
         return
     try:
         # 1) 主线程先 import jlink_probe 拿到 plugin 类，立即打桩 should_load /
         #    _get_jlink。注意：这一步本身就会级联触发 aggregator 扫描（pyocd 包
-        #    __init__ → helpers → aggregator），扫描在主线程完成。
+        #    __init__ → helpers → aggregator），扫描在主线程（或后台预热线程）完成。
         from pyocd.probe import jlink_probe
 
         if hasattr(jlink_probe, "JLinkProbePlugin"):
@@ -59,7 +94,7 @@ def prepare_pyocd_for_flash() -> None:
         if hasattr(jlink_probe, "JLinkProbe"):
             jlink_probe.JLinkProbe._get_jlink = classmethod(lambda cls: None)
 
-        # 2) 显式确保 aggregator 已 import（扫描已在主线程完成，之后任何线程不再扫）。
+        # 2) 显式确保 aggregator 已 import（扫描已在主线程（或预热线程）完成，之后任何线程不再扫）。
         import pyocd.probe.aggregator  # noqa: F401
 
         _pyocd_prepared = True

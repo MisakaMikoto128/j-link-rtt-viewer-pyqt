@@ -91,10 +91,15 @@ def main() -> int:
     # 主线程预 import pyocd + 打桩 J-Link plugin（必须在任何 worker 线程启动前）。
     # 否则 FlashWorker 线程首次 import pyocd 时 aggregator plugin 扫描会在该线程
     # 创建 pylink.JLink，与 RTT worker 的 connect 并发打 DLL 全局句柄 → 0x14 崩溃。
+    #
+    # background=True 让 plugin 扫描（~1.2s）在 daemon 子线程跑，与主线程后续
+    # ConfigService/i18n/Theme/MainWindow 构造并行；MainWindow 在 worker_thread.start
+    # 之前 wait_for_pyocd_prepare() 兜底 join，保证扫描仍领先 worker。安全充要条件：
+    # 扫描不在 FlashWorker/RTT worker 线程、且早于 worker_thread.start——本路径满足。
     try:
         from core.probe.enumerator import prepare_pyocd_for_flash
 
-        prepare_pyocd_for_flash()
+        prepare_pyocd_for_flash(background=True)
     except Exception as e:
         logger.warning(f"pyocd 预初始化失败（不影响 J-Link RTT）：{e}")
 

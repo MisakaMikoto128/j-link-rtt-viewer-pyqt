@@ -44,6 +44,12 @@ class MainWindow(FluentWindow):
         self._logger = get_logger()
 
         # 1. 创建 worker + 独立 QThread（不是 worker 自己继承 QThread！）
+        #    worker 启动前必须等 pyocd 后台预热完成（main.py 早期起的 daemon 线程）：
+        #    否则 aggregator plugin 扫描可能仍在线程跑、与 worker 线程并发打 JLink DLL
+        #    全局句柄 → 0x14 access violation（根因见 core.probe.enumerator docstring）。
+        from core.probe.enumerator import wait_for_pyocd_prepare
+
+        wait_for_pyocd_prepare()
         self.worker_thread = QThread(self)
         self.worker = JLinkWorker()
         self.worker.set_initial_encoding(cfg.get("rtt_encoding"))
