@@ -72,6 +72,7 @@ class ConfigService(QObject):
         "hex_display": False,  # 十六进制显示（接收侧 chk_hex_display）
         "auto_scroll": True,
         "auto_frame": False,  # 自动断帧（chk_auto_frame）
+        "auto_frame_timeout": "20",  # 自动断帧空闲阈值（ms，le_frame_timeout 文本）
         "timed_send": False,  # 定时发送（chk_timed_send）
         "timed_send_interval": "1.0",  # 定时发送间隔（秒，le_timed_interval 文本）
         "show_send_text": False,  # 显示发送字符串（chk_show_send_text，发送回显）

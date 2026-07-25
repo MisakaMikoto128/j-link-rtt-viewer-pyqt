@@ -58,6 +58,7 @@ class SendBar(QObject):
         self._frame_help_content = self._build_frame_help_content()
         # 恢复持久化状态（在连接信号之前，setChecked 不触发 slot 副作用）
         controls.chk_auto_frame.setChecked(bool(cfg.get("auto_frame")))
+        controls.le_frame_timeout.setText(str(cfg.get("auto_frame_timeout") or "20"))
         controls.chk_timed_send.setChecked(bool(cfg.get("timed_send")))
         controls.le_timed_interval.setText(str(cfg.get("timed_send_interval") or "1.0"))
         controls.chk_show_send_text.setChecked(bool(cfg.get("show_send_text")))
@@ -87,6 +88,10 @@ class SendBar(QObject):
         # 定时发送间隔：textChanged 节流落盘（cfg.set 自带 200ms 节流）
         controls.le_timed_interval.textChanged.connect(
             lambda t: cfg.set("timed_send_interval", t)
+        )
+        # 自动断帧空闲阈值：同上节流落盘
+        controls.le_frame_timeout.textChanged.connect(
+            lambda t: cfg.set("auto_frame_timeout", t)
         )
 
     # ---- 公开接口 ----
