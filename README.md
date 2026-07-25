@@ -114,6 +114,8 @@ uv run python src/main.py                # 或 .venv\Scripts\activate.bat 后 py
 
 > 仓库已有 `uv.lock`；`uv sync` 按 `pyproject.toml` + 锁文件装齐与 `requirements.txt` 等价的依赖集。两种方式择一即可，别混用。
 
+> `start.bat` 带 venv 守卫：venv 缺失时直接退出并打印创建命令，不会半启动报 `ModuleNotFoundError`。`uv` 路径不依赖 `start.bat`（它认 `venv\`，uv 默认建 `.venv\`），直接用 `uv run python src/main.py` 即可。
+
 ### 打包
 
 两个 bat 二选一（均**不需要目标机器装 Python**）：
@@ -155,12 +157,18 @@ build_nuitka_onefile.bat    # onefile：输出 build\onefile\JLinkRTTViewer.exe�
 
 standalone 已比直接 Python 快——启动瓶颈是 PySide6 / qfluentwidgets / pylink 的 import 本身（合计 ~470ms 硬开销），不在打包形态。完整实测表、第二轮优化与 PyInstaller / cx_Freeze / PyOxidizer 对比分析见 [docs/packaging_startup_report.md](docs/packaging_startup_report.md)。
 
+**已落地的启动优化**：
+
+- pyOCD 的 probe plugin 扫描实测占主线程 **~1.2s**（`importtime` 不含此运行时开销，曾是被忽略的大头）。已改为 `main.py` 早期起 daemon 子线程并行预热、`worker_thread.start` 前 join 兜底，dev（直接 python）启动 **2.97s → 2.52s（-15%）**，扫描仍领先 worker、DLL 单句柄安全条件不变（`718754b`）。standalone Nuitka 因 import 已编进二进制，此优化主要收益在 dev 跑 python 模式。
+- 推荐 **CPython 3.13** 构建/运行：实测比 3.11 启动 -14%、import -18%、382 测试全过零风险。3.14 与 3.13 同档，3.15 待 wheel 生态跟上。完整版本对比见 [docs/python-version-comparison.md](docs/python-version-comparison.md)。
+
 ## 📖 文档
 
 - **用户手册**：[docs/USER_GUIDE.md](docs/USER_GUIDE.md) — 完整 UI / 配置 / 快捷键说明
 - **固件烧录指南**：[docs/flashing-guide.md](docs/flashing-guide.md) — 烧录流程 + 固件另存为（格式转换）
 - **符号表 / 段 / 占用汇总指南**：[docs/symbol-table-guide.md](docs/symbol-table-guide.md) — chip 过滤 / 排序 / 复制 / 实用技巧
 - **打包启动速度实测**：[docs/packaging_startup_report.md](docs/packaging_startup_report.md) — 打包选型、构建速度、onefile 缓存、替代打包方案对比
+- **Python 版本对比**：[docs/python-version-comparison.md](docs/python-version-comparison.md) — 3.11 / 3.13 / 3.14 / 3.15 启动与运行时 bench，推荐 3.13
 - **工程笔记**：[CLAUDE.md](CLAUDE.md) — 项目演进中遇到的真实 Qt / pylink / 打包 / 烧录器坑与解法索引
 - **贡献指南**：[CONTRIBUTING.md](CONTRIBUTING.md)
 - **更新日志**：[CHANGELOG.md](CHANGELOG.md)
