@@ -1029,3 +1029,100 @@ def test_conn_panel_controls_aligned_fixed_width(rtt_page, qtbot):
             break
     assert dot_index > label_index
     assert stretch_index > dot_index
+
+
+# ===========================================================================
+# 集成测试：端到端多步骤链路（拆分 Step 3/4/6 的兜底测试）
+# 用 worker 信号驱动 UI，断言多步骤组合后的状态，覆盖单测不覆盖的协作链路。
+# ====================================================================================
+
+
+def test_integration_connect_receive_send_disconnect(rtt_page, qtbot):
+    """端到端：连接 -> 接收数据 -> 发送 -> 断开，UI 状态全程正确。
+
+    覆盖 _CommandPanel（连接/断开/_is_connected）+ _DisplayArea（接收）
+    + _SendBar（发送）的协作链路。
+    """
+    page, worker, _cfg = rtt_page
+    # 连接
+    worker.connection_state_changed.emit(True)
+    qtbot.wait(30)
+    assert page._is_connected is True
+    assert page.btn_reset.isEnabled()
+    # 接收数据
+    worker.rtt_data_received.emit(0, "boot\n")
+    worker.rtt_data_received.emit(0, "ready\n")
+    qtbot.wait(50)
+    text = page.display.toPlainText()
+    assert "boot" in text and "ready" in text
+    # 发送
+    page.te_send.setPlainText("ping")
+    page.btn_send.click()
+    qtbot.wait(20)
+    assert worker._sent == [("ping", False)]
+    # 断开
+    worker.connection_state_changed.emit(False)
+    qtbot.wait(30)
+    assert page._is_connected is False
+    assert not page.btn_reset.isEnabled()
+
+
+def test_integration_multi_channel_receive_and_switch(rtt_page, qtbot):
+    """多通道：ch0 接收显示 -> 切 ch1 空 -> ch1 接收显示 -> 切回 ch0 历史恢复。
+
+    覆盖 _DisplayArea（_channel_buffers + _render_view）+ _CommandPanel
+    （sp_channel + set_rtt_channel_requested）。
+    """
+    page, worker, _cfg = rtt_page
+    worker._num_up = 2  # 2 个上行通道，sp_channel 范围 [-1, 1] 支持 ch1
+    worker.connection_state_changed.emit(True)
+    qtbot.wait(30)
+    # ch0 接收 + 显示
+    worker.rtt_data_received.emit(0, "ch0-msg\n")
+    qtbot.wait(50)
+    assert "ch0-msg" in page.display.toPlainText()
+    # 切到 ch1（空历史）-> display 空
+    page.sp_channel.setValue(1)
+    qtbot.wait(50)
+    assert page.display.toPlainText() == ""
+    # ch1 接收 + 实时显示
+    worker.rtt_data_received.emit(1, "ch1-msg\n")
+    qtbot.wait(50)
+    assert "ch1-msg" in page.display.toPlainText()
+    # 切回 ch0 -> 历史恢复（_render_view 从 _channel_buffers 重建）
+    page.sp_channel.setValue(0)
+    qtbot.wait(50)
+    assert "ch0-msg" in page.display.toPlainText()
+
+
+def test_integration_send_echo_and_stats(rtt_page, qtbot):
+    """勾选回显后发送：显示区有 » 回显 + 发送统计更新。
+
+    覆盖 _SendBar（_echo_sent_text + _append_styled_line）+ 状态栏统计。
+    """
+    page, worker, _cfg = rtt_page
+    worker.connection_state_changed.emit(True)
+    qtbot.wait(30)
+    page.chk_show_send_text.setChecked(True)
+    page.te_send.setPlainText("hello")
+    page.btn_send.click()
+    qtbot.wait(30)
+    text = page.display.toPlainText()
+    assert "» hello" in text or "hello" in text
+    # 发送统计标签应有非零内容（"发送: N - M"）
+    assert page.lbl_status_tx.text() != ""
+
+
+def test_integration_search_count(rtt_page, qtbot):
+    """搜索：显示区有数据 -> 搜索 -> 计数正确。
+
+    覆盖 SearchHandler（_do_search + _update_match_position + 计数）。
+    """
+    page, worker, _cfg = rtt_page
+    worker.rtt_data_received.emit(0, "foo bar foo baz foo\n")
+    qtbot.wait(50)
+    # 触发搜索（直接 emit search_requested，模拟输入 + 回车）
+    page.search_bar.search_requested.emit("foo", False, False, False, False)
+    qtbot.wait(50)
+    # 计数 label 应含 "3"（3 个 foo）
+    assert "3" in page.search_bar.lbl_match.text()
