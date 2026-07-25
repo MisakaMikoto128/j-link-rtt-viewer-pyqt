@@ -1221,3 +1221,50 @@ rtt_stop 失败 access violation reading 0x...
 **未做（高风险，下一轮）**：`_CommandPanel` 拆分。含 `_is_connected` + 设备枚举 + 连接/断开 + `_build_left_panel` 458 行 UI 重组。建议单独一轮 + 真机 smoke。
 
 **判别**：拆分时只拆「低耦合辅助组件 + 独立逻辑」（靠信号通信，不持有主类状态），不拆「主类状态机」（全局状态强耦合）。`_VResizeHandle` 曾是死代码（定义无实例化），拆出后 ruff 正确识别未用 import -- 拆分时顺便清死代码。Step 4 的 `_view_channel` 被主类 5+ 处读写，用 `get_view_channel()`/`set_view_channel()` 暴露而非属性代理（避免 `__getattr__` 转发反模式）；`_time_mod` 主类 `_update_stats` 仍要用，直接 `import time` + `time.time()`，不留 `self._time_mod` 别名。
+## emoji/非 BMP 字符导致搜索位置错位（re code point vs Qt UTF-16）
+
+**现象**：RTT 显示区含 emoji（如 `爱心😍🍟🍔❤鳄Heartbeat: ...`）时，搜索 "Heartbeat" 选中错文本（`❤鳄Heart` 而非 `Heartbeat`），高亮位置错位，replace_all 替换错位置。
+
+**原因**：Python `re.finditer` 返回的 `m.start()`/`m.end()` 是 **code point 索引**（Python `str` 按 code point 计数）。但 Qt `QTextDocument` 内部用 **UTF-16 code unit** 存储，`QTextCursor.setPosition(pos)` 期望 UTF-16 索引。emoji 等**非 BMP 字符**（U+10000+，如 😍=U+1F60D）在 UTF-16 中是 surrogate pair 占 **2 个 code unit**，但 Python str 里是 **1 个 code point**。直接把 `m.start()` 喂给 `setPosition` 会偏移：每经过一个 emoji 位置 +1。
+
+诊断：`len(display.toPlainText())`（code points）vs `display.document().characterCount()`（UTF-16 units + 1）的差值 = 非 BMP 字符数。BMP 字符（含中文、`\n`）两者一致（`\n` 和段落分隔符 `\u2029` 都 1 字符）。
+
+**处理**：构建 code point -> UTF-16 位置映射，所有 cursor 操作（高亮/跳转/替换/计数比较）统一在 UTF-16 域：
+
+```python
+def _build_cp_to_utf16_map(self, full: str) -> list[int]:
+    cp_to_utf16 = [0] * (len(full) + 1)
+    acc = 0
+    for i, ch in enumerate(full):
+        acc += 2 if ord(ch) > 0xFFFF else 1
+        cp_to_utf16[i + 1] = acc
+    return cp_to_utf16
+```
+
+`re.finditer` 拿 code point 位置后，用 `cp_to_utf16[m.start()]` 转成 UTF-16 位置再喂 `setPosition`。`cursor.selectionStart()/End()` 本来就是 UTF-16 位置，和转换后的 matches 同域比较。
+
+参考：`src/ui/_rtt_search.py` `_build_cp_to_utf16_map` / `_scan_utf16_matches`。诊断 demo：`scratch/verify_emoji_search.py` / `scratch/verify_search_fix.py`。
+
+---
+
+## 搜索栏打开时 RTT 流入导致高亮过时
+
+**现象**：搜索后 RTT 数据继续流入，新文本无高亮，计数 label 错位（显示旧计数），用户看到「半边高亮半边无」，感觉搜索「对不上」。
+
+**原因**：`SearchHandler` 只在 `search_requested`/`options_changed` 时扫描，没监听 `display.textChanged`。RTT 流入 `cursor.insertText` 改变文档，但搜索高亮（`ExtraSelection`）是搜索时刻的快照，不会自动覆盖新文本。
+
+**处理**：`SearchHandler.__init__` 连接 `display.textChanged -> _on_display_text_changed`，后者检查搜索栏可见 + 有搜索词时启动节流定时器（400ms）重新扫描 + 更新高亮/计数。节流避免每个 RTT 数据帧都全扫描。
+
+参考：`src/ui/_rtt_search.py` `_on_display_text_changed`。
+
+---
+
+## 相邻匹配计数 off-by-one
+
+**现象**：搜索 "foofoo" 中的 "foo"，连续按 Enter 前向搜索，第二个匹配计数显示 "1/2" 而非 "2/2"。
+
+**原因**：`_update_match_position` 用 `m.start() <= cur_pos <= m.end()` 判断当前光标在哪个匹配内。`_do_search` 跳到第二个匹配后 `selectionStart() = 3`，而第一个匹配 `m.end() = 3`，`0 <= 3 <= 3` 成立，误判光标在第一个匹配内。
+
+**处理**：改 `m.start() <= cur_pos < m.end()`（半开区间）。空匹配（`m.start() == m.end()`）此条件不成立，但搜索通常无空匹配。
+
+参考：`src/ui/_rtt_search.py` `_update_match_position`。

@@ -1126,3 +1126,91 @@ def test_integration_search_count(rtt_page, qtbot):
     qtbot.wait(50)
     # 计数 label 应含 "3"（3 个 foo）
     assert "3" in page.search_bar.lbl_match.text()
+
+
+def test_search_adjacent_match_count(rtt_page, qtbot):
+    """相邻匹配计数：foofoo 搜 foo，连续前向搜索应依次 1/4, 2/4, 3/4, 4/4。
+
+    修复前 _update_match_position 用 m.start() <= cur_pos <= m.end()，
+    相邻匹配时 cur_pos==m.end() 被误判为在 m 内，导致跳到第二个匹配后
+    计数仍显示 1/4。
+    """
+    page, worker, _cfg = rtt_page
+    worker.rtt_data_received.emit(0, "foofoo bar foofoo\n")
+    qtbot.wait(50)
+    for expected in ["1/4", "2/4", "3/4", "4/4"]:
+        page.search_bar.search_requested.emit("foo", False, False, False, False)
+        qtbot.wait(50)
+        assert page.search_bar.lbl_match.text() == expected, (
+            f"expected {expected}, got {page.search_bar.lbl_match.text()}"
+        )
+
+
+def test_search_current_match_highlighted_differently(rtt_page, qtbot):
+    """当前匹配应叠橙色，其余匹配黄色（VSCode 风格，便于看出跳转位置）。"""
+    page, worker, _cfg = rtt_page
+    worker.rtt_data_received.emit(0, "foo bar foo baz foo\n")
+    qtbot.wait(50)
+    page.search_bar.search_requested.emit("foo", False, False, False, False)
+    qtbot.wait(50)
+    sels = page.display.extraSelections()
+    assert len(sels) == 3  # 3 个 foo
+    # 应有两种背景色：黄色（普通）+ 橙色（当前）
+    bg_colors = {s.format.background().color().rgb() for s in sels}
+    assert len(bg_colors) == 2, f"expected 2 colors (yellow+orange), got {bg_colors}"
+
+
+def test_search_updates_on_rtt_inflow(rtt_page, qtbot):
+    """RTT 流入新数据后，搜索计数应自动更新（display.textChanged -> 节流重扫）。
+
+    修复前 SearchHandler 不监听 display.textChanged，搜索后 RTT 继续流入
+    会导致高亮过时 + 计数错位（用户看到半边高亮半边无，感觉搜索「对不上」）。
+    """
+    page, worker, _cfg = rtt_page
+    worker.rtt_data_received.emit(0, "foo bar\n")
+    qtbot.wait(50)
+    page.search_bar.show_search("foo")  # 显示搜索栏 + 填入 foo
+    page.search_bar.search_requested.emit("foo", False, False, False, False)
+    qtbot.wait(50)
+    assert page.search_bar.lbl_match.text() == "1/1"
+    # RTT 流入新数据（含 2 个新 foo）-> 应自动更新计数
+    worker.rtt_data_received.emit(0, "foo baz foo\n")
+    qtbot.wait(400)  # 等节流 300ms 触发重新扫描
+    assert page.search_bar.lbl_match.text() == "1/3", (
+        f"expected 1/3 after RTT inflow, got {page.search_bar.lbl_match.text()}"
+    )
+
+
+def test_search_emoji_position_correct(rtt_page, qtbot):
+    """emoji/非 BMP 字符下搜索位置正确（code point vs UTF-16 错位修复）。
+
+    用户报告：含 emoji 的数据（爱心😍🍟🍔❤鳄Heartbeat: ...）下搜索 "Heartbeat"
+    选中错文本（❤鳄Heart 而非 Heartbeat）。根因：re.finditer 返回 code point 索引，
+    Qt QTextCursor.setPosition 需要 UTF-16 索引；emoji（U+10000+）占 2 UTF-16
+    code unit 但 1 code point，直接用 code point 位置会错位。修复用 _build_cp_to_utf16_map。
+    """
+    page, worker, _cfg = rtt_page
+    worker.rtt_data_received.emit(0, "爱心😍🍟🍔❤鳄Heartbeat: 1224217067\n" * 3)
+    qtbot.wait(50)
+    # 搜索 Heartbeat - 应选中 "Heartbeat" 而非 "❤鳄Heart"
+    page.search_bar.search_requested.emit("Heartbeat", False, False, False, False)
+    qtbot.wait(50)
+    cursor = page.display.textCursor()
+    assert cursor.selectedText() == "Heartbeat", (
+        f"emoji 错位：应选中 'Heartbeat'，实际 {cursor.selectedText()!r}"
+    )
+    assert page.search_bar.lbl_match.text() == "1/3"
+    # 连续前向搜索第 2 个
+    page.search_bar.search_requested.emit("Heartbeat", False, False, False, False)
+    qtbot.wait(50)
+    cursor = page.display.textCursor()
+    assert cursor.selectedText() == "Heartbeat"
+    assert page.search_bar.lbl_match.text() == "2/3"
+    # replace_all 替换 + emoji 保留
+    page.search_bar.le_replace.setText("Pulse")
+    page.search_bar.replace_requested.emit("Heartbeat", "Pulse", True, False, False, False)
+    qtbot.wait(50)
+    full = page.display.toPlainText()
+    assert full.count("Heartbeat") == 0
+    assert full.count("Pulse") == 3
+    assert "爱心😍🍟🍔❤鳄" in full

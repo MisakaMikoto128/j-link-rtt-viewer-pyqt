@@ -67,6 +67,13 @@
 - `QTableWidget` 排序默认按字符串，数值列用自定义 `_NumericItem` override `__lt__`
 - 高频热路径构造 `QColor` 是不必要 alloc — 预构造放模块级 dict（`_ANSI_QCOLORS`）
 
+## Qt 文档 / 搜索
+
+- **emoji/非 BMP 字符位置错位**：Python `re.finditer` 返回 code point 索引，Qt `QTextDocument` 用 UTF-16 code unit 存储；emoji（U+10000+）占 2 UTF-16 unit 但 1 code point。直接用 `m.start()` 调 `QTextCursor.setPosition` 错位（Heartbeat 选中 `❤鳄Heart`）。`_build_cp_to_utf16_map` 转 code point i -> UTF-16 位置，所有 cursor 操作统一 UTF-16 域。`_rtt_search._scan_utf16_matches`
+- `toPlainText()` 位置 vs `QTextCursor` 位置：BMP 字符一致；非 BMP 不一致。诊断：`len(toPlainText())` vs `document().characterCount()` 差 = 非 BMP 字符数
+- 搜索栏打开时 RTT 流入导致高亮过时：`SearchHandler` 监听 `display.textChanged` -> 节流重扫，否则新文本无高亮 + 计数错位
+- 相邻匹配计数 off-by-one：`m.start() <= cur_pos <= m.end()` 在 `cur_pos==m.end()` 误判，改 `< m.end()`
+
 ## i18n / 字体 / QSS
 
 - 自定义 `QTranslator.translate` 未命中必须返回 `source`，不能返回空串（Qt 检查 isNull 非 isEmpty，空串被当有效译文导致控件空白）
