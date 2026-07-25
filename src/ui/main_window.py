@@ -100,21 +100,17 @@ class MainWindow(FluentWindow):
         self._logger = get_logger()
 
         # 1. 创建 worker + 独立 QThread（不是 worker 自己继承 QThread！）
-        #    worker 启动前必须等 pyocd 后台预热完成（main.py 早期起的 daemon 线程）：
-        #    预热线程 import pyocd.probe.aggregator 扫描时会调 JLinkProbePlugin.should_load
-        #    -> _get_jlink -> pylink.JLink()，碰 JLinkARM DLL 全局句柄；若此时 RTT worker
-        #    已启动并跑 connected_emulators()，两线程并发打同一 DLL 句柄 ->
-        #    0xc000001d / access violation（根因见 core.probe.enumerator docstring）。
-        #    FlashPage 构造内还有一次 wait 兜底（FlashWorker 启动前），见 _build_flash_page。
-        from core.probe.enumerator import wait_for_pyocd_prepare
-
-        wait_for_pyocd_prepare()
+        #    worker 创建 + moveToThread + set_initial_encoding + started.connect 在构造早期
+        #    （RTT 页构造需要 self.worker；set_initial_encoding 同步赋值必须在 worker 线程
+        #    启动前）。worker_thread.start 推迟到构造末尾（wait_for_pyocd_prepare 之后），
+        #    让 pyocd 预热与 RTT 页 / nav / 快捷键构造并行，wait 时预热通常已完成、立即返回，
+        #    省启动阻塞。wait 仍在 worker 启动前（DLL 竞态安全不变，根因见
+        #    core.probe.enumerator docstring + FlashPage 构造内 wait 兜底）。
         self.worker_thread = QThread(self)
         self.worker = JLinkWorker()
         self.worker.set_initial_encoding(cfg.get("rtt_encoding"))
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.initialize)
-        self.worker_thread.start()
 
         # 2. 各页面
         #    RTT 立即建（默认页 + 全局快捷键依赖）；其余 5 页懒构造（首次进 nav 才
@@ -193,6 +189,14 @@ class MainWindow(FluentWindow):
         cfg.background_image_path_changed.connect(self._on_background_image_path_changed)
         cfg.background_opacity_changed.connect(self._on_background_opacity_changed)
         cfg.background_fill_mode_changed.connect(self._on_background_fill_mode_changed)
+
+        # worker 启动：wait pyocd 预热完成（DLL 竞态安全，见构造早期注释）+ start。
+        # 推迟到构造末尾，让预热与 RTT 页 / nav / 快捷键构造并行，wait 立即返回
+        # （预热后台跑 ~1.2s，构造耗时 ~0.8s，到此处预热通常已完成）。
+        from core.probe.enumerator import wait_for_pyocd_prepare
+
+        wait_for_pyocd_prepare()
+        self.worker_thread.start()
 
     def _build_flash_page(self) -> FlashPage:
         """FlashPage 工厂（懒构造）：构造后设 _rtt_page_ref，并补刷 pack dirty。"""
