@@ -145,6 +145,14 @@ class FlashPage(QWidget):
         self._file_recheck_timer.timeout.connect(self._recheck_file_mtime)
 
         # 独立 worker + 独立 QThread（和 JLinkWorker 完全无关）
+        # FlashWorker 启动前确保 pyocd 预热完成（防 aggregator 扫描在 FlashWorker
+        # 线程建 pylink.JLink、与 RTT worker 并发打 DLL 全局句柄 -> 0x14 崩，根因
+        # 见 core.probe.enumerator docstring）。main.py 启动后台预热通常此时已完成，
+        # wait 立即返回；极端情况（启动后立即切烧录页）wait 阻塞 ~1.2s 兜底。
+        # FlashPage 懒构造（_LazyPageWrapper），本 __init__ 在用户首次切烧录页时跑。
+        from core.probe.enumerator import wait_for_pyocd_prepare
+
+        wait_for_pyocd_prepare()
         self._thread = QThread(self)
         self._worker = FlashWorker()
         self._worker.moveToThread(self._thread)
