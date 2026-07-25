@@ -22,6 +22,7 @@
 - **连接顺序**：open → close → open(serial) → rtt_start → set_tif → set_speed → connect（pylink 1.6.0 硬性要求）
 - `rtt_get_num_up_buffers()` 返回声明数不是已分配数，通道数用 buf descriptor 的 `SizeOfBuffer` 计数。`_detect_num_up_channels`
 - **DLL 同句柄并发不安全**：所有 pylink DLL 调用必须串行经 `_dll_lock`（RLock）。J-Link 报 access violation 先查这个
+- **pyocd 预热 wait 不能移走**：`wait_for_pyocd_prepare` 必须在任何 worker 启动前（含 RTT worker，不只是 FlashWorker）。预热线程 `import pyocd.probe.aggregator` 扫描时调 `JLinkProbePlugin.should_load -> pylink.JLink()` 碰 DLL，与 RTT worker `connected_emulators()` 并发崩 `0xc000001d`。commit 5a3b55f 错移、37bda17 回退。`main_window.__init__`
 - J-Link 烧 axf 变砖、hex 正常：不用 `flash_file`，逐段 `jlink.flash(data, p_paddr)`。`jlink_backend.program`
 - `supported_device()` 的 legacy `FlashAddr` / `FlashSize` 不可信，用 `aFlashArea` Size 最大区域。`_pick_main_region`
 - 远程连接（Remote Server）：DLL 不做 DNS，域名 Python 侧 `resolve_remote_host` 解析成 IPv4

@@ -1070,6 +1070,26 @@ class _SignalSpy(QObject):
 
 ---
 
+## pyocd 预热 wait 不能从 MainWindow 移到 FlashPage（预热线程扫描碰 DLL）
+
+**现象**：commit 5a3b55f 把 `wait_for_pyocd_prepare` 从 MainWindow 构造（worker 启动前）移到 FlashPage 构造（FlashWorker 启动前），启动快 0.30s，但实测崩：
+
+```
+连接失败 [WinError -1073741795] 0xc000001d
+rtt_stop 失败 access violation reading 0x...
+枚举 J-Link 失败 access violation reading 0x...
+```
+
+**原因**：误判「RTT worker 不碰 pyocd，不需等」。实际 pyocd 预热线程（main.py 早期 `background=True` 起的 daemon）在 `import pyocd.probe.aggregator` 扫描时调 `JLinkProbePlugin.should_load -> _get_jlink -> pylink.JLink()`，碰 JLinkARM DLL 全局句柄。wait 移走后，预热线程扫描与 RTT worker 启动后的 `connected_emulators()` 并发打同一 DLL 句柄 -> `0xc000001d` / access violation。
+
+**处理**：`wait_for_pyocd_prepare` 必须在**任何 worker 线程启动前**（含 RTT worker），不能移到 FlashPage。commit 37bda17 回退。FlashPage 构造内的 wait 保留作冗余兜底（幂等无害，MainWindow wait 后 `_prepare_thread` 已 None，flash_page wait 立即返回 True）。
+
+**判别**：J-Link 连接报 `0xc000001d` / access violation + 近期改过 pyocd 预热 wait 位置 -> 先查 `wait_for_pyocd_prepare` 是否在 RTT worker 启动前。
+
+参考：`src/ui/main_window.py` __init__ `wait_for_pyocd_prepare`、`src/core/probe/enumerator.py` docstring、commit 5a3b55f（错）/ 37bda17（回退）。
+
+---
+
 ## J-Link 烧 axf 变砖、hex 正常：不用 `flash_file`，逐段 `jlink.flash(data, p_paddr)`
 
 **现象**：J-Link 烧 axf 后目标无法运行，烧同固件的 hex 却正常。
