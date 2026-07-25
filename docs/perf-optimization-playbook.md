@@ -114,6 +114,12 @@ class _LazyPageWrapper(QWidget):
 
 **风险**：极端情况（启动后立即触发 worker B）wait 阻塞 ~预热剩余时间。需评估是否可接受。
 
+> **⚠️ 本项目踩坑（已回退）**：曾把 pyocd 预热的 wait 从「RTT worker 启动前」移到「FlashWorker 启动前」，误判「RTT worker 不碰 pyocd，不需等」。**实测崩**：`0xc000001d` + `access violation reading 0x...`。
+>
+> **错在哪**：pyocd 预热**线程本身**在 `import pyocd.probe.aggregator` 扫描时调 `JLinkProbePlugin.should_load -> _get_jlink -> pylink.JLink()`，碰 JLinkARM DLL 全局句柄。RTT worker 启动后跑 `connected_emulators()` 也碰同一 DLL。wait 移走后预热线程扫描与 RTT worker 的 `connected_emulators()` 并发 -> DLL 全局句柄竞态 -> 崩。
+>
+> **教训**：wait 移真正使用处前，必须确认**所有碰该资源的 worker**（包括预热线程本身的副作用）都在该 wait 之后启动。C 扩展 DLL 全局句柄场景，预热线程的 import 副作用（plugin 扫描建对象）也会碰 DLL，与任何已启动 worker 并发。**这类场景 wait 必须在所有 worker 启动前，不能移**。本项目已回退（commit `37bda17`），启动回到 1.915s。
+
 ### §2.5 Python 版本升级【零代码改动】
 
 **方法**：CPython 每个版本都有启动 / import 优化。实测对比（用 `uv venv --python <ver>` 建多版本）。
@@ -267,8 +273,8 @@ python scripts/measure_launch.py --target <python> --name optimized --runs 5 --w
 | pyocd 预热后台化 | §2.1 import 后台预热 | 2.523s | -0.45s |
 | 平台缓存预热 | §2.2 平台缓存预热 | 2.458s | -0.06s |
 | 5 页懒构造 | §2.3 Page 懒构造 | 1.915s | -0.54s |
-| pyocd wait 移 FlashPage | §2.4 wait 移真正使用处 | **1.620s** | -0.30s |
-| **累计** | | **1.620s** | **-1.35s（-45.5%）** |
+| pyocd wait 移 FlashPage | §2.4 wait 移真正使用处 | ~~1.620s~~ **已回退** | ~~-0.30s~~ 崩 |
+| **累计（回退后）** | | **1.915s** | **-1.06s（-35.6%）** |
 
 ### Python 版本对比（独立维度，与上叠加）
 
@@ -326,8 +332,10 @@ python scripts/measure_launch.py --target <python> --name optimized --runs 5 --w
 - [ ] Python 版本升级（§2.5，3.11->3.13）
 
 **中风险需验证**：
-- [ ] wait 兜底移真正使用处（§2.4，有并发约束时）
 - [ ] Nuitka 打包选项（§2.6，发版前）
+
+**慎用 / 本项目已回退**：
+- [ ] wait 兜底移真正使用处（§2.4）-- 本项目实测 DLL 竞态崩，已回退。C 扩展 DLL 全局句柄场景**不要移 wait**，详见 §2.4 踩坑段
 
 **不推荐**：
 - [ ] 精细 import 第三方库（§3.1）
