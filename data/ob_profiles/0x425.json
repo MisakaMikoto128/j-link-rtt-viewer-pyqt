@@ -1,0 +1,103 @@
+{
+  "device_id": "0x425",
+  "device_name": "STM32L03x/L04x/L010",
+  "family": "L0",
+  "verified": false,
+  "rdp_read_view": {
+    "address": "0x4002201C",
+    "bit_offset": 0,
+    "bit_width": 8,
+    "access": "R",
+    "values": {
+      "0xAA": "Level 0, no protection",
+      "0xBB": "or any value other than 0xAA and 0xCC: Level 1, read protection",
+      "0xCC": "Level 2, chip protection"
+    }
+  },
+  "rdp_write_view": {
+    "address": "0x1FF80000",
+    "bit_offset": 0,
+    "bit_width": 8,
+    "access": "W",
+    "values": {
+      "0xAA": "Level 0, no protection",
+      "0xBB": "or any value other than 0xAA and 0xCC: Level 1, read protection",
+      "0xCC": "Level 2, chip protection"
+    }
+  },
+  "wrp": {
+    "present": true,
+    "model": "bit",
+    "fields": [
+      {
+        "name": "WRPOT0",
+        "address": "0x1FF80008",
+        "bit_offset": 0,
+        "bit_width": 8,
+        "access": "W",
+        "active_low": false,
+        "values": {
+          "0x0": "Write protection not active",
+          "0x1": "Write protection active"
+        }
+      }
+    ]
+  },
+  "flash_regs": {
+    "keyr": "0x4002200C",
+    "optkeyr": "0x40022014",
+    "cr": "0x40022004",
+    "sr": "0x40022018",
+    "obr": null,
+    "optcr": null,
+    "optr": "0x4002201C",
+    "optsr_cur": null,
+    "optsr_prg": null,
+    "optccr": null
+  },
+  "bits": {
+    "cr": {
+      "PELOCK": 0,
+      "PRGLOCK": 1,
+      "OPTLOCK": 2,
+      "PROG": 3,
+      "DATA": 4,
+      "FIX": 8,
+      "ERASE": 9,
+      "FPRG": 10,
+      "PARALLELBANK": 15,
+      "EOPIE": 16,
+      "ERRIE": 17,
+      "OBL_LAUNCH": 18,
+      "NZDISABLE": 23
+    },
+    "sr": {
+      "BSY": 0,
+      "EOP": 1,
+      "ENDHV": 2,
+      "READY": 3,
+      "WRPERR": 8,
+      "PGAERR": 9,
+      "SIZERR": 10,
+      "OPTVERR": 11,
+      "RDERR": 13,
+      "NOTZEROERR": 16,
+      "FWWERR": 17
+    },
+    "optcr": {},
+    "optsr_cur": {}
+  },
+  "procedure": {
+    "ob_programming": "ob_register_word",
+    "flash_key_seq": [
+      "0x45670123",
+      "0xCDEF89AB"
+    ],
+    "optkey_seq": [
+      "0x45670123",
+      "0xCDEF89AB"
+    ],
+    "obl_trigger": "cr_obl_launch",
+    "obl_requires_power_cycle": false
+  }
+}

@@ -1,0 +1,145 @@
+{
+  "device_id": "0x450",
+  "device_name": "STM32H7xx",
+  "family": "H7",
+  "verified": true,
+  "rdp_read_view": {
+    "address": "0x5200201C",
+    "bit_offset": 8,
+    "bit_width": 8,
+    "access": "R",
+    "values": {
+      "0xAA": "Level 0, no protection",
+      "0xBB": "or any value other than 0xAA and 0xCC: Level 1, read protection",
+      "0xCC": "Level 2, chip protection"
+    }
+  },
+  "rdp_write_view": {
+    "address": "0x52002020",
+    "bit_offset": 8,
+    "bit_width": 8,
+    "access": "W",
+    "values": {
+      "0xAA": "Level 0, no protection",
+      "0xBB": "or any value other than 0xAA and 0xCC: Level 1, read protection",
+      "0xCC": "Level 2, chip protection"
+    }
+  },
+  "wrp": {
+    "present": true,
+    "model": "bit",
+    "fields": [
+      {
+        "name": "nWRP0",
+        "address": "0x5200203C",
+        "bit_offset": 0,
+        "bit_width": 8,
+        "access": "W",
+        "active_low": true,
+        "values": {
+          "0x0": "Write protection active on this sector",
+          "0x1": "Write protection not active on this sector"
+        }
+      },
+      {
+        "name": "nWRP8",
+        "address": "0x5200213C",
+        "bit_offset": 0,
+        "bit_width": 8,
+        "access": "W",
+        "active_low": true,
+        "values": {
+          "0x0": "Write protection active on this sector",
+          "0x1": "Write protection not active on this sector"
+        }
+      }
+    ]
+  },
+  "flash_regs": {
+    "keyr": "0x52002004",
+    "optkeyr": "0x52002008",
+    "cr": "0x5200200C",
+    "sr": "0x52002010",
+    "obr": null,
+    "optcr": "0x52002018",
+    "optr": null,
+    "optsr_cur": "0x5200201C",
+    "optsr_prg": "0x52002020",
+    "optccr": "0x52002024"
+  },
+  "bits": {
+    "cr": {
+      "LOCK": 0,
+      "PG": 1,
+      "SER": 2,
+      "BER": 3,
+      "PSIZE": 4,
+      "FW": 6,
+      "START": 7,
+      "SNB": 8,
+      "CRC_EN": 15,
+      "EOPIE": 16,
+      "WRPERRIE": 17,
+      "PGSERRIE": 18,
+      "STRBERRIE": 19,
+      "INCERRIE": 21,
+      "OPERRIE": 22,
+      "RDPERRIE": 23,
+      "RDSERRIE": 24,
+      "SNECCERRIE": 25,
+      "DBECCERRIE": 26,
+      "CRCENDIE": 27,
+      "CRCRDERRIE": 28
+    },
+    "sr": {
+      "BSY": 0,
+      "WBNE": 1,
+      "QW": 2,
+      "CRC_BUSY": 3,
+      "EOP": 16,
+      "WRPERR": 17,
+      "PGSERR": 18,
+      "STRBERR": 19,
+      "INCERR": 21,
+      "OPERR": 22,
+      "RDPERR": 23,
+      "RDSERR": 24,
+      "SNECCERR": 25,
+      "DBECCERR": 26,
+      "CRCEND": 27,
+      "CRCRDERR": 28
+    },
+    "optcr": {
+      "OPTLOCK": 0,
+      "OPTSTART": 1,
+      "OPTCHANGEERRIE": 30
+    },
+    "optsr_cur": {
+      "OPT_BUSY": 0,
+      "BOR_LEV": 2,
+      "IWDG1_SW": 4,
+      "NRST_STOP_D1": 6,
+      "NRST_STBY_D1": 7,
+      "RDP": 8,
+      "IWDG_FZ_STOP": 17,
+      "IWDG_FZ_SDBY": 18,
+      "ST_RAM_SIZE": 19,
+      "SECURITY": 21,
+      "IO_HSLV": 29,
+      "OPTCHANGEERR": 30
+    }
+  },
+  "procedure": {
+    "ob_programming": "ob_register_word",
+    "flash_key_seq": [
+      "0x45670123",
+      "0xCDEF89AB"
+    ],
+    "optkey_seq": [
+      "0x8192A3B",
+      "0x4C5D6E7F"
+    ],
+    "obl_trigger": "optcr_optstart",
+    "obl_requires_power_cycle": false
+  }
+}

@@ -1,0 +1,130 @@
+{
+  "device_id": "0x462",
+  "device_name": "STM32L45x/L46x",
+  "family": "L4",
+  "verified": true,
+  "rdp_read_view": {
+    "address": "0x40022020",
+    "bit_offset": 0,
+    "bit_width": 8,
+    "access": "RW",
+    "values": {
+      "0xAA": "Level 0, no protection",
+      "0xBB": "or any value other than 0xAA and 0xCC: Level 1, read protection",
+      "0xCC": "Level 2, chip protection"
+    }
+  },
+  "rdp_write_view": {
+    "address": "0x40022020",
+    "bit_offset": 0,
+    "bit_width": 8,
+    "access": "RW",
+    "values": {
+      "0xAA": "Level 0, no protection",
+      "0xBB": "or any value other than 0xAA and 0xCC: Level 1, read protection",
+      "0xCC": "Level 2, chip protection"
+    }
+  },
+  "wrp": {
+    "present": true,
+    "model": "edge",
+    "fields": [
+      {
+        "name": "WRP1A_END",
+        "address": "0x4002202C",
+        "bit_offset": 16,
+        "bit_width": 8,
+        "access": "RW",
+        "active_low": null,
+        "values": {}
+      },
+      {
+        "name": "WRP1A_STRT",
+        "address": "0x4002202C",
+        "bit_offset": 0,
+        "bit_width": 8,
+        "access": "RW",
+        "active_low": null,
+        "values": {}
+      },
+      {
+        "name": "WRP1B_END",
+        "address": "0x40022030",
+        "bit_offset": 16,
+        "bit_width": 8,
+        "access": "RW",
+        "active_low": null,
+        "values": {}
+      },
+      {
+        "name": "WRP1B_STRT",
+        "address": "0x40022030",
+        "bit_offset": 0,
+        "bit_width": 8,
+        "access": "RW",
+        "active_low": null,
+        "values": {}
+      }
+    ]
+  },
+  "flash_regs": {
+    "keyr": "0x40022008",
+    "optkeyr": "0x4002200C",
+    "cr": "0x40022014",
+    "sr": "0x40022010",
+    "obr": null,
+    "optcr": null,
+    "optr": "0x40022020",
+    "optsr_cur": null,
+    "optsr_prg": null,
+    "optccr": null
+  },
+  "bits": {
+    "cr": {
+      "PG": 0,
+      "PER": 1,
+      "MER1": 2,
+      "PNB": 3,
+      "BKER": 11,
+      "MER2": 15,
+      "START": 16,
+      "OPTSTRT": 17,
+      "FSTPG": 18,
+      "EOPIE": 24,
+      "ERRIE": 25,
+      "RDERRIE": 26,
+      "OBL_LAUNCH": 27,
+      "OPTLOCK": 30,
+      "LOCK": 31
+    },
+    "sr": {
+      "EOP": 0,
+      "OPERR": 1,
+      "PROGERR": 3,
+      "WRPERR": 4,
+      "PGAERR": 5,
+      "SIZERR": 6,
+      "PGSERR": 7,
+      "MISERR": 8,
+      "FASTERR": 9,
+      "RDERR": 14,
+      "OPTVERR": 15,
+      "BSY": 16
+    },
+    "optcr": {},
+    "optsr_cur": {}
+  },
+  "procedure": {
+    "ob_programming": "ob_register_word",
+    "flash_key_seq": [
+      "0x45670123",
+      "0xCDEF89AB"
+    ],
+    "optkey_seq": [
+      "0x8192A3B",
+      "0x4C5D6E7F"
+    ],
+    "obl_trigger": "cr_obl_launch",
+    "obl_requires_power_cycle": false
+  }
+}

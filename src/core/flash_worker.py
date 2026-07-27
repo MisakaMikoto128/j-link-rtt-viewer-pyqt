@@ -34,6 +34,8 @@ from .probe.base import (
     ProbeParams,
 )
 from .probe.factory import make_backend
+from .probe.ob_adapter import make_ob_adapter, read_device_id
+from .option_bytes import RdpLevel, WRP_STATUS_NONE, read_rdp_level, read_wrp_status, set_rdp_level, set_wrp
 
 # 常量 re-export：UI 层沿用 `from core.flash_worker import ERASE_MODE_CHIP` 等
 # 旧 import 路径，真源在 probe.base。
@@ -73,6 +75,10 @@ class FlashParams:
     remote_addr: str = ""  # 远程模式 "ip:port"；空 = 本地 USB
     burner_kind: str = BURNER_KIND_JLINK  # 烧录器类型，见 probe.base.BURNER_KIND_*
     erase_only: bool = False  # True = 只整片擦除不烧录（复用完整连接/断开流程）
+    # 自动 OB 操作 (生效时机: unlock=connect 后 erase 前; add_rdp/wrp=verify 后)
+    auto_unlock_rdp: bool = False
+    auto_add_rdp: bool = False
+    auto_add_wrp: bool = False
 
 
 class FlashWorker(QObject):
@@ -238,6 +244,10 @@ class FlashWorker(QObject):
             self.flash_stage_changed.emit(STAGE_CONNECT)
             backend.connect(probe_params)
 
+            # 自动解除读写保护: connect 后、erase 前。L1 状态下无法 erase/program。
+            if p.auto_unlock_rdp:
+                self._auto_ob_unlock(backend)
+
             if erase_only:
                 # 只整片擦除不烧录：复用完整 连接→断开 流程，跳过 program/verify/reset。
                 self.flash_stage_changed.emit(STAGE_ERASE)
@@ -257,6 +267,12 @@ class FlashWorker(QObject):
                     self.flash_stage_changed.emit(STAGE_VERIFY)
                     backend.verify()
                     self.flash_log.emit("info", "extra verify OK")
+
+                # 自动添加保护: verify 后、reset/close 前。
+                if p.auto_add_rdp:
+                    self._auto_ob_add_rdp(backend)
+                if p.auto_add_wrp:
+                    self._auto_ob_add_wrp(backend)
 
                 if p.post_action in (POST_ACTION_HALT, POST_ACTION_RESET_RUN):
                     self.flash_stage_changed.emit(STAGE_RESET)
@@ -286,6 +302,69 @@ class FlashWorker(QObject):
                 # 清掉活跃 backend 引用（_on_stop 仅在关窗时跑）
                 self._backend = None
             # post_action=halt：保留 _backend（未 close），下次 _run_flash 开头 close
+
+    # ---- 自动 OB 操作 (复用已连接的 backend, 包装为 ObAdapter) ----
+    def _auto_ob_unlock(self, backend) -> None:
+        """connect 后自动解除读写保护 (RDP L1->L0 + WRP 清除)。
+
+        按钮名是"自动解除读写保护", 要同时清读保护(RDP)和写保护(WRP):
+        1. RDP L1 -> L0 (若已是 L0 跳过; L1 下写 OB 可能 PGSERR, 失败由 SR 错误位报出)
+        2. WRP 清除 (若已无写保护跳过; L1 下写 WRP 同样可能失败)
+        L1 芯片先解 RDP 再清 WRP -- RDP 解除失败则中止 (WRP 在 L1 下也写不进)。
+        """
+        try:
+            adapter = make_ob_adapter(backend)
+            device_id = read_device_id(adapter)
+            # 1. 解除读保护 RDP
+            level = read_rdp_level(device_id, adapter)
+            if level == RdpLevel.L1:
+                self.flash_log.emit("info", f"auto-unlock: RDP L1->L0 (device {device_id})")
+                res = set_rdp_level(device_id, RdpLevel.L0, adapter)
+                if res.obl_status == "needs_power_cycle":
+                    self.flash_log.emit("warn", "RDP 已写 L0, 需断电再上电 (POR) 生效")
+            else:
+                self.flash_log.emit("info", f"auto-unlock: RDP 当前 {level.value}, 跳过")
+            # 2. 解除写保护 WRP (L1 芯片若上一步 RDP 解除失败已 raise, 不会到这)
+            wrp_status = read_wrp_status(device_id, adapter)
+            if wrp_status != WRP_STATUS_NONE:
+                self.flash_log.emit("info", f"auto-unlock: WRP {wrp_status}, 清除")
+                set_wrp(device_id, adapter, protect_all=False)
+                self.flash_log.emit("info", "WRP 已清除")
+            else:
+                self.flash_log.emit("info", f"auto-unlock: WRP {WRP_STATUS_NONE}, 跳过")
+        except Exception as e:
+            self.flash_log.emit("error", f"auto-unlock 失败: {type(e).__name__}: {e}")
+            raise
+
+    def _auto_ob_add_rdp(self, backend) -> None:
+        """verify 后自动设置 RDP = L1 (读保护)。"""
+        try:
+            adapter = make_ob_adapter(backend)
+            device_id = read_device_id(adapter)
+            self.flash_log.emit("info", f"auto-add RDP: set L1 (device {device_id})")
+            res = set_rdp_level(device_id, RdpLevel.L1, adapter)
+            if res.obl_status == "needs_power_cycle":
+                self.flash_log.emit("warn", "RDP 已写 L1, 需断电再上电 (POR) 生效")
+            else:
+                self.flash_log.emit("info", "RDP = L1 已生效")
+        except Exception as e:
+            self.flash_log.emit("error", f"auto-add RDP 失败: {type(e).__name__}: {e}")
+            raise
+
+    def _auto_ob_add_wrp(self, backend) -> None:
+        """verify 后自动启用 WRP (写保护, 全部扇区)。失败 raise 中止烧录。"""
+        try:
+            adapter = make_ob_adapter(backend)
+            device_id = read_device_id(adapter)
+            self.flash_log.emit("info", f"auto-add WRP: 启用全片写保护 (device {device_id})")
+            obl_status = set_wrp(device_id, adapter, protect_all=True)
+            if obl_status == "needs_power_cycle":
+                self.flash_log.emit("warn", "WRP 已写, 需断电再上电 (POR) 生效")
+            else:
+                self.flash_log.emit("info", "auto-add WRP: 全保护已启用")
+        except Exception as e:
+            self.flash_log.emit("error", f"auto-add WRP 失败: {type(e).__name__}: {e}")
+            raise
 
     def _on_progress(self, current: int, total: int) -> None:
         """backend program 进度回调 -> flash_progress 信号。"""

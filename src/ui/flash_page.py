@@ -65,6 +65,7 @@ from . import _infobar
 from ._scroll_helpers import make_transparent_scroll
 from ._ui_helpers import tip
 from .firmware_analysis_view import FirmwareAnalysisView, FlashOccupancyBar
+from .ob_card import OptionBytesCard
 from .widgets.remote_host import (
     REMOTE_ITEM_TEXT,
     is_valid_port,
@@ -176,6 +177,7 @@ class FlashPage(QWidget):
         v.addWidget(self._build_conn_options_row())
         v.addWidget(self._build_file_card())
         v.addWidget(self._build_run_card())
+        v.addWidget(self._build_option_bytes_card())
         v.addWidget(self._build_symbol_card())
         v.addStretch(1)
 
@@ -421,6 +423,31 @@ class FlashPage(QWidget):
         self.btn_erase_chip.setMinimumHeight(32)
         layout.addWidget(self.btn_erase_chip)
 
+        # 自动保护选项 (水平排布; checkbox 自然宽度, tooltip 居中在 checkbox 上方)
+        auto_row = QHBoxLayout()
+        self.chk_auto_unlock_rdp = CheckBox(self.tr("自动解除读写保护"))
+        tip(self.chk_auto_unlock_rdp, self.tr(
+            "烧录前自动解除 RDP 读保护 (L1->L0, 触发 mass erase) + WRP 写保护"
+        ))
+        auto_row.addWidget(self.chk_auto_unlock_rdp)
+        self.chk_auto_add_rdp = CheckBox(self.tr("自动添加读取保护"))
+        tip(self.chk_auto_add_rdp, self.tr(
+            "烧录完成后自动设置 RDP = L1 (读保护生效; 下次烧录需先解除)"
+        ))
+        auto_row.addWidget(self.chk_auto_add_rdp)
+        self.chk_auto_add_wrp = CheckBox(self.tr("自动添加写入保护"))
+        tip(self.chk_auto_add_wrp, self.tr(
+            "烧录完成后自动启用写保护 WRP (防误擦写; 需先解除才能再烧录)"
+        ))
+        auto_row.addWidget(self.chk_auto_add_wrp)
+        auto_row.addSpacing(12)
+        self.btn_reset = PushButton(self.tr("复位"))
+        tip(self.btn_reset, self.tr("复位目标芯片 (兼容所有烧录器; 不烧录不擦除)"))
+        self.btn_reset.clicked.connect(lambda: self.ob_card.do_reset())
+        auto_row.addWidget(self.btn_reset)
+        auto_row.addStretch()
+        layout.addLayout(auto_row)
+
         row = QHBoxLayout()
         self.lbl_stage = BodyLabel(self.tr("待命"))
         row.addWidget(self.lbl_stage)
@@ -447,6 +474,29 @@ class FlashPage(QWidget):
         self.txt_log.setVisible(False)
         layout.addWidget(self.txt_log)
         return card
+
+    def _build_option_bytes_card(self) -> QWidget:
+        """选项字 (RDP) 卡片 -- 数据驱动 (ST XML + SVD + family 表)。"""
+        self.ob_card = OptionBytesCard(
+            get_burner_params=self._ob_get_burner_params,
+            rtt_worker=getattr(self, "_rtt_worker", None),
+        )
+        return self.ob_card
+
+    def _ob_get_burner_params(self):
+        """供 OB 卡片用:返回当前烧录器 + 设备参数 (kind, serial, device, iface, speed)。"""
+        kind, serial = self._current_burner()
+        if not kind:
+            return None
+        device = self.cmb_device.currentText().strip()
+        if not device:
+            return None
+        interface = "SWD" if self.rb_swd.isChecked() else "JTAG"
+        try:
+            speed = int(self.cmb_speed.currentText().strip() or "4000", 10)
+        except ValueError:
+            speed = 4000
+        return (kind, serial, device, interface, speed)
 
     def _build_symbol_card(self) -> QWidget:
         # 仅 axf/elf 时显示；其它格式 / 无文件时整卡隐藏
@@ -502,6 +552,9 @@ class FlashPage(QWidget):
                 break
 
         self.chk_verify.setChecked(bool(self._cfg.get("flash_verify")))
+        self.chk_auto_unlock_rdp.setChecked(bool(self._cfg.get("flash_auto_unlock_rdp")))
+        self.chk_auto_add_rdp.setChecked(bool(self._cfg.get("flash_auto_add_rdp")))
+        self.chk_auto_add_wrp.setChecked(bool(self._cfg.get("flash_auto_add_wrp")))
 
         # 远程主机输入（下拉重建时会按 flash_jlink_mode 决定是否显示）
         self.le_remote_host.setText(str(self._cfg.get("flash_remote_host") or ""))
@@ -524,6 +577,9 @@ class FlashPage(QWidget):
             lambda i: self._cfg.set("flash_post_action", _POST_LABELS[i][1])
         )
         self.chk_verify.toggled.connect(lambda v: self._cfg.set("flash_verify", bool(v)))
+        self.chk_auto_unlock_rdp.toggled.connect(lambda v: self._cfg.set("flash_auto_unlock_rdp", bool(v)))
+        self.chk_auto_add_rdp.toggled.connect(lambda v: self._cfg.set("flash_auto_add_rdp", bool(v)))
+        self.chk_auto_add_wrp.toggled.connect(lambda v: self._cfg.set("flash_auto_add_wrp", bool(v)))
         self.rb_auto_burn.toggled.connect(
             lambda v: self._cfg.set("auto_burn_on_change", bool(v))
         )
@@ -1349,6 +1405,9 @@ class FlashPage(QWidget):
             remote_addr=remote_addr,
             burner_kind=burner_kind,
             erase_only=erase_only,
+            auto_unlock_rdp=self.chk_auto_unlock_rdp.isChecked(),
+            auto_add_rdp=self.chk_auto_add_rdp.isChecked(),
+            auto_add_wrp=self.chk_auto_add_wrp.isChecked(),
         )
         self._worker.set_pending_params(params)
 
@@ -1483,6 +1542,10 @@ class FlashPage(QWidget):
             self.cmb_erase,
             self.cmb_post,
             self.chk_verify,
+            self.chk_auto_unlock_rdp,
+            self.chk_auto_add_rdp,
+            self.chk_auto_add_wrp,
+            self.btn_reset,
             self.cmb_burner,
             self.le_remote_host,
             self.le_remote_port,
@@ -1521,6 +1584,14 @@ class FlashPage(QWidget):
         self.btn_save_as.setToolTip(self.tr("把当前固件转换为 .bin / .hex 另存"))
         self.btn_copy_log.setText(self.tr("复制日志"))
         self.chk_verify.setText(self.tr("额外 byte-by-byte verify（慢一倍）"))
+        self.chk_auto_unlock_rdp.setText(self.tr("自动解除读写保护"))
+        tip(self.chk_auto_unlock_rdp, self.tr("烧录前自动解除 RDP 读保护 (L1->L0, 触发 mass erase) + WRP 写保护"))
+        self.chk_auto_add_rdp.setText(self.tr("自动添加读取保护"))
+        tip(self.chk_auto_add_rdp, self.tr("烧录完成后自动设置 RDP = L1 (读保护生效; 下次烧录需先解除)"))
+        self.chk_auto_add_wrp.setText(self.tr("自动添加写入保护"))
+        tip(self.chk_auto_add_wrp, self.tr("烧录完成后自动启用写保护 WRP (防误擦写; 需先解除才能再烧录)"))
+        self.btn_reset.setText(self.tr("复位"))
+        tip(self.btn_reset, self.tr("复位目标芯片 (兼容所有烧录器; 不烧录不擦除)"))
         self.rb_auto_burn.setText(self.tr("固件变化后自动烧录"))
         tip(self.rb_auto_burn, self.tr("使能后每次固件重新编译发生变化时自动触发烧录"))
 
@@ -1606,6 +1677,10 @@ class FlashPage(QWidget):
         若线程已退出而 deleteLater 事件没来得及处理，主线程析构 timer
         会跨线程 killTimer，触发 Qt assertion/segfault（CLAUDE.md）。
         """
+        try:
+            self.ob_card.cleanup()
+        except Exception:
+            pass
         self._worker.stop_requested.emit()
         if not self._thread.wait(3000):
             self._thread.terminate()

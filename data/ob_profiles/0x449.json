@@ -1,0 +1,108 @@
+{
+  "device_id": "0x449",
+  "device_name": "STM32F74x/STM32F75x",
+  "family": "F7",
+  "verified": false,
+  "rdp_read_view": {
+    "address": "0x40023C14",
+    "bit_offset": 8,
+    "bit_width": 8,
+    "access": "RW",
+    "values": {
+      "0xAA": "Level 0, no protection",
+      "0xBB": "or any value other than 0xAA and 0xCC: Level 1, read protection",
+      "0xCC": "Level 2, chip protection"
+    }
+  },
+  "rdp_write_view": {
+    "address": "0x40023C14",
+    "bit_offset": 8,
+    "bit_width": 8,
+    "access": "RW",
+    "values": {
+      "0xAA": "Level 0, no protection",
+      "0xBB": "or any value other than 0xAA and 0xCC: Level 1, read protection",
+      "0xCC": "Level 2, chip protection"
+    }
+  },
+  "wrp": {
+    "present": true,
+    "model": "bit",
+    "fields": [
+      {
+        "name": "nWRP0",
+        "address": "0x40023C14",
+        "bit_offset": 16,
+        "bit_width": 8,
+        "access": "RW",
+        "active_low": true,
+        "values": {
+          "0x0": "Write protection active on this sector",
+          "0x1": "Write protection not active on this sector"
+        }
+      }
+    ]
+  },
+  "flash_regs": {
+    "keyr": "0x40023C04",
+    "optkeyr": "0x40023C08",
+    "cr": "0x40023C10",
+    "sr": "0x40023C0C",
+    "obr": null,
+    "optcr": "0x40023C14",
+    "optr": null,
+    "optsr_cur": null,
+    "optsr_prg": null,
+    "optccr": null
+  },
+  "bits": {
+    "cr": {
+      "PG": 0,
+      "SER": 1,
+      "MER": 2,
+      "SNB": 3,
+      "PSIZE": 8,
+      "STRT": 16,
+      "EOPIE": 24,
+      "ERRIE": 25,
+      "LOCK": 31,
+      "RDERRIE": 26
+    },
+    "sr": {
+      "EOP": 0,
+      "OPERR": 1,
+      "WRPERR": 4,
+      "PGAERR": 5,
+      "PGPERR": 6,
+      "ERSERR": 7,
+      "BSY": 16
+    },
+    "optcr": {
+      "OPTLOCK": 0,
+      "OPTSTRT": 1,
+      "BOR_LEV": 2,
+      "IWDG_SW": 5,
+      "NRST_STOP": 6,
+      "NRST_STDBY": 7,
+      "RDP": 8,
+      "NWRP": 16,
+      "WWDG_SW": 4,
+      "IWDG_STOP": 31,
+      "IWDG_STDBY": 30
+    },
+    "optsr_cur": {}
+  },
+  "procedure": {
+    "ob_programming": "optcr32",
+    "flash_key_seq": [
+      "0x45670123",
+      "0xCDEF89AB"
+    ],
+    "optkey_seq": [
+      "0x8192A3B",
+      "0x4C5D6E7F"
+    ],
+    "obl_trigger": "opt_start",
+    "obl_requires_power_cycle": false
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "device_id": "0x420",
+  "device_name": "STM32F100 Low/Medium density Value Line",
+  "family": "F1",
+  "verified": true,
+  "rdp_read_view": {
+    "address": "0x4002201C",
+    "bit_offset": 1,
+    "bit_width": 1,
+    "access": "R",
+    "values": {
+      "0x0": "Flash memory is not read-protected.",
+      "0x1": "Flash memory is read-protected."
+    }
+  },
+  "rdp_write_view": {
+    "address": "0x1FFFF800",
+    "bit_offset": 0,
+    "bit_width": 8,
+    "access": "W",
+    "values": {
+      "0xA5": "Level 0, no protection",
+      "0xBB": "or any value other than 0xAA and 0xCC: Level 1, read protection"
+    }
+  },
+  "wrp": {
+    "present": true,
+    "model": "bit",
+    "fields": [
+      {
+        "name": "WRP0",
+        "address": "0x1FFFF808",
+        "bit_offset": 0,
+        "bit_width": 8,
+        "access": "W",
+        "active_low": true,
+        "values": {
+          "0x0": "Write protection active on this sector",
+          "0x1": "Write protection not active on this sector"
+        }
+      },
+      {
+        "name": "WRP16",
+        "address": "0x1FFFF80C",
+        "bit_offset": 0,
+        "bit_width": 8,
+        "access": "W",
+        "active_low": true,
+        "values": {
+          "0x0": "Write protection active on this sector",
+          "0x1": "Write protection not active on this sector"
+        }
+      },
+      {
+        "name": "WRP24",
+        "address": "0x1FFFF80C",
+        "bit_offset": 16,
+        "bit_width": 8,
+        "access": "W",
+        "active_low": true,
+        "values": {
+          "0x0": "Write protection active on this sector",
+          "0x1": "Write protection not active on this sector"
+        }
+      },
+      {
+        "name": "WRP8",
+        "address": "0x1FFFF808",
+        "bit_offset": 16,
+        "bit_width": 8,
+        "access": "W",
+        "active_low": true,
+        "values": {
+          "0x0": "Write protection active on this sector",
+          "0x1": "Write protection not active on this sector"
+        }
+      }
+    ]
+  },
+  "flash_regs": {
+    "keyr": "0x40022004",
+    "optkeyr": "0x40022008",
+    "cr": "0x40022010",
+    "sr": "0x4002200C",
+    "obr": "0x4002201C",
+    "optcr": null,
+    "optr": null,
+    "optsr_cur": null,
+    "optsr_prg": null,
+    "optccr": null
+  },
+  "bits": {
+    "cr": {
+      "PG": 0,
+      "PER": 1,
+      "MER": 2,
+      "OPTPG": 4,
+      "OPTER": 5,
+      "STRT": 6,
+      "LOCK": 7,
+      "OPTWRE": 9,
+      "ERRIE": 10,
+      "EOPIE": 12
+    },
+    "sr": {
+      "EOP": 5,
+      "WRPERR": 4,
+      "PGSERR": 2,
+      "BSY": 0
+    },
+    "optcr": {},
+    "optsr_cur": {}
+  },
+  "procedure": {
+    "ob_programming": "halfword",
+    "flash_key_seq": [
+      "0x45670123",
+      "0xCDEF89AB"
+    ],
+    "optkey_seq": [
+      "0x45670123",
+      "0xCDEF89AB"
+    ],
+    "obl_trigger": "reset",
+    "obl_requires_power_cycle": false
+  }
+}

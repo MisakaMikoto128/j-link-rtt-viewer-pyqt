@@ -1,0 +1,94 @@
+{
+  "device_id": "0x445",
+  "device_name": "STM32F04x/F070x6",
+  "family": "F0",
+  "verified": true,
+  "rdp_read_view": {
+    "address": "0x1FFFF800",
+    "bit_offset": 0,
+    "bit_width": 8,
+    "access": "RW",
+    "values": {
+      "0xAA": "Level 0, no protection",
+      "0xBB": "or any value other than 0xAA and 0xCC: Level 1, read protection",
+      "0xCC": "Level 2, chip protection"
+    }
+  },
+  "rdp_write_view": {
+    "address": "0x1FFFF800",
+    "bit_offset": 0,
+    "bit_width": 8,
+    "access": "RW",
+    "values": {
+      "0xAA": "Level 0, no protection",
+      "0xBB": "or any value other than 0xAA and 0xCC: Level 1, read protection",
+      "0xCC": "Level 2, chip protection"
+    }
+  },
+  "wrp": {
+    "present": true,
+    "model": "bit",
+    "fields": [
+      {
+        "name": "WRP_bit0",
+        "address": "0x1FFFF808",
+        "bit_offset": 0,
+        "bit_width": 8,
+        "access": "RW",
+        "active_low": true,
+        "values": {
+          "0x0": "Write protection active on this sector",
+          "0x1": "Write protection not active on this sector"
+        }
+      }
+    ]
+  },
+  "flash_regs": {
+    "keyr": "0x40022004",
+    "optkeyr": "0x40022008",
+    "cr": "0x40022010",
+    "sr": "0x4002200C",
+    "obr": "0x4002201C",
+    "optcr": null,
+    "optr": null,
+    "optsr_cur": null,
+    "optsr_prg": null,
+    "optccr": null
+  },
+  "bits": {
+    "cr": {
+      "FORCE_OPTLOAD": 13,
+      "EOPIE": 12,
+      "ERRIE": 10,
+      "OPTWRE": 9,
+      "LOCK": 7,
+      "STRT": 6,
+      "OPTER": 5,
+      "OPTPG": 4,
+      "MER": 2,
+      "PER": 1,
+      "PG": 0
+    },
+    "sr": {
+      "EOP": 5,
+      "WRPERR": 4,
+      "PGSERR": 2,
+      "BSY": 0
+    },
+    "optcr": {},
+    "optsr_cur": {}
+  },
+  "procedure": {
+    "ob_programming": "halfword",
+    "flash_key_seq": [
+      "0x45670123",
+      "0xCDEF89AB"
+    ],
+    "optkey_seq": [
+      "0x45670123",
+      "0xCDEF89AB"
+    ],
+    "obl_trigger": "power_cycle",
+    "obl_requires_power_cycle": true
+  }
+}

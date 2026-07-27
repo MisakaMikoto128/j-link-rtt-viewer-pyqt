@@ -1,0 +1,215 @@
+{
+  "device_id": "0x455",
+  "device_name": "STM32U535/STM32U545",
+  "family": "U5",
+  "verified": false,
+  "rdp_read_view": {
+    "address": "0x40022040",
+    "bit_offset": 0,
+    "bit_width": 8,
+    "access": "RW",
+    "values": {
+      "0xAA": "Level 0, no protection",
+      "0xDC": "Level 1, read protection of memories",
+      "0xCC": "Level 2, chip protection"
+    }
+  },
+  "rdp_write_view": {
+    "address": "0x40022040",
+    "bit_offset": 0,
+    "bit_width": 8,
+    "access": "RW",
+    "values": {
+      "0xAA": "Level 0, no protection",
+      "0xDC": "Level 1, read protection of memories",
+      "0xCC": "Level 2, chip protection"
+    }
+  },
+  "wrp": {
+    "present": true,
+    "model": "edge",
+    "fields": [
+      {
+        "name": "UNLOCK_1A",
+        "address": "0x40022058",
+        "bit_offset": 31,
+        "bit_width": 1,
+        "access": "RW",
+        "active_low": null,
+        "values": {
+          "0x0": "WRP1A start and end pages locked",
+          "0x1": "WRP1A start and end pages unlocked"
+        }
+      },
+      {
+        "name": "UNLOCK_1B",
+        "address": "0x4002205C",
+        "bit_offset": 31,
+        "bit_width": 1,
+        "access": "RW",
+        "active_low": null,
+        "values": {
+          "0x0": "WRP1B start and end pages locked",
+          "0x1": "WRP1B start and end pages unlocked"
+        }
+      },
+      {
+        "name": "UNLOCK_2A",
+        "address": "0x40022068",
+        "bit_offset": 31,
+        "bit_width": 1,
+        "access": "RW",
+        "active_low": null,
+        "values": {
+          "0x0": "WRP2A start and end pages locked",
+          "0x1": "WRP2A start and end pages unlocked"
+        }
+      },
+      {
+        "name": "UNLOCK_2B",
+        "address": "0x4002206C",
+        "bit_offset": 31,
+        "bit_width": 1,
+        "access": "RW",
+        "active_low": null,
+        "values": {
+          "0x0": "WRP2B start and end pages locked",
+          "0x1": "WRP2B start and end pages unlocked"
+        }
+      },
+      {
+        "name": "WRP1A_PEND",
+        "address": "0x40022058",
+        "bit_offset": 16,
+        "bit_width": 5,
+        "access": "RW",
+        "active_low": null,
+        "values": {}
+      },
+      {
+        "name": "WRP1A_PSTRT",
+        "address": "0x40022058",
+        "bit_offset": 0,
+        "bit_width": 5,
+        "access": "RW",
+        "active_low": null,
+        "values": {}
+      },
+      {
+        "name": "WRP1B_PEND",
+        "address": "0x4002205C",
+        "bit_offset": 16,
+        "bit_width": 5,
+        "access": "RW",
+        "active_low": null,
+        "values": {}
+      },
+      {
+        "name": "WRP1B_PSTRT",
+        "address": "0x4002205C",
+        "bit_offset": 0,
+        "bit_width": 5,
+        "access": "RW",
+        "active_low": null,
+        "values": {}
+      },
+      {
+        "name": "WRP2A_PEND",
+        "address": "0x40022068",
+        "bit_offset": 16,
+        "bit_width": 5,
+        "access": "RW",
+        "active_low": null,
+        "values": {}
+      },
+      {
+        "name": "WRP2A_PSTRT",
+        "address": "0x40022068",
+        "bit_offset": 0,
+        "bit_width": 5,
+        "access": "RW",
+        "active_low": null,
+        "values": {}
+      },
+      {
+        "name": "WRP2B_PEND",
+        "address": "0x4002206C",
+        "bit_offset": 16,
+        "bit_width": 5,
+        "access": "RW",
+        "active_low": null,
+        "values": {}
+      },
+      {
+        "name": "WRP2B_PSTRT",
+        "address": "0x4002206C",
+        "bit_offset": 0,
+        "bit_width": 5,
+        "access": "RW",
+        "active_low": null,
+        "values": {}
+      }
+    ]
+  },
+  "flash_regs": {
+    "keyr": "0x40022008",
+    "optkeyr": "0x40022010",
+    "cr": "0x40022028",
+    "sr": "0x40022020",
+    "obr": null,
+    "optcr": null,
+    "optr": "0x40022040",
+    "optsr_cur": null,
+    "optsr_prg": null,
+    "optccr": null
+  },
+  "bits": {
+    "cr": {
+      "PG": 0,
+      "PER": 1,
+      "MER1": 2,
+      "PNB": 3,
+      "BKER": 11,
+      "BWR": 14,
+      "MER2": 15,
+      "STRT": 16,
+      "OPTSTRT": 17,
+      "EOPIE": 24,
+      "ERRIE": 25,
+      "OBL_LAUNCH": 27,
+      "OPTLOCK": 30,
+      "LOCK": 31
+    },
+    "sr": {
+      "EOP": 0,
+      "OPERR": 1,
+      "PROGERR": 3,
+      "WRPERR": 4,
+      "PGAERR": 5,
+      "SIZERR": 6,
+      "PGSERR": 7,
+      "OPTWERR": 13,
+      "BSY": 16,
+      "WDW": 17,
+      "OEM1LOCK": 18,
+      "OEM2LOCK": 19,
+      "PD1": 20,
+      "PD2": 21
+    },
+    "optcr": {},
+    "optsr_cur": {}
+  },
+  "procedure": {
+    "ob_programming": "ob_register_word",
+    "flash_key_seq": [
+      "0x45670123",
+      "0xCDEF89AB"
+    ],
+    "optkey_seq": [
+      "0x8192A3B",
+      "0x4C5D6E7F"
+    ],
+    "obl_trigger": "cr_obl_launch",
+    "obl_requires_power_cycle": false
+  }
+}
