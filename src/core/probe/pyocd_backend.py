@@ -1,8 +1,11 @@
 """ST-Link / CMSIS-DAP / DAPLink 烧录后端：基于 pyOCD 0.45。
 
 实现 ProbeBackend 协议。pyOCD 一套 API 跨多 probe（CMSIS-DAP / ST-Link /
-J-Link），但本 backend 只用于非 J-Link probe--J-Link 仍走 PylinkBackend，
-因为 RTT 必须保留 pylink（pyOCD 的 JLinkProbe 不支持 RTT）。
+J-Link），但本 backend 只用于非 J-Link probe--J-Link 仍走 PylinkBackend：
+pylink RTT 由 J-Link 固件后台轮询（host 零 SWD），效率优于 pyOCD host 端 SWD
+轮询（详见 memory pyocd-rtt-api benchmark）；且 enumerator.py 打桩
+JLinkProbePlugin 防 aggregator 扫描在 worker 线程建 pylink.JLink 与 RTT worker
+并发抢 DLL 单句柄崩 0x14。RTT 监控页面的非 J-Link probe 走 PyocdRttBackend。
 
 实测 API（scratch/probe_pyocd_api.py on pyOCD 0.45）：
 - ConnectHelper.get_all_connected_probes() -> list[DebugProbe]

@@ -65,6 +65,7 @@ from qfluentwidgets import (
 
 from core.config_service import ConfigService
 from core.crc_utils import CRC_ALGORITHMS
+from core.probe.base import BURNER_KIND_JLINK
 from core.jlink_worker import (
     CHANNEL_ALL,
     CHANNEL_DEFAULT,
@@ -182,6 +183,7 @@ class RTTMonitorPage(QWidget):
         self._last_remote_addr = ""
         self._last_enum_state = None
         self._jlink_products: dict[str, str] = {}
+        self._probe_kinds: dict[str, str] = {}  # serial -> burner_kind（enum 填充）
         self._remote_probe_helper = RemoteProbeHelper()
         self._remote_probe_helper.probe_done.connect(self._on_remote_probe_done)
 
@@ -355,7 +357,7 @@ class RTTMonitorPage(QWidget):
         row_target = QHBoxLayout()
         row_target.setSpacing(6)
         row_target.setContentsMargins(0, 0, 0, 0)
-        self._lbl_target = BodyLabel(self.tr("目标设备:"))
+        self._lbl_target = BodyLabel(self.tr("目标设备"))
         self._lbl_target.setFixedHeight(_CTRL_H)
         row_target.addWidget(self._lbl_target)
         row_target.addStretch(1)
@@ -1155,17 +1157,22 @@ class RTTMonitorPage(QWidget):
         """worker 枚举结果：重建下拉项 + 同步红点 + 校验当前选中是否还在线。"""
         serials: list[str] = []
         products: dict[str, str] = {}
+        kinds: dict[str, str] = {}
         if data:
             for chunk in data.split(";"):
                 if not chunk:
                     continue
-                serial, _, product = chunk.partition("|")
-                serial = serial.strip()
-                product = product.strip()
-                if serial and serial.isdigit():
-                    serials.append(serial)
-                    products[serial] = product
-                    self._cache_burner(serial, product)
+                parts = chunk.split("|", 2)
+                if len(parts) < 3:
+                    continue
+                kind, serial, product = parts[0].strip(), parts[1].strip(), parts[2].strip()
+                if not serial:
+                    continue
+                serials.append(serial)
+                products[serial] = product
+                kinds[serial] = kind
+                self._cache_burner(serial, product, kind)
+        self._probe_kinds = kinds
 
         remote_text = self.tr(REMOTE_ITEM_TEXT)
         self._remote_item_text = remote_text
@@ -1220,16 +1227,21 @@ class RTTMonitorPage(QWidget):
                 self.cb_jlink.setText(self.cb_jlink.itemText(idx))
             elif prev_serial == remote_text:
                 self.cb_jlink.setCurrentIndex(self.cb_jlink.count() - 1)
+                self.cb_jlink.setText(self.cb_jlink.itemText(self.cb_jlink.count() - 1))
             elif prev_serial:
                 cached_product = self._get_cached_jlink_product(prev_serial)
                 self.cb_jlink.setText(self._jlink_label(prev_serial, cached_product))
                 self.cb_jlink.setReadOnly(True)
             elif serials:
                 self.cb_jlink.setCurrentIndex(0)
+                self.cb_jlink.setText(self.cb_jlink.itemText(0))
             else:
                 self.cb_jlink.setText("")
         finally:
             self.cb_jlink.blockSignals(False)
+            # EditableComboBox.setText 后光标默认停末尾，长文本会顶到最右边；
+            # 统一移到开头，让最左边内容可见。
+            self.cb_jlink.setCursorPosition(0)
 
         self._sync_jlink_status_dot()
 
@@ -1276,12 +1288,12 @@ class RTTMonitorPage(QWidget):
             return text.rsplit(": ", 1)[-1].strip()
         return text.strip()
 
-    def _cache_burner(self, serial: str, product: str) -> None:
-        """把 J-Link serial -> product 写入 cfg 缓存，供离线/重启时显示名称。"""
+    def _cache_burner(self, serial: str, product: str, kind: str = BURNER_KIND_JLINK) -> None:
+        """把 probe serial -> (kind, product) 写入 cfg 缓存，供离线/重启时显示名称。"""
         if not serial:
             return
         cache: dict[str, dict] = dict(self._cfg.get("flash_burner_cache") or {})
-        cache[serial] = {"kind": "jlink", "product": product}
+        cache[serial] = {"kind": kind, "product": product}
         self._cfg.set("flash_burner_cache", cache)
 
     def _get_cached_jlink_product(self, serial: str) -> str:
@@ -1368,7 +1380,7 @@ class RTTMonitorPage(QWidget):
             jlink_serial = self._serial_from_label(current)
             if not jlink_serial or self._find_jlink_index_by_serial(jlink_serial) < 0:
                 _infobar.warn(
-                    self, self.tr("提示"), self.tr("未检测到 J-Link 设备，请检查 USB 连接")
+                    self, self.tr("提示"), self.tr("未检测到烧录器，请检查 USB 连接")
                 )
                 return
             iface = self.cb_iface.currentText()
@@ -1384,7 +1396,8 @@ class RTTMonitorPage(QWidget):
             # 立即给 UI 反馈：禁用按钮 + 改文字
             self.btn_connect.setEnabled(False)
             self.btn_connect.setText(self.tr("连接中…"))
-            self._worker.connect_requested.emit(target, iface, speed, channel, jlink_serial)
+            kind = self._probe_kinds.get(jlink_serial, BURNER_KIND_JLINK)
+            self._worker.connect_requested.emit(kind, target, iface, speed, channel, jlink_serial)
         else:
             # 用户主动断开：pending_reconnect=False，不进入自动等待态。
             self._request_disconnect(pending_reconnect=False)
@@ -1408,7 +1421,8 @@ class RTTMonitorPage(QWidget):
         # 立即给 UI 反馈
         self.btn_connect.setEnabled(False)
         self.btn_connect.setText(self.tr("连接中…"))
-        self._worker.connect_requested.emit(target, iface, speed, channel, jlink_serial)
+        kind = self._probe_kinds.get(jlink_serial, BURNER_KIND_JLINK)
+        self._worker.connect_requested.emit(kind, target, iface, speed, channel, jlink_serial)
 
     def _emit_connect_remote_request(self, host: str, port: str) -> None:
         """按当前 UI 参数 emit connect_remote_requested（远程模式）。

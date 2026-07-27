@@ -13,7 +13,7 @@ from PySide6.QtCore import QObject, Signal
 class FakeWorker(QObject):
     """与 JLinkWorker 同形的信号 stub。RTTMonitorPage 只需要这些通道。"""
 
-    connect_requested = Signal(str, str, int, int, str)
+    connect_requested = Signal(str, str, str, int, int, str)  # burner_kind, target, iface, speed, channel, serial
     connect_remote_requested = Signal(str, str, int, int, str)
     disconnect_requested = Signal()
     enumerate_devices_requested = Signal()
@@ -538,7 +538,7 @@ def test_all_channel_not_pulled_back_on_connect(rtt_page, qtbot):
 def test_devices_enumerated_populates_combo(rtt_page, qtbot):
     """worker devices_enumerated("s1|p1;s2|p2") 应重建下拉项并选中第一台（含远程项）。"""
     page, worker, _ = rtt_page
-    worker.devices_enumerated.emit("12345678|J-Link PLUS;87654321|J-Link EDU")
+    worker.devices_enumerated.emit("jlink|12345678|J-Link PLUS;jlink|87654321|J-Link EDU")
     qtbot.wait(30)
     # 2 个 serial + 1 个远程项；在线项显示 product: serial
     assert page.cb_jlink.count() == 3
@@ -550,11 +550,11 @@ def test_devices_enumerated_populates_combo(rtt_page, qtbot):
 def test_devices_enumerated_keeps_previous_selection_if_present(rtt_page, qtbot):
     """刷新后上次选中的 serial 还在 → 保留选中（不被重置到第一台；含远程项）。"""
     page, worker, _ = rtt_page
-    worker.devices_enumerated.emit("111|A;222|B")
+    worker.devices_enumerated.emit("jlink|111|A;jlink|222|B")
     qtbot.wait(30)
     page.cb_jlink.setCurrentIndex(1)  # 选 222
     qtbot.wait(10)
-    worker.devices_enumerated.emit("111|A;222|B;333|C")
+    worker.devices_enumerated.emit("jlink|111|A;jlink|222|B;jlink|333|C")
     qtbot.wait(30)
     assert page.cb_jlink.currentText() == "B: 222"
     assert page.cb_jlink.count() == 4
@@ -566,14 +566,14 @@ def test_devices_enumerated_keeps_offline_placeholder(rtt_page, qtbot):
     page.show()
     qtbot.wait(20)
     # 先选中 222
-    worker.devices_enumerated.emit("111|A;222|B")
+    worker.devices_enumerated.emit("jlink|111|A;jlink|222|B")
     qtbot.wait(50)
     page.cb_jlink.setCurrentIndex(1)
     qtbot.wait(20)
     assert page.cb_jlink.currentText() == "B: 222"
     assert not page._jlink_status_dot.isVisible(), "222 在线时红点隐藏"
     # 刷新后 222 不在线
-    worker.devices_enumerated.emit("111|A;333|C")
+    worker.devices_enumerated.emit("jlink|111|A;jlink|333|C")
     qtbot.wait(50)
     assert page.cb_jlink.currentText() == "B: 222", "离线占位应保持显示"
     assert page.cb_jlink.count() == 3
@@ -597,7 +597,7 @@ def test_devices_enumerated_empty_keeps_history_placeholder(rtt_page, qtbot):
     page, worker, _ = rtt_page
     page.show()
     qtbot.wait(20)
-    worker.devices_enumerated.emit("111|A")
+    worker.devices_enumerated.emit("jlink|111|A")
     qtbot.wait(50)
     page.cb_jlink.setCurrentIndex(0)
     qtbot.wait(20)
@@ -618,7 +618,7 @@ def test_custom_target_persists_even_not_in_chip_list(rtt_page, qtbot):
     page.cb_iface.setCurrentText("SWD")
     page.cb_speed.setCurrentText("4000")
     page.sp_channel.setValue(0)
-    worker.devices_enumerated.emit("111|A")
+    worker.devices_enumerated.emit("jlink|111|A")
     qtbot.wait(30)
     page.cb_jlink.setCurrentIndex(0)
     qtbot.wait(10)
@@ -637,7 +637,7 @@ def test_custom_target_persists_even_not_in_chip_list(rtt_page, qtbot):
 def test_jlink_label_uses_product_and_cache_survives_reboot(rtt_page, qtbot):
     """J-Link 下拉显示 product:serial；离线重启后仍从缓存显示 product。"""
     page, worker, cfg = rtt_page
-    worker.devices_enumerated.emit("111|J-Link PLUS")
+    worker.devices_enumerated.emit("jlink|111|J-Link PLUS")
     qtbot.wait(30)
     assert page.cb_jlink.itemText(0) == "J-Link PLUS: 111"
     assert page.cb_jlink.currentText() == "J-Link PLUS: 111"
@@ -664,7 +664,7 @@ def test_connect_warns_when_no_online_jlink(rtt_page, qtbot):
     page, worker, _ = rtt_page
     page._set_connected_ui(worker.get_device_info())
     page._set_disconnected_ui()
-    worker.devices_enumerated.emit("111|A")
+    worker.devices_enumerated.emit("jlink|111|A")
     qtbot.wait(30)
     page.cb_jlink.setCurrentIndex(0)
     qtbot.wait(10)
@@ -683,7 +683,7 @@ def test_connect_warns_when_no_online_jlink(rtt_page, qtbot):
 def test_disconnect_when_connected_jlink_removed(rtt_page, qtbot):
     """连接状态下上次选中的 J-Link 被拔掉：应立即触发断开。"""
     page, worker, _ = rtt_page
-    worker.devices_enumerated.emit("111|A;222|B")
+    worker.devices_enumerated.emit("jlink|111|A;jlink|222|B")
     qtbot.wait(30)
     page.cb_jlink.setCurrentIndex(1)  # 选 222
     qtbot.wait(10)
@@ -693,7 +693,7 @@ def test_disconnect_when_connected_jlink_removed(rtt_page, qtbot):
     disconnects = []
     worker.disconnect_requested.connect(lambda: disconnects.append(1))
     # 刷新回来只剩 111（222 被拔了）
-    worker.devices_enumerated.emit("111|A")
+    worker.devices_enumerated.emit("jlink|111|A")
     qtbot.wait(30)
     assert page._is_connected is False, "选中的 J-Link 被拔掉应立即断开 UI"
     assert disconnects, "应 emit disconnect_requested"
@@ -703,7 +703,7 @@ def test_usb_unplug_replug_auto_reconnect(rtt_page, qtbot):
     """自动重连开启时：USB 枚举消失 → pending_reconnect；同一 serial 回来 → 自动连接。"""
     page, worker, cfg = rtt_page
     cfg.set("auto_reconnect", True)
-    worker.devices_enumerated.emit("111|A;222|B")
+    worker.devices_enumerated.emit("jlink|111|A;jlink|222|B")
     qtbot.wait(30)
     page.cb_jlink.setCurrentIndex(1)  # 选 222
     qtbot.wait(10)
@@ -717,17 +717,17 @@ def test_usb_unplug_replug_auto_reconnect(rtt_page, qtbot):
     worker.connect_requested.connect(lambda *args: connects.append(args))
 
     # 222 被拔掉
-    worker.devices_enumerated.emit("111|A")
+    worker.devices_enumerated.emit("jlink|111|A")
     qtbot.wait(30)
     assert page._is_connected is False
     assert disconnects, "应 emit disconnect_requested"
     assert page._pending_reconnect is True, "自动重连开启时应进入等待态"
 
     # 222 重新接入
-    worker.devices_enumerated.emit("111|A;222|B")
+    worker.devices_enumerated.emit("jlink|111|A;jlink|222|B")
     qtbot.wait(30)
     assert len(connects) == 1, "同一 serial 回来应自动发起连接"
-    assert connects[0][4] == "222", f"应使用上次选中的 serial 222，got {connects[0]}"
+    assert connects[0][5] == "222", f"应使用上次选中的 serial 222，got {connects[0]}"
     assert page._pending_reconnect is False, "发起连接后应清除等待态"
 
 
@@ -737,7 +737,7 @@ def test_usb_unplug_replug_auto_reconnect(rtt_page, qtbot):
 def test_remote_item_is_last_combo_item(rtt_page, qtbot):
     """devices_enumerated 重建后，远程项应始终是最后一项。"""
     page, worker, _ = rtt_page
-    worker.devices_enumerated.emit("111|A;222|B")
+    worker.devices_enumerated.emit("jlink|111|A;jlink|222|B")
     qtbot.wait(30)
     assert page.cb_jlink.count() == 3
     assert page.cb_jlink.itemText(2) == page._remote_item_text
@@ -746,7 +746,7 @@ def test_remote_item_is_last_combo_item(rtt_page, qtbot):
 def test_selecting_remote_item_shows_remote_row(rtt_page, qtbot):
     """选中远程项显示 IP/端口行并设 cfg 为 remote；选回 serial 隐藏。"""
     page, worker, cfg = rtt_page
-    worker.devices_enumerated.emit("111|A")
+    worker.devices_enumerated.emit("jlink|111|A")
     qtbot.wait(30)
     page.cb_jlink.setCurrentIndex(page.cb_jlink.count() - 1)
     qtbot.wait(30)
@@ -769,7 +769,7 @@ def test_connect_remote_unresolvable_host_warns(rtt_page, qtbot, monkeypatch):
     emitted: list[tuple] = []
     worker.connect_remote_requested.connect(lambda *args: emitted.append(args))
 
-    worker.devices_enumerated.emit("111|A")
+    worker.devices_enumerated.emit("jlink|111|A")
     qtbot.wait(30)
     page.cb_jlink.setCurrentIndex(page.cb_jlink.count() - 1)
     page.cb_target.setText("STM32H750VB")
@@ -790,7 +790,7 @@ def test_connect_remote_emits_connect_remote_requested(rtt_page, qtbot, monkeypa
     emitted: list[tuple] = []
     worker.connect_remote_requested.connect(lambda *args: emitted.append(args))
 
-    worker.devices_enumerated.emit("111|A")
+    worker.devices_enumerated.emit("jlink|111|A")
     qtbot.wait(30)
     page.cb_jlink.setCurrentIndex(page.cb_jlink.count() - 1)
     page.cb_target.setText("STM32H750VB")
@@ -813,7 +813,7 @@ def test_connect_remote_emits_connect_remote_requested(rtt_page, qtbot, monkeypa
 def test_remote_dot_reflects_reachability(rtt_page, qtbot):
     """远程模式下红点随探测结果显隐。"""
     page, worker, _ = rtt_page
-    worker.devices_enumerated.emit("111|A")
+    worker.devices_enumerated.emit("jlink|111|A")
     qtbot.wait(30)
     page.cb_jlink.setCurrentIndex(page.cb_jlink.count() - 1)
     qtbot.wait(30)
@@ -828,7 +828,7 @@ def test_remote_probe_reconnect_driven_by_ui(rtt_page, qtbot, monkeypatch):
 
     page, worker, cfg = rtt_page
     cfg.set("auto_reconnect", True)
-    worker.devices_enumerated.emit("111|A")
+    worker.devices_enumerated.emit("jlink|111|A")
     qtbot.wait(30)
     page.cb_jlink.setCurrentIndex(page.cb_jlink.count() - 1)
     page.cb_target.setText("STM32H750VB")
@@ -896,7 +896,7 @@ def test_startup_restore_remote_mode(isolated_appdata, qtbot):
     worker = FakeWorker()
     page = RTTMonitorPage(worker, cfg)
     qtbot.addWidget(page)
-    worker.devices_enumerated.emit("111|A")
+    worker.devices_enumerated.emit("jlink|111|A")
     qtbot.wait(50)
     assert not page.remote_row.isHidden()
     assert page.cb_jlink.currentText() == page._remote_item_text
@@ -924,7 +924,7 @@ def test_manual_disconnect_mark_includes_remote_addr(rtt_page, qtbot):
 def test_devices_enumerated_skips_rebuild_when_unchanged(rtt_page, qtbot):
     """连续两次相同枚举内容：第二次不应重建 combo（避免闪烁）。"""
     page, worker, _ = rtt_page
-    worker.devices_enumerated.emit("111|A")
+    worker.devices_enumerated.emit("jlink|111|A")
     qtbot.wait(50)
     first_text = page.cb_jlink.currentText()
 
@@ -937,12 +937,12 @@ def test_devices_enumerated_skips_rebuild_when_unchanged(rtt_page, qtbot):
 
     page.cb_jlink.clear = tracking_clear
     try:
-        worker.devices_enumerated.emit("111|A")
+        worker.devices_enumerated.emit("jlink|111|A")
         qtbot.wait(50)
         assert len(clear_calls) == 0, "内容未变时不应 clear"
         assert page.cb_jlink.currentText() == first_text
 
-        worker.devices_enumerated.emit("111|A;222|B")
+        worker.devices_enumerated.emit("jlink|111|A;jlink|222|B")
         qtbot.wait(50)
         assert len(clear_calls) == 1, "内容变了必须 clear 重建"
     finally:
@@ -968,7 +968,7 @@ def test_probe_remote_reachability_throttled(rtt_page, qtbot):
 def test_probe_fires_despite_unchanged_enumeration(rtt_page, qtbot):
     """远程模式下，即使枚举内容完全未变，_probe_remote_reachability 也应每次被调用。"""
     page, worker, _ = rtt_page
-    worker.devices_enumerated.emit("111|A")
+    worker.devices_enumerated.emit("jlink|111|A")
     qtbot.wait(50)
     page.cb_jlink.setCurrentIndex(page.cb_jlink.count() - 1)  # 选远程项
     qtbot.wait(50)
@@ -982,9 +982,9 @@ def test_probe_fires_despite_unchanged_enumeration(rtt_page, qtbot):
     page._probe_remote_reachability = counting_probe
     try:
         # 第一次（刚切到远程）之后，连续两次内容完全不变的枚举
-        worker.devices_enumerated.emit("111|A")
+        worker.devices_enumerated.emit("jlink|111|A")
         qtbot.wait(50)
-        worker.devices_enumerated.emit("111|A")
+        worker.devices_enumerated.emit("jlink|111|A")
         qtbot.wait(50)
         assert len(probe_calls) == 2, "内容未变时远程探测仍应被触发"
     finally:
