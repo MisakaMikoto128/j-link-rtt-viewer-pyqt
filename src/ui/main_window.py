@@ -55,9 +55,11 @@ class _LazyPageWrapper(QWidget):
     """
 
     # 首次构建完成时发信号：MainWindow 连接用于补应用全局字体（启动时
-    # _apply_ui_font 遍历 QApplication.allWidgets() 漏掉未构建的懒页 widget，
-    # 懒页构建后其内部 qfluentwidgets 控件用 QSS 默认字号，必须补一次 setFont
-    # + sync_qss_font_locked_widgets 才能跟随用户字体设置）。
+    # _apply_ui_font 遍历 QApplication.allWidgets() 漏掉未构建的懒页 widget）。
+    # 关键：qfluentwidgets 的 SubtitleLabel/StrongBodyLabel 等标题控件用
+    # pixelSize=20/14 硬编码，**不继承** QApplication.setFont 的 pointSize——
+    # 必须 setFont(app font) 把 pixelSize 清回 -1，标题才回落到用户字号
+    # （否则 pack 页三个 SubtitleLabel 恒 20px，比 RTT 页标题大一圈）。
     built = Signal()
 
     def __init__(self, object_name: str, factory, parent=None) -> None:
@@ -65,13 +67,16 @@ class _LazyPageWrapper(QWidget):
         self.setObjectName(object_name)
         self._factory = factory
         self._page = None
+        self._build_pending = False  # showEvent 里 singleShot(0) 已排队，防重复
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         self._layout = layout
 
     def page(self):
-        """显式获取真实 Page，触发构建（幂等）。"""
+        """显式获取真实 Page，触发构建（幂等）。构建是同步的（可能 ~1s），
+        调用方需知阻塞。showEvent 不走此路径（走 _deferred_build 异步）。
+        """
         if self._page is None:
             self._page = self._factory()
             self._layout.addWidget(self._page)
@@ -83,9 +88,55 @@ class _LazyPageWrapper(QWidget):
         return self._page is not None
 
     def showEvent(self, event: QShowEvent) -> None:
-        # 首次 show 触发构建（用户点击 nav 切到本页）。
-        self.page()
+        # 首次 show 不直接同步构造（会卡主线程 ~1s），先显示占位骨架，
+        # 真实 Page 用 QTimer.singleShot(0) 延迟构造（下一事件循环迭代跑）。
+        # 用户立即看到页面切换（骨架），控件异步填。
+        if self._page is None and not self._build_pending:
+            self._build_pending = True
+            self._show_placeholder()
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(0, self._deferred_build)
         super().showEvent(event)
+
+    def _show_placeholder(self) -> None:
+        """显示占位骨架：半透明遮罩 + 居中"加载中"标签，立即渲染给用户看。
+
+        创建后必须 show() + 强制处理布局（adjustSize/activate），否则
+        QTimer.singleShot(0) 的 _deferred_build 在下一 processEvents 就跑完，
+        placeholder 显示 0ms（用户看不到骨架）。
+        """
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+        placeholder = QWidget(self)
+        placeholder.setObjectName("lazyPlaceholder")
+        layout = QVBoxLayout(placeholder)
+        layout.setContentsMargins(0, 0, 0, 0)
+        label = QLabel(self.tr("加载中…"), placeholder)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet("color: #999; font-size: 14px;")
+        layout.addWidget(label)
+        self._layout.addWidget(placeholder)
+        placeholder.show()  # 显式 show，否则 visible=False 不渲染
+        placeholder.adjustSize()
+        self._layout.activate()
+        self._placeholder = placeholder
+
+    def _deferred_build(self) -> None:
+        """QTimer.singleShot(0) 触发的延迟构造：移除占位骨架，构建真实 Page。"""
+        self._build_pending = False
+        if self._page is not None:
+            return  # 已被 page() 显式构建（如跨页依赖先触发了）
+        # 移除占位骨架
+        if hasattr(self, "_placeholder"):
+            self._layout.removeWidget(self._placeholder)
+            self._placeholder.deleteLater()
+            del self._placeholder
+        # 构建真实 Page（同步，~250ms，但此时 UI 已切换完成，用户看到的是骨架）
+        self._page = self._factory()
+        self._layout.addWidget(self._page)
+        self.built.emit()
 
     def shutdown(self) -> None:
         """转发 shutdown，未构建则跳过。"""
@@ -130,9 +181,8 @@ class MainWindow(FluentWindow):
         self.about_page = _LazyPageWrapper("about", lambda: AboutPage(self), self)
 
         # 懒页首次构建后补应用全局字体：启动时 _apply_ui_font 遍历 allWidgets 漏掉
-        # 未构建的懒页，懒页构建后其 qfluentwidgets 控件用 QSS 默认字号，必须补一次
-        # setFont + sync_qss_font_locked_widgets 才跟随用户字体设置（否则字体/字号
-        # 要等用户手动改一次字体大小才正确）。
+        # 未构建的懒页，懒页构建后其 qfluentwidgets 标题控件（SubtitleLabel 等）
+        # 仍是默认 pixelSize=20，必须补一次子树 setFont 清回 pointSize 才跟随用户字号。
         for w in (
             self.memory_page,
             self.flash_page,
@@ -140,7 +190,7 @@ class MainWindow(FluentWindow):
             self.settings_page,
             self.about_page,
         ):
-            w.built.connect(self._on_lazy_page_built)
+            w.built.connect(lambda wrapper=w: self._on_lazy_page_built(wrapper))
 
         # 3. 导航 — 存储 route_key → tr_key 映射，用于语言切换时刷新
         self._nav_items: list[tuple[str, str]] = []
@@ -226,16 +276,31 @@ class MainWindow(FluentWindow):
         else:
             self._packs_dirty = True
 
-    def _on_lazy_page_built(self) -> None:
-        """懒页首次构建后补应用全局字体（用 cfg 当前值，幂等）。
+    def _on_lazy_page_built(self, wrapper: _LazyPageWrapper) -> None:
+        """懒页首次构建后补应用全局字体（只遍历该页子树，不碰其它已构建页）。
 
-        启动时 _apply_ui_font 遍历 QApplication.allWidgets() 漏掉未构建的懒页
-        widget；懒页构建后其 qfluentwidgets 控件用 QSS 默认字号，必须补一次
-        setFont + sync_qss_font_locked_widgets 才跟随用户字体设置。
+        懒页控件在 QApplication.setFont 之后新建，family/pointSize 已继承——
+        但 qfluentwidgets 的 SubtitleLabel/StrongBodyLabel 等标题控件用
+        pixelSize=20/14 硬编码，**不继承** pointSize。只有 setFont(app font)
+        能把 pixelSize 清回 -1（Qt 语义：QFont 同时带 family+pointSize 时
+        pixelSize 被覆盖为 -1），标题才回落到用户字号。漏了这一步 pack 页
+        三个 SubtitleLabel 恒 20px（用户实测「标题字体大小不太对」）。
+
+        遍历范围收敛到本页子树（findChildren），不做 _apply_ui_font 的
+        allWidgets() 全量遍历——那是启动一次性开销，热路径重复浪费。
+        _custom_font 标记的专属字体控件（RTT/内存 hex 显示区）跳过。
         """
-        self._apply_ui_font(
-            self._cfg.get("ui_font_family") or "", int(self._cfg.get("ui_font_size") or 9)
-        )
+        page = wrapper.page()
+        resolved = resolve_ui_family(self._cfg.get("ui_font_family") or "")
+        size = int(self._cfg.get("ui_font_size") or 9)
+        f = QApplication.font()
+        f.setFamily(resolved)
+        f.setPointSize(size)
+        for w in [page, *page.findChildren(QWidget)]:
+            if w.property("_custom_font"):
+                continue
+            w.setFont(f)
+        sync_qss_font_locked_widgets(page, resolved, size)
 
     def _add_nav(self, widget, icon, text_key, position=NavigationItemPosition.TOP) -> None:
         """添加导航项并记录 route_key → tr_key 映射。"""

@@ -428,9 +428,7 @@ def get_pyocd_target_infos() -> tuple[TargetDeviceInfo, ...]:
 
     # 2) 已安装 CMSIS-Pack 的 target
     try:
-        from pyocd.target.pack.pack_target import ManagedPacks
-
-        packs = ManagedPacks.get_installed_targets() or []
+        packs = _get_managed_packs_cached()
         for dev in packs:
             part = getattr(dev, "part_number", "") or ""
             norm = _normalize_name(part)
@@ -438,22 +436,101 @@ def get_pyocd_target_infos() -> tuple[TargetDeviceInfo, ...]:
                 continue
             seen.add(norm)
             vendor = getattr(dev, "vendor", "") or ""
-            mm = getattr(dev, "memory_map", None)
-            flash_addr, flash_size, ram_addr, ram_size = _extract_flash_ram_from_memory_map(mm)
             infos.append(
                 TargetDeviceInfo(
                     name=norm,
                     vendor=str(vendor),
-                    flash_addr=flash_addr,
-                    flash_size=flash_size,
-                    ram_addr=ram_addr,
-                    ram_size=ram_size,
+                    flash_addr=None,
+                    flash_size=None,
+                    ram_addr=None,
+                    ram_size=None,
                 )
             )
     except Exception as e:  # pragma: no cover - 无 pack 或索引损坏
         _logger.warning(f"pyOCD CMSIS-Pack 枚举失败：{e}")
 
     return tuple(sorted(infos, key=lambda info: info.name))
+
+
+@functools.lru_cache(maxsize=32)
+def resolve_pyocd_target_memory_map(name: str) -> TargetDeviceInfo | None:
+    """按需解析单个 pyOCD target 的 memory_map（含 CMSIS-Pack），返回完整 TargetDeviceInfo。
+
+    用于用户选中具体 target 后补 flash/ram 地址。get_pyocd_target_infos 的 CMSIS-Pack
+    部分已跳过 memory_map 解析（省 ~8s 全量 XML 解析），此处按需补单颗。
+
+    lru_cache(maxsize=32)：同一 target 重复选中（如重进 Flash 页）命中缓存。
+    ManagedPacks.get_installed_targets() 本身 ~380ms，首次调必然慢；
+    后续同 target 命中 cache 0ms，异 target 仍 ~380ms（pack 目录重扫，无法避免，
+    但用户通常只选少数几个 target）。
+
+    先查内置 target（16ms 快），再查 CMSIS-Pack（按需单颗解析）。
+    找不到或解析失败返回 None。
+    """
+    norm = _normalize_name(name)
+    if not norm:
+        return None
+
+    # 1) 内置 target（206 个，~16ms 全量，快）
+    try:
+        from pyocd.target import TARGET
+
+        for key, cls in TARGET.items():
+            if _normalize_name(key) != norm:
+                continue
+            try:
+                instance = cls(None)
+                mm = getattr(instance, "memory_map", None)
+                vendor = getattr(instance, "vendor", "") or ""
+            except Exception:
+                vendor = getattr(cls, "vendor", "") or ""
+                mm = getattr(cls, "memory_map", None)
+            flash_addr, flash_size, ram_addr, ram_size = _extract_flash_ram_from_memory_map(mm)
+            return TargetDeviceInfo(
+                name=norm,
+                vendor=str(vendor),
+                flash_addr=flash_addr,
+                flash_size=flash_size,
+                ram_addr=ram_addr,
+                ram_size=ram_size,
+            )
+    except Exception:
+        pass
+
+    # 2) CMSIS-Pack：按需单颗解析 memory_map
+    try:
+        packs = _get_managed_packs_cached()
+        for dev in packs:
+            part = getattr(dev, "part_number", "") or ""
+            if _normalize_name(part) != norm:
+                continue
+            vendor = getattr(dev, "vendor", "") or ""
+            mm = getattr(dev, "memory_map", None)
+            flash_addr, flash_size, ram_addr, ram_size = _extract_flash_ram_from_memory_map(mm)
+            return TargetDeviceInfo(
+                name=norm,
+                vendor=str(vendor),
+                flash_addr=flash_addr,
+                flash_size=flash_size,
+                ram_addr=ram_addr,
+                ram_size=ram_size,
+            )
+    except Exception:
+        pass
+
+    return None
+
+
+@functools.cache
+def _get_managed_packs_cached():
+    """ManagedPacks.get_installed_targets() 的进程内缓存。
+
+    每次调 get_installed_targets() 重扫 pack 目录 ~380ms；缓存后同进程内只扫一次。
+    pack 增删后需失效（见 pack_service 的 invalidate 调用点）。
+    """
+    from pyocd.target.pack.pack_target import ManagedPacks
+
+    return ManagedPacks.get_installed_targets() or []
 
 
 @functools.cache

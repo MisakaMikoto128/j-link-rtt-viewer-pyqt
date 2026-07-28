@@ -252,9 +252,15 @@ def _invalidate_pyocd_target_cache() -> None:
     否则目标设备下拉看不到新 pack（要重启进程才出现）。延迟导入避免循环依赖。
     """
     try:
-        from core.target_discovery import get_pyocd_target_infos
+        from core.target_discovery import (
+            _get_managed_packs_cached,
+            get_pyocd_target_infos,
+            resolve_pyocd_target_memory_map,
+        )
 
         get_pyocd_target_infos.cache_clear()
+        _get_managed_packs_cached.cache_clear()
+        resolve_pyocd_target_memory_map.cache_clear()
     except Exception:
         pass
 

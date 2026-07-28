@@ -307,6 +307,13 @@ class FlashPage(QWidget):
         )
         for info in read_cached_target_infos_for_burner_kind(kind):
             if info.name == name:
+                # CMSIS-Pack device flash/ram 为 None 时按需补 memory_map（单颗 ~6ms）
+                if info.flash_addr is None and info.ram_addr is None:
+                    from core.target_discovery import resolve_pyocd_target_memory_map
+
+                    resolved = resolve_pyocd_target_memory_map(name)
+                    if resolved is not None:
+                        return resolved
                 return info
         return None
 
