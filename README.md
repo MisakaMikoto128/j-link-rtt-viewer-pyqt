@@ -170,6 +170,19 @@ pylink-square 2.x 在 SEGGER J-Link DLL 下有 breaking change：`rtt_start` / `
 
 欢迎 Issue / PR！请先看 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+## 📋 更新日志
+
+### v0.9.0
+
+- **🔐 STM32 选项字读写保护** - 新增 RDP 读保护 + WRP 写保护功能，数据驱动覆盖 71 颗芯片 / 19 家族；烧录流程支持自动解除/添加读写保护，无需安装 CubeProgrammer
+- **🔌 RTT 监控支持 ST-Link/CMSIS-DAP** - 不再限于 J-Link，ST-Link/CMSIS-DAP 调试器也可进行 RTT 实时监控
+- **🚀 CMSIS-Pack 目标枚举大幅提速** - 首次进入烧录页目标设备列表加载约 4s -> 0.5s
+- **🔍 搜索/替换 emoji 位置错位修复** - 修复 emoji 等非 BMP 字符搜索高亮选中错误文本的问题；新增 VSCode 风格当前匹配橙色高亮
+- **🎨 修复 Pack 管理页字体大小** - 标题控件字号现已正确跟随全局界面字体设置
+- **⚡ 页面懒加载优化** - 首次切换到各功能页时立即显示骨架，不再阻塞主线程
+
+完整历史见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 📄 License
 
 [MIT](LICENSE) © 2026 [@MisakaMikoto128](https://github.com/MisakaMikoto128)
