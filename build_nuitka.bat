@@ -17,7 +17,7 @@ set NUITKA_CACHE_DIR_DLL_DEPENDENCIES=.\temp\nuitka_cache_dll_dependencies
 REM Embedded PE metadata. Keep PRODUCT_VERSION in sync with pyproject.toml / about_page.py.
 set COMPANY_NAME=MisakaMikoto128
 set PRODUCT_NAME=JLinkRTTViewer
-set PRODUCT_VERSION=0.8.0
+set PRODUCT_VERSION=0.9.0
 set FILE_DESCRIPTION=J-Link RTT Viewer GUI
 
 python -m nuitka ^
