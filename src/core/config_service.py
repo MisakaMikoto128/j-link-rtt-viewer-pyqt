@@ -59,6 +59,10 @@ class ConfigService(QObject):
         # 全局界面字体 family：空串 = 跟随 QApplication 默认字体（系统 UI 字体）。
         # 覆盖范围同 ui_font_size（_custom_font 标记的 RTT/内存显示区不受影响）。
         "ui_font_family": "",
+        # 界面缩放（DPI）："Auto" = 跟随系统（PassThrough rounding，不取整）；
+        # "1.0"/"1.25"/"1.5"/... = 强制 QT_SCALE_FACTOR（关闭系统自动缩放）。
+        # 仅启动时读取应用（main._apply_dpi_scale），运行时改动需重启生效。
+        "dpi_scale": "Auto",
         "max_display_lines": 10000,
         "rtt_poll_interval_ms": 100,  # RTT 轮询间隔（ms）—— 旧版叫 rx_timeout_ms，已迁移
         "rtt_encoding": "utf-8",  # RTT 解码编码：utf-8 / gbk / utf-16-le / latin-1 / ascii

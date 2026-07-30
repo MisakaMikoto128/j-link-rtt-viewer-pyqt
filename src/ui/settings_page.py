@@ -209,6 +209,26 @@ class SettingsPage(QWidget):
         self._setting_rows.append(row_ui_font_family)
         app_lay.addWidget(row_ui_font_family)
 
+        # 界面缩放（DPI）：仅启动时读取应用（main._apply_dpi_scale），运行时改动需重启。
+        self._dpi_scale_values = ["Auto", "1.0", "1.25", "1.5", "1.75", "2.0", "2.5", "3.0"]
+        self._dpi_scale_labels = [
+            self.tr("自动"),
+            "100%", "125%", "150%", "175%", "200%", "250%", "300%",
+        ]
+        self.cb_dpi_scale = ComboBox(self)
+        self.cb_dpi_scale.addItems(self._dpi_scale_labels)
+        cur_dpi = str(self._cfg.get("dpi_scale") or "Auto")
+        cur_dpi_idx = (
+            self._dpi_scale_values.index(cur_dpi)
+            if cur_dpi in self._dpi_scale_values
+            else 0
+        )
+        self.cb_dpi_scale.setCurrentIndex(cur_dpi_idx)
+        self.cb_dpi_scale.currentIndexChanged.connect(self._on_dpi_scale_changed)
+        row_dpi = _SettingRow("界面缩放", self.cb_dpi_scale)
+        self._setting_rows.append(row_dpi)
+        app_lay.addWidget(row_dpi)
+
         # 背景图片（v0.3.0 新增）：路径 + 浏览 + 清除
         self._lbl_bg_image = BodyLabel(self.tr("背景图片"))
         self.le_bg_image = LineEdit(self)
@@ -510,6 +530,18 @@ class SettingsPage(QWidget):
         self.cb_theme.setCurrentIndex(idx)
         self.cb_theme.blockSignals(False)
 
+        # 界面缩放 ComboBox：保持选中索引不变，仅刷新「自动」文字（百分比不变）
+        dpi_idx = self.cb_dpi_scale.currentIndex()
+        self._dpi_scale_labels = [
+            self.tr("自动"),
+            "100%", "125%", "150%", "175%", "200%", "250%", "300%",
+        ]
+        self.cb_dpi_scale.blockSignals(True)
+        self.cb_dpi_scale.clear()
+        self.cb_dpi_scale.addItems(self._dpi_scale_labels)
+        self.cb_dpi_scale.setCurrentIndex(dpi_idx)
+        self.cb_dpi_scale.blockSignals(False)
+
         # 重置模式 ComboBox
         ridx = self.cb_reset_mode.currentIndex()
         self.cb_reset_mode.blockSignals(True)
@@ -629,6 +661,22 @@ class SettingsPage(QWidget):
         if v <= 0:
             return
         self._cfg.set("font_size", v)
+
+    def _on_dpi_scale_changed(self, idx: int) -> None:
+        """界面缩放下拉切换：写入 config 并提示重启生效。
+
+        DPI 策略只在 QApplication 构造前应用（见 main._apply_dpi_scale），
+        运行时无法热切换，必须重启程序。
+        """
+        if idx < 0 or idx >= len(self._dpi_scale_values):
+            return
+        value = self._dpi_scale_values[idx]
+        self._cfg.set("dpi_scale", value)
+        _infobar.warn(
+            self,
+            self.tr("重启生效"),
+            self.tr("界面缩放已更改，重启程序后生效。"),
+        )
 
     def _on_encoding_changed(self, display_name: str) -> None:
         """编码下拉切换：从显示名映射到内部存储的小写标准名。"""

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import faulthandler
+import os
 import sys
 import threading
 from pathlib import Path
@@ -57,10 +58,51 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 
+def _apply_dpi_scale() -> None:
+    """启动前应用 DPI 缩放策略（必须在 QApplication 构造前调用）。
+
+    - "Auto"：PassThrough rounding，让 Qt 用真实系统 DPR（不取整）。PySide6 6.0+
+      已默认启用高 DPI 缩放，无需再 setAttribute(AA_EnableHighDpiScaling)。
+    - 具体值（如 "1.5"）：设 os.environ QT_ENABLE_HIGHDPI_SCALING=0 +
+      QT_SCALE_FACTOR，关闭系统自动缩放、强制指定比。环境变量须在 QApplication
+      构造前设定才生效。
+
+    配置从 user_prefs.json 轻量直读（ConfigService 此时未构造，且其 QTimer/信号
+    依赖 QApplication，不能在此触发）。读失败走 Auto（最安全：与系统一致）。
+    """
+    scale = "Auto"
+    try:
+        import json as _json
+
+        from core.config_service import ConfigService as _Cfg
+
+        _prefs = _Cfg._compute_user_prefs_path()
+        if _prefs.exists():
+            v = _json.loads(_prefs.read_text(encoding="utf-8")).get("dpi_scale")
+            if isinstance(v, str) and v:
+                scale = v
+    except Exception:
+        pass
+
+    if scale == "Auto":
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
+        return
+    # 具体值：校验合法浮点，防脏数据让 Qt 报 warning 后仍退回 Auto 语义
+    try:
+        float(scale)
+    except ValueError:
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
+        return
+    os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
+    os.environ["QT_SCALE_FACTOR"] = scale
+
+
 def main() -> int:
-    QApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-    )
+    _apply_dpi_scale()
     app = QApplication(sys.argv)
 
     # 冻结系统 UI 字体 family（必须在 setFont 之前）：用于「跟随系统」时还原。
