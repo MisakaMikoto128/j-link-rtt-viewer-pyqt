@@ -680,20 +680,27 @@ class FlashPage(QWidget):
     # 烧录器选择（与 RTT 页同形态：下拉 + 红点 + 离线占位）
     # ------------------------------------------------------------------
     def _on_jlink_burners_enumerated(self, data: str) -> None:
-        """data: 'serial|product;...'。"""
+        """data: 'kind|serial|product;...'（RTT worker 统一格式，含 J-Link + pyOCD probe）。
+
+        只取 J-Link 段（kind == BURNER_KIND_JLINK）；ST-Link/CMSIS-DAP 走独立的
+        pyocd_probes_enumerated 信号，这里跳过避免重复。旧格式 'serial|product' 已
+        不再使用--partition 只切一次会把 kind 当 serial，isdigit() 再把所有设备过滤掉。
+        """
         serials: list[str] = []
         products: dict[str, str] = {}
         if data:
             for chunk in data.split(";"):
                 if not chunk:
                     continue
-                serial, _, product = chunk.partition("|")
-                serial = serial.strip()
-                product = product.strip()
-                if serial and serial.isdigit():
-                    serials.append(serial)
-                    products[serial] = product
-                    self._cache_burner(BURNER_KIND_JLINK, serial, product)
+                parts = chunk.split("|", 2)
+                if len(parts) < 3:
+                    continue
+                kind, serial, product = parts[0].strip(), parts[1].strip(), parts[2].strip()
+                if kind != BURNER_KIND_JLINK or not serial:
+                    continue
+                serials.append(serial)
+                products[serial] = product
+                self._cache_burner(BURNER_KIND_JLINK, serial, product)
         self._jlink_serials = serials
         self._jlink_products = products
         self._rebuild_burner_combo()

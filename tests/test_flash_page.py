@@ -143,7 +143,7 @@ def test_remote_item_is_last_combo_item(flash_page):
     """
     from ui.widgets.remote_host import REMOTE_ITEM_TEXT
 
-    flash_page._on_jlink_burners_enumerated("111|J-Link;222|J-Link OB")
+    flash_page._on_jlink_burners_enumerated("jlink|111|J-Link;jlink|222|J-Link OB")
     _process()
     assert flash_page.cmb_burner.count() == 4
     assert flash_page.cmb_burner.itemText(0) == "── J-Link ──"
@@ -152,11 +152,26 @@ def test_remote_item_is_last_combo_item(flash_page):
     assert flash_page.cmb_burner.itemText(3) == REMOTE_ITEM_TEXT
 
 
+def test_jlink_burners_enumerated_parses_three_field_format(flash_page):
+    """RTT worker emit 'kind|serial|product'（三段），非旧的 'serial|product'。
+
+    回归旧 bug：partition('|') 只切一次把 kind 'jlink' 当 serial，isdigit() 再
+    过滤掉所有设备 -> 烧录页死活不显示 J-Link（RTT 页却正常）。
+    """
+    # 混合 J-Link + ST-Link，验证只取 J-Link 段
+    flash_page._on_jlink_burners_enumerated(
+        "jlink|123456789|J-Link EDU;stlink|abc|ST-Link V2"
+    )
+    _process()
+    assert flash_page._jlink_serials == ["123456789"]
+    assert flash_page._jlink_products == {"123456789": "J-Link EDU"}
+
+
 def test_selecting_remote_item_shows_row_and_persists_mode(flash_page):
     """选中「远程连接…」后显示 IP/端口行并持久化 flash_jlink_mode。"""
     from ui.widgets.remote_host import REMOTE_ITEM_TEXT
 
-    flash_page._on_jlink_burners_enumerated("111|A")
+    flash_page._on_jlink_burners_enumerated("jlink|111|A")
     _process()
     idx = flash_page.cmb_burner.findText(REMOTE_ITEM_TEXT)
     flash_page.cmb_burner.setCurrentIndex(idx)
