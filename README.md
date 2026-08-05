@@ -15,31 +15,47 @@
 |:---:|:---:|
 | <img src="img/home.png" width="420"> | <img src="img/home2.png" width="420"> |
 
-## ✨ 功能
+## 功能
 
-- 🌐 **多语言界面** — 简体中文 / 繁體中文 / 日本語 / 한국어 / English / Français 即时切换
-- 🚀 **实时 RTT 监控** — UTF-8 / GBK / UTF-16-LE / Latin-1 / ASCII 解码，ANSI 颜色着色，0-15 通道任意切换（或 -1=全部通道），文本 / 十六进制回发数据，最近 50 条发送历史
-- 🔍 **搜索 / 替换浮动栏** — Ctrl+F 查找 / Ctrl+H 替换，支持正则 / 全词 / 大小写，匹配高亮 + 染色替换，VSCode 风格交互
-- 🔢 **HEX 显示 / 发送** — 接收区一键切十六进制查看，发送区支持 HEX 模式双向切换，发送历史自动记录
-- ⏱️ **定时发送** — 按间隔自动重复发送，支持文本 / HEX 两种模式
-- 🧮 **CRC 发送脚本** — 内置 CRC-8 / CRC-16 / CRC-32 算法，发送时自动追加校验值，可开关
-- 📏 **自动断帧** — 按空闲间隙自动插入换行，无需 MCU 端配合即可分行显示
-- 💾 **固件烧录** — 支持 `.axf` / `.elf` / `.hex` / `.bin`，浏览 / 拖放 / 最近文件三种选法，独立 worker（不干涉 RTT 会话），可选擦除模式与完成动作，可选逐字节校验，详情日志一键复制（[指南](docs/flashing-guide.md)）
-- 🔁 **固件格式转换** — 「另存为」一键把 axf/elf/hex/bin 转换为 `.bin` / `.hex`，离线可用，无需 J-Link
-- 🔣 **符号表查看器** — 选中 axf/elf 直接读 `.symtab`：名称搜索、地址/大小数值排序、类别 + 绑定 chip 多选过滤、彩色 Type pill、复制选中（[指南](docs/symbol-table-guide.md)）
-- 🔍 **内存查看** — Hex dump（8/16/32 字节/行），地址跳转，hex pattern 搜索，自动刷新 + diff 高亮，hover 实时类型解析（u8-u64 / i8-i64 / float / double，小端/大端），固件按区间分块导出 `.bin`，写内存（带 confirm）
-- 📐 **收窄模式悬浮面板** — 窗口缩窄时左侧配置面板自动转为悬浮卡片，ToolToggleButton 控制显隐，fade + slide 动画，不遮挡工具栏
-- 🎨 **Fluent 设计** — 浅色 / 深色 / 跟随系统主题，主题色 + 界面字体（family/字号）+ RTT 字体可独立配置
-- 🖼️ **可配置背景图片** — 设置页选背景图，透明度 0–100% 可调，拉伸 / 覆盖 / 居中 / 平铺四种填充方式，Mica 自动让位
-- 🎯 **多 J-Link 设备选择** — 顶部下拉自动枚举所有接入 J-Link（200ms 刷新），serial 持久化回选，离线红点指示，即插即用
-- 🔗 **远程连接（Remote Server）** — 连接远端 J-Link Remote Server，IPv4 / 主机名均可，2s 可达性预检
-- 📝 **会话标记** — 手动插入 + 连接/断开自动插入（颜色可配）
-- ⌨️ **快捷键** — F2 连接 / F3 断开 / F4 重置 / Ctrl+F 查找 / Ctrl+H 替换（任意子页生效，幂等）
-- 🔄 **可配置重置行为** — 正常重置 / 重置并暂停（halt）/ 自动重连（更可靠，1s 延迟）
-- 📐 **可拖动 RTT display 高度** — 自定义 resize handle，超出窗口自动整页滚
-- 📦 **Nuitka 单 exe 打包** — 多分辨率图标，开发/打包一致
+### RTT 监控
 
-## 📸 截图
+- **多语言界面**：简体中文 / 繁體中文 / 日本語 / 한국어 / English / Français，即时切换
+- **实时 RTT 监控**：UTF-8 / GBK / UTF-16-LE / Latin-1 / ASCII 解码，ANSI 颜色着色，0–15 通道任意切换或合并查看，文本 / 十六进制回发，50 条发送历史
+- **搜索 / 替换**：Ctrl+F 查找、Ctrl+H 替换，正则 / 全词 / 大小写，匹配高亮 + 染色替换，VSCode 风格交互
+- **HEX 显示 / 发送**：接收区一键切十六进制，发送区双向 HEX 模式
+- **定时发送**：按间隔自动重复，文本 / HEX 两种模式
+- **CRC 脚本**：内置 CRC-8 / 16 / 32，发送时自动追加校验值，可开关
+- **自动断帧**：按空闲间隙自动换行，无需 MCU 端配合
+- **会话标记**：手动插入 + 连接/断开自动插入，颜色可配
+- **快捷键**：F2 连接 / F3 断开 / F4 重置 / Ctrl+F 查找 / Ctrl+H 替换
+
+### 烧录与固件
+
+- **固件烧录**：`.axf` / `.elf` / `.hex` / `.bin`，浏览 / 拖放 / 最近文件，独立 worker 不干涉 RTT 会话，可选擦除模式、完成动作、逐字节校验（[指南](docs/flashing-guide.md)）
+- **固件格式转换**：axf/elf/hex/bin 一键另存为 `.bin` / `.hex`，离线可用
+- **符号表查看器**：选中 axf/elf 读 `.symtab`，名称搜索、地址/大小排序、类别 + 绑定过滤、复制选中（[指南](docs/symbol-table-guide.md)）
+
+### 内存查看
+
+- **Hex dump**：8/16/32 字节/行，地址跳转，hex 搜索，自动刷新 + diff 高亮
+- **类型解析**：hover 实时显示 u8-u64 / i8-i64 / float / double，小端 / 大端
+- **导出 / 写入**：按区间分块导出 `.bin`；写内存带二次确认
+
+### 连接
+
+- **多 J-Link 设备**：下拉自动枚举，200ms 刷新，serial 持久化回选，离线红点
+- **远程连接**：连 J-Link Remote Server，IPv4 / 主机名，2s 可达性预检
+- **可配置重置**：正常重置 / 重置并暂停 / 自动重连
+
+### 界面与打包
+
+- **Fluent 设计**：浅色 / 深色 / 跟随系统，主题色 + 界面字体 + RTT 字体独立配置
+- **背景图片**：透明度 0–100%，拉伸 / 覆盖 / 居中 / 平铺
+- **响应式布局**：窗口缩窄时配置面板转悬浮卡片，不遮挡工具栏
+- **可拖动 RTT 高度**：自定义 resize handle，超出窗口整页滚
+- **Nuitka 单 exe 打包**：多分辨率图标，开发/打包一致
+
+## 截图
 
 | RTT 监控 | 内存查看 | 设置 |
 |:---:|:---:|:---:|
@@ -49,7 +65,7 @@
 |:---:|:---:|
 | ![flashing](img/flashing1.png) | ![symbol table](img/flashing2.png) |
 
-## 🚀 快速开始
+## 快速开始
 
 ### 前置要求
 
@@ -68,7 +84,7 @@
 
 **使用步骤：**
 1. zip 版：解压到任意目录后双击 `JLinkRTTViewer.exe`；onefile 版：直接双击 .exe
-2. 在 UI 顶部选目标 MCU、接口（SWD / JTAG）、速度、RTT 通道 → 点「连接」
+2. 在 UI 顶部选目标 MCU、接口（SWD / JTAG）、速度、RTT 通道 -> 点「连接」
 3. 用户偏好自动保存到 `%APPDATA%\JLinkRTTViewer\user_prefs.json`
 4. 想加自己的 MCU / 改默认速度档？编辑 `%APPDATA%\JLinkRTTViewer\config.json`（首次启动自动从内置版 seed 一份）
 
@@ -131,7 +147,7 @@ build_nuitka_onefile.bat    # onefile：输出 build/onefile/JLinkRTTViewer.exe�
 #   build/JLinkRTTViewer-vX.Y.Z-win64.exe  （重命名后的 onefile）
 ```
 
-**一键发版**（版本 bump → 提交 → tag → 双版本编译 → 打包 → push → 建 GitHub Release）：
+**一键发版**（版本 bump -> 提交 -> tag -> 双版本编译 -> 打包 -> push -> 建 GitHub Release）：
 
 ```powershell
 # 交互菜单选「Release to GitHub」，或直接：
@@ -141,63 +157,63 @@ build_nuitka_onefile.bat    # onefile：输出 build/onefile/JLinkRTTViewer.exe�
 
 均**不需要目标机器装 Python**。
 
-## 📖 文档
+## 文档
 
-- **用户手册**：[docs/USER_GUIDE.md](docs/USER_GUIDE.md) — 完整 UI / 配置 / 快捷键说明
-- **固件烧录指南**：[docs/flashing-guide.md](docs/flashing-guide.md) — 烧录流程 + 固件另存为（格式转换）
-- **符号表查看器指南**：[docs/symbol-table-guide.md](docs/symbol-table-guide.md) — chip 过滤 / 排序 / 复制 / 实用技巧
-- **工程笔记**：[CLAUDE.md](CLAUDE.md) — 项目演进中遇到的真实 Qt / pylink / 打包问题与解法
+- **用户手册**：[docs/USER_GUIDE.md](docs/USER_GUIDE.md) - 完整 UI / 配置 / 快捷键说明
+- **固件烧录指南**：[docs/flashing-guide.md](docs/flashing-guide.md) - 烧录流程 + 固件另存为（格式转换）
+- **符号表查看器指南**：[docs/symbol-table-guide.md](docs/symbol-table-guide.md) - chip 过滤 / 排序 / 复制 / 实用技巧
+- **工程笔记**：[CLAUDE.md](CLAUDE.md) - 项目演进中遇到的真实 Qt / pylink / 打包问题与解法
 - **贡献指南**：[CONTRIBUTING.md](CONTRIBUTING.md)
-- **更新日志**：[CHANGELOG.md](CHANGELOG.md)
+- **更新日志**：[Releases](https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/releases)
 
-## ⚠️ pylink-square 必须用 1.6.0
+## pylink-square 必须用 1.6.0
 
 pylink-square 2.x 在 SEGGER J-Link DLL 下有 breaking change：`rtt_start` / `rtt_read` 内部行为变化，导致 RTT 通道永远没数据（虽然 `connected()` 返回 True）。本项目锁定 1.6.0，请**不要**升级。
 
-详见 [CLAUDE.md → pylink 必须用 1.6.0](CLAUDE.md#pylink-必须用-160-2x-不工作)。
+详见 [CLAUDE.md -> pylink 必须用 1.6.0](CLAUDE.md#pylink-必须用-160-2x-不工作)。
 
-## 🛠️ 技术栈
+## 技术栈
 
 | 组件 | 版本 | 用途 |
 |---|---|---|
 | [PySide6](https://pypi.org/project/PySide6/) | ≥ 6.6, < 7 | Qt for Python |
 | [PyQt-Fluent-Widgets](https://github.com/zhiyiYo/PyQt-Fluent-Widgets) | ≥ 1.6 | Fluent 设计组件库 |
 | [pylink-square](https://github.com/Square/pylink) | **1.6.0** | SEGGER J-Link Python 封装 |
-| [Nuitka](https://nuitka.net/) | ≥ 2.0 | Python → 原生 exe |
+| [Nuitka](https://nuitka.net/) | ≥ 2.0 | Python -> 原生 exe |
 | pytest | ≥ 8.0 | 测试 |
 
-## 🤝 贡献
+## 贡献
 
 欢迎 Issue / PR！请先看 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-## 📋 更新日志
+## 更新日志
 
 ### v0.9.0
 
-- **🔐 STM32 选项字读写保护** - 新增 RDP 读保护 + WRP 写保护功能，数据驱动覆盖 71 颗芯片 / 19 家族；烧录流程支持自动解除/添加读写保护，无需安装 CubeProgrammer
-- **🔌 RTT 监控支持 ST-Link/CMSIS-DAP** - 不再限于 J-Link，ST-Link/CMSIS-DAP 调试器也可进行 RTT 实时监控
-- **🚀 CMSIS-Pack 目标枚举大幅提速** - 首次进入烧录页目标设备列表加载约 4s -> 0.5s
-- **🔍 搜索/替换 emoji 位置错位修复** - 修复 emoji 等非 BMP 字符搜索高亮选中错误文本的问题；新增 VSCode 风格当前匹配橙色高亮
-- **🎨 修复 Pack 管理页字体大小** - 标题控件字号现已正确跟随全局界面字体设置
-- **⚡ 页面懒加载优化** - 首次切换到各功能页时立即显示骨架，不再阻塞主线程
+- **STM32 选项字读写保护**：新增 RDP 读保护 + WRP 写保护功能，数据驱动覆盖 71 颗芯片 / 19 家族；烧录流程支持自动解除/添加读写保护，无需安装 CubeProgrammer
+- **RTT 监控支持 ST-Link/CMSIS-DAP**：不再限于 J-Link，ST-Link/CMSIS-DAP 调试器也可进行 RTT 实时监控
+- **CMSIS-Pack 目标枚举大幅提速**：首次进入烧录页目标设备列表加载约 4s → 0.5s
+- **搜索/替换 emoji 位置错位修复**：修复 emoji 等非 BMP 字符搜索高亮选中错误文本的问题；新增 VSCode 风格当前匹配橙色高亮
+- **修复 Pack 管理页字体大小**：标题控件字号现已正确跟随全局界面字体设置
+- **页面懒加载优化**：首次切换到各功能页时立即显示骨架，不再阻塞主线程
 
-完整历史见 [CHANGELOG.md](CHANGELOG.md)。
+完整历史见 [Releases](https://github.com/MisakaMikoto128/j-link-rtt-viewer-pyqt/releases)。
 
-## 📄 License
+## License
 
 [MIT](LICENSE) © 2026 [@MisakaMikoto128](https://github.com/MisakaMikoto128)
 
-## 🙏 致谢
+## 致谢
 
-- [SEGGER](https://www.segger.com/) — J-Link 调试器 + RTT 协议
-- [Square](https://github.com/Square/pylink) — pylink-square
-- [zhiyiYo](https://github.com/zhiyiYo) — PyQt-Fluent-Widgets
+- [SEGGER](https://www.segger.com/) - J-Link 调试器 + RTT 协议
+- [Square](https://github.com/Square/pylink) - pylink-square
+- [zhiyiYo](https://github.com/zhiyiYo) - PyQt-Fluent-Widgets
 
 ### AI 辅助开发
 
 本项目在开发过程中使用了以下 AI 模型辅助编码、设计与测试：
 
-- [Qoder](https://qoder.com/) — 代码生成与重构
-- CLM-5.2 — 代码生成与调试
-- [小米 MiMo](https://github.com/XiaomiMiMo) — 代码生成与审查
-- Hy3 — 代码生成与测试
+- [Qoder](https://qoder.com/) - 代码生成与重构
+- CLM-5.2 - 代码生成与调试
+- [小米 MiMo](https://github.com/XiaomiMiMo) - 代码生成与审查
+- Hy3 - 代码生成与测试
