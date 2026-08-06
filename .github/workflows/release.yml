@@ -1,0 +1,80 @@
+name: release
+
+# 打 v* tag 时自动构建并发布 GitHub Release。
+# 用法：git tag v0.11.0 && git push origin v0.11.0
+# 产物自动挂到 release，无需手动 gh release create。
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      # 从 tag 名算版本：'v0.11.0' -> '0.11.0'（去掉前导 v）
+      APP_VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # git describe --tags 需要完整历史
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'   # 实测 3.13 启动最快，见 docs/python-version-comparison.md
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build standalone
+        run: cmd /c .\build_nuitka.bat
+
+      - name: Build onefile
+        run: cmd /c .\build_nuitka_onefile.bat
+
+      - name: Package artifacts
+        shell: pwsh
+        run: |
+          $version = "$env:APP_VERSION".Substring(1)     # strip leading 'v'
+          $base = "JLinkRTTViewer-$env:APP_VERSION-release-win64"
+          $dist = "build/dist/$base"
+          New-Item -ItemType Directory -Force $dist | Out-Null
+          Copy-Item build/main.dist/JLinkRTTViewer.exe "$dist/JLinkRTTViewer.exe"
+          Copy-Item build/onefile/JLinkRTTViewer.exe "$dist/$base.exe"
+          # 7-Zip 非 runner 默认装，用 Compress-Archive 回退。
+          Compress-Archive -Path "$dist/JLinkRTTViewer.exe" -DestinationPath "$dist/$base.zip" -CompressionLevel Optimal
+          "version=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "base=$base" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Extract changelog section
+        id: notes
+        shell: pwsh
+        run: |
+          $content = Get-Content CHANGELOG.md -Raw
+          $pattern = "(?ms)^## \[$env:version\](?: - | — )[^\r\n]*\r?\n(.*?)(?=^## \[|\z)"
+          $m = [regex]::Match($content, $pattern)
+          $notes = if ($m.Success) { $m.Groups[1].Value.Trim() } else { "" }
+          if (-not $notes) {
+            Write-Host "::warning::CHANGELOG.md 未找到 [$env:version] 小节，release notes 将为空"
+            $notes = "见 CHANGELOG.md 的 [$env:version] 小节。"
+          }
+          $escaped = $notes -replace '%', '%25' -replace "`n", '%0A' -replace "`r", '%0D'
+          "body=$escaped" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "notes extracted ($($notes.Length) chars)"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.notes.outputs.body }}
+          files: |
+            build/dist/${{ env.base }}/${{ env.base }}.zip
+            build/dist/${{ env.base }}/${{ env.base }}.exe

@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-06
+
+### Features
+
+- **界面缩放（DPI）配置** - 设置页新增「界面缩放」选项，支持自动（跟随系统）+ 100%-300% 固定倍率；应用启动时读取，高 DPI 下文字/控件不再模糊。`_apply_dpi_scale` 在 QApplication 构造前应用 `PassThrough` 取整策略或 `QT_SCALE_FACTOR` 环境变量。
+
+### Fixes
+
+- **固件烧录页 J-Link 设备不显示** - 修复烧录页枚举不出 J-Link 设备（RTT 监控页却正常）的问题。RTT worker emit 三段格式 `kind|serial|product`，烧录页旧用 `partition("|")` 只切一次把 kind 当 serial、`isdigit()` 再全部过滤；改为三段解析 + kind 过滤，与 RTT 页同形态。
+
+## [0.9.0] - 2026-07-29
+
+### Features
+
+- **🔐 STM32 选项字读写保护** - 新增 RDP 读保护 + WRP 写保护功能，数据驱动覆盖 71 颗芯片 / 19 家族；烧录流程支持自动解除/添加读写保护，无需安装 CubeProgrammer。
+- **🔌 RTT 监控支持 ST-Link/CMSIS-DAP** - 不再限于 J-Link，ST-Link/CMSIS-DAP 调试器也可进行 RTT 实时监控。
+- **🚀 CMSIS-Pack 目标枚举大幅提速** - 首次进入烧录页目标设备列表加载约 4s -> 0.5s。
+
+### Fixes
+
+- **🔍 搜索/替换 emoji 位置错位修复** - 修复 emoji 等非 BMP 字符搜索高亮选中错误文本的问题；新增 VSCode 风格当前匹配橙色高亮。
+- **🎨 修复 Pack 管理页字体大小** - 标题控件字号现已正确跟随全局界面字体设置。
+
+### Performance
+
+- **⚡ 页面懒加载优化** - 首次切换到各功能页时立即显示骨架，不再阻塞主线程。
+
 ## [0.8.0] - 2026-07-25
 
 ### Features

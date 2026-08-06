@@ -28,6 +28,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Lint (ruff check)
+        uses: astral-sh/ruff-action@v3
+        with:
+          src: "src tests"
+
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen   # CI 无显示设备，PySide6 用 offscreen 后端

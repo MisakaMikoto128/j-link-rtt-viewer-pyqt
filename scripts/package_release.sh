@@ -76,7 +76,7 @@ release() {
     if [ "$DRY_RUN" -eq 0 ]; then
         git add pyproject.toml src/ui/about_page.py build_nuitka.bat build_nuitka_onefile.bat
         git commit -m "chore: bump version to $rel_version"
-        git tag "$tag"
+        git tag -a "$tag" -m "$tag"
     fi
 
     echo "[release] build + package"
@@ -99,14 +99,22 @@ release() {
     fi
 
     echo "[release] create GitHub release $tag"
+    # Extract the CHANGELOG section for $rel_version as release notes (keep in sync
+    # with CHANGELOG.md); fall back to a placeholder if the section is missing.
     if [ "$DRY_RUN" -eq 1 ]; then
-        echo "  > gh release create $tag \"$tarball\" \"$exe\" --title \"$tag\" --notes \"$tag...\""
+        echo "  > gh release create $tag \"$tarball\" \"$exe\" --title \"$tag\" --notes \"<CHANGELOG [$rel_version] section>\""
         echo "DryRun complete. No files were changed."
     else
-        gh release create "$tag" "$tarball" "$exe" --title "$tag" \
-            --notes "$tag
+        if [ -f CHANGELOG.md ]; then
+            notes_body="$(sed -n "/^## \[$rel_version\]/,/^## \[/p" CHANGELOG.md | sed '1d;$d' | sed -e 's/^# \{1,3\} */### /')"
+        fi
+        if [ -z "${notes_body:-}" ]; then
+            notes_body="见 CHANGELOG.md 的 [$rel_version] 小节。"
+        fi
+        notes="$tag
 
-TODO: 从 CHANGELOG.md 的 [$rel_version] 小节拷贝 release 说明。"
+$notes_body"
+        gh release create "$tag" "$tarball" "$exe" --title "$tag" --notes "$notes"
     fi
 }
 

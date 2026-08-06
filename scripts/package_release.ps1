@@ -97,9 +97,9 @@ function Invoke-Release {
     # commit + tag
     Write-Host "[release] commit + tag $tag" -ForegroundColor Cyan
     if (-not $DryRun) {
-        git add pyproject.toml src/ui/about_page.py build_nuitka_onefile.bat | Out-Null
+        git add pyproject.toml src/ui/about_page.py build_nuitka.bat build_nuitka_onefile.bat | Out-Null
         git commit -m "chore: bump version to $relVersion" | Out-Null
-        git tag $tag | Out-Null
+        git tag -a $tag -m $tag | Out-Null
     }
 
     # build + package via this script in agent mode (no menu)
@@ -126,13 +126,34 @@ function Invoke-Release {
 
     # gh release
     Write-Host "[release] create GitHub release $tag" -ForegroundColor Cyan
-    $notes = "$tag`n`nTODO: 从 CHANGELOG.md 的 [$relVersion] 小节拷贝 release 说明。"
+    $notes = "$tag`n`n$(Get-ChangelogSection -Version $relVersion)"
     if ($DryRun) {
         Write-Host "  > gh release create $tag `"$zip`" `"$exe`" --title `"$tag`" --notes `"$notes`"" -ForegroundColor DarkGray
         Write-Host "`nDryRun complete. No files were changed." -ForegroundColor Yellow
     } else {
         gh release create $tag "$zip" "$exe" --title "$tag" --notes "$notes"
     }
+}
+
+<#
+.SYNOPSIS
+  Extract the CHANGELOG section body for a given version, minus the section header.
+  Used as the GitHub release notes so notes stay in sync with CHANGELOG.md.
+.EXAMPLE
+  Get-ChangelogSection -Version 0.10.0
+#>
+function Get-ChangelogSection {
+    param([string]$Version)
+    $path = Join-Path $repoRoot "CHANGELOG.md"
+    if (-not (Test-Path $path)) { return "" }
+    $content = Get-Content $path -Raw
+    $pattern = "(?ms)^## \[$Version\](?: - | — )[^\r\n]*\r?\n(.*?)(?=^## \[|\z)"
+    $m = [regex]::Match($content, $pattern)
+    if (-not $m.Success) {
+        Write-Warning "CHANGELOG.md 未找到 [${Version}] 小节，release notes 将为空。"
+        return ""
+    }
+    return $m.Groups[1].Value.Trim()
 }
 
 if ($noActionFlags) {
