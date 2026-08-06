@@ -57,7 +57,6 @@ class PyocdRttBackend:
     def connect(self, params: RttConnectParams) -> RttConnectResult:
         import pyocd.core.session as _sess
         from pyocd.core.helpers import ConnectHelper
-        from pyocd.debug.rtt import RTTControlBlock
 
         self._params = params
 
@@ -156,7 +155,7 @@ class PyocdRttBackend:
         首次连接全扫描 RAM 找 "SEGGER RTT" 标识（慢，~256ms/128KB）；找到后缓存地址，
         重连时直接定位（快，~2ms）。固件重定位控制块（罕见）时缓存失效，自动回退扫描。
         """
-        from pyocd.debug.rtt import RTTControlBlock, SEGGER_RTT_CB, sizeof
+        from pyocd.debug.rtt import SEGGER_RTT_CB, RTTControlBlock, sizeof
 
         if self._rtt_cb_addr is not None:
             try:
@@ -295,7 +294,7 @@ class PyocdRttBackend:
             return b""
         try:
             return bytes(self._rtt.up_channels[channel].read())
-        except Exception as e:
+        except Exception:
             # up.read() 抛 RTTError（Invalid up buffer）等--向上抛让 read_loop 计入意外断开
             raise
 

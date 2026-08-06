@@ -35,7 +35,6 @@ from pathlib import Path
 import pylink
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
-from . import memory_service
 from .logger import get_logger
 from .probe.base import BURNER_KIND_JLINK, ProbeNotConnected
 from .probe.rtt_backend import (

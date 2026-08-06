@@ -45,7 +45,7 @@ from .ops import (
     set_wrp,
 )
 
-__all__ = [
+__all__ = [  # noqa: RUF022  # 刻意按 profile / ops 分组排序，非字母序
     # profile (JSON-loaded)
     "ObProfile",
     "RdpView",

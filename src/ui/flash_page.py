@@ -1691,10 +1691,8 @@ class FlashPage(QWidget):
         若线程已退出而 deleteLater 事件没来得及处理，主线程析构 timer
         会跨线程 killTimer，触发 Qt assertion/segfault（CLAUDE.md）。
         """
-        try:
+        with contextlib.suppress(Exception):
             self.ob_card.cleanup()
-        except Exception:
-            pass
         self._worker.stop_requested.emit()
         if not self._thread.wait(3000):
             self._thread.terminate()

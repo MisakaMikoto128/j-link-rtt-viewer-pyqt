@@ -65,13 +65,13 @@ from qfluentwidgets import (
 
 from core.config_service import ConfigService
 from core.crc_utils import CRC_ALGORITHMS
-from core.probe.base import BURNER_KIND_JLINK
 from core.jlink_worker import (
     CHANNEL_ALL,
     CHANNEL_DEFAULT,
     RESET_MODE_HALT,
     JLinkWorker,
 )
+from core.probe.base import BURNER_KIND_JLINK
 from core.target_discovery import read_cached_target_names
 
 from . import _infobar
@@ -357,7 +357,7 @@ class RTTMonitorPage(QWidget):
         row_target = QHBoxLayout()
         row_target.setSpacing(6)
         row_target.setContentsMargins(0, 0, 0, 0)
-        self._lbl_target = BodyLabel(self.tr("目标设备"))
+        self._lbl_target = BodyLabel(self.tr("目标设备:"))
         self._lbl_target.setFixedHeight(_CTRL_H)
         row_target.addWidget(self._lbl_target)
         row_target.addStretch(1)

@@ -15,7 +15,6 @@ PyocdRttBackend 自管 pyOCD session（connect 建 / disconnect 销）。
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -26,7 +25,6 @@ from .base import (
     LogCallback,
     ProbeError,
 )
-
 
 # ============================================================
 # backend reset 模式（与 worker RESET_MODE_* 分开：worker 模式含编排，

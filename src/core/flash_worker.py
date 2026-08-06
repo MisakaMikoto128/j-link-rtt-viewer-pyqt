@@ -15,6 +15,14 @@ from dataclasses import dataclass
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from .logger import get_logger
+from .option_bytes import (
+    WRP_STATUS_NONE,
+    RdpLevel,
+    read_rdp_level,
+    read_wrp_status,
+    set_rdp_level,
+    set_wrp,
+)
 from .probe.base import (
     BURNER_KIND_JLINK,
     ERASE_MODE_CHIP,
@@ -35,7 +43,6 @@ from .probe.base import (
 )
 from .probe.factory import make_backend
 from .probe.ob_adapter import make_ob_adapter, read_device_id
-from .option_bytes import RdpLevel, WRP_STATUS_NONE, read_rdp_level, read_wrp_status, set_rdp_level, set_wrp
 
 # 常量 re-export：UI 层沿用 `from core.flash_worker import ERASE_MODE_CHIP` 等
 # 旧 import 路径，真源在 probe.base。

@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from core.option_bytes import (
     ObProfile,
     RdpLevel,
-    WrpField,
     WrpInfo,
     available_device_ids,
     load_profile,
@@ -26,11 +25,6 @@ from core.option_bytes import (
     read_wrp_status,
     set_rdp_level,
     set_wrp,
-)
-from core.option_bytes.ob_profile import (
-    FlashRegAddrs,
-    ObProcedure,
-    RdpView,
 )
 
 
@@ -275,8 +269,6 @@ class TestSetWrp:
         F030 (0x440) WRP fields: WRP_bit0 @ 0x1FFFF808 bit_off=0 (hw 0x1FFFF808),
         nWRP_bit8 @ 0x1FFFF808 bit_off=16 (hw 0x1FFFF80A).
         """
-        profile = _load_real_profile("0x440")  # F030: halfword, RDP @ 0x1FFFF800
-        # F030 already has wrp data; use it as-is.
         backend = MockBackend(reads={0x1FFFF800: 0xAA})  # RDP currently = 0xAA (L0)
         result = set_wrp("0x440", backend)
         w32 = backend.write32s()
@@ -328,7 +320,6 @@ class TestSetWrp:
         F1 (0x410) WRP fields: WRP0/WRP8 @ 0x1FFFF808, WRP16/WRP24 @ 0x1FFFF80C.
         Halfword addresses: 0x1FFFF808, 0x1FFFF80A, 0x1FFFF80C, 0x1FFFF80E.
         """
-        profile = _load_real_profile("0x410")  # F1: halfword, RDP @ 0x1FFFF800
         backend = MockBackend(reads={0x4002201C: 0x03FFFFFC})  # OBR bit1=0 -> L0
         result = set_wrp("0x410", backend)
         w16 = backend.write16s()
@@ -351,7 +342,6 @@ class TestSetWrp:
         active_low).  Starting from OPTCR with nWRP=0xFFF (unprotected) and
         RDP=0xAA (L0): expect nWRP bits cleared, RDP bits unchanged.
         """
-        profile = _load_real_profile("0x413")  # F4: optcr32, OPTCR @ 0x40023C14
         # WRP field: WRP0 @ 0x40023C14 bit_off=16 bit_w=12 active_low=True
 
         # Initial OPTCR: nWRP=0xFFF (unprotected), RDP=0xAA (L0), OPTLOCK=0
@@ -389,8 +379,6 @@ class TestSetWrp:
         STRT at bit_offset=0 (8 bits), END at bit_offset=16 (8 bits).
         Full protect = STRT=0, END=0xFF in each register.
         """
-        profile = _load_real_profile("0x462")  # L4: ob_register_word, cr_obl_launch
-
         # Initial WRP1A: STRT=0x10, END=0x20 -> 0x00200010
         # Initial WRP1B: STRT=0x05, END=0x08 -> 0x00080005
         backend = MockBackend(reads={
@@ -427,8 +415,6 @@ class TestSetWrp:
         H7 (0x483) WRP field: WRPS @ 0x5200203C bit_off=0 bit_w=8 active_low=True.
         Full protect = clear all 8 bits (0=protected).  Trigger via OPTCR.OPTSTART.
         """
-        profile = _load_real_profile("0x483")  # H7: ob_register_word, optcr_optstart
-
         # Initial WPSN register: 0x000000FF (all unprotected)
         backend = MockBackend(reads={0x5200203C: 0x000000FF})
         result = set_wrp("0x483", backend)

@@ -33,8 +33,8 @@ from core.probe.base import ProbeParams
 from core.probe.factory import make_backend
 from core.probe.ob_adapter import make_ob_adapter, read_device_id
 
-from ._ui_helpers import section_separator
 from . import _infobar
+from ._ui_helpers import section_separator
 
 
 # ---------------------------------------------------------------------------

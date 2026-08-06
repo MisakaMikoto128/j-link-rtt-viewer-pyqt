@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from .ob_profile import ObProfile, RdpView, WrpField, WrpInfo, load_profile
+from .ob_profile import ObProfile, RdpView, WrpField, load_profile
 
 
 # ---------------------------------------------------------------------------
