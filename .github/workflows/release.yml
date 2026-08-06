@@ -84,7 +84,21 @@ jobs:
           "body=$escaped" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Write-Host "notes extracted ($($notes.Length) chars)"
 
+      - name: Check if release already exists
+        id: existing
+        shell: pwsh
+        run: |
+          # 手动触发时版本号来自 pyproject.toml = 当前版本，可能已有正式 release。
+          # 若 tag 已存在，跳过 release 创建，避免 softprops 更新（污染）正式 release。
+          $exists = $false
+          if (gh release view "$env:ver" --json name -q '.name' 2>$null) {
+            $exists = $true
+            Write-Host "::warning::$env:ver release 已存在，跳过 release 创建（只验证构建/打包链路）"
+          }
+          "release_exists=$exists" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Create GitHub Release
+        if: steps.existing.outputs.release_exists != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.ver }}
