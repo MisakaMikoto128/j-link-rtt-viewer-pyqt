@@ -22,6 +22,8 @@ jobs:
       # 版本号：tag 触发时取 tag 名（'v0.11.0'）；手动触发时取 pyproject.toml。
       # 注意 Git 表达式里不允许调函数，故在步骤里用 shell 派生。
       IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+      # shell 里的 gh CLI 需显式注入 token（action 才自动有，原始命令不会）。
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
