@@ -41,6 +41,26 @@ def isolated_appdata(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(scope="session")
+def jlink_dll_available():
+    """J-Link DLL 是否可用（本地装了 SEGGER 驱动才有）。
+
+    pylink 是纯 Python 包总能 import，但设备枚举需要真实 JLinkARMDLL.dll。
+    CI runner 不装 J-Link 驱动，探测失败 -> 返回 False，依赖真实设备库的
+    测试据此 skip（文档注明 "where installed"）。整个会话只探测一次。
+
+    用 pylink 1.6.0 的 num_supported_devices() 探测（target_discovery 同款
+    API），不要用 supported_devices()（那是 pylink 2.x 才有的方法）。
+    """
+    try:
+        import pylink
+
+        j = pylink.JLink()
+        return j.num_supported_devices() > 0
+    except Exception:
+        return False
+
+
 @pytest.fixture
 def fixtures_dir():
     """tests/fixtures 路径（含 blink.bin / blink.hex / blink_sym.axf 等）。"""

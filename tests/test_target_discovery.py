@@ -25,8 +25,15 @@ from core.target_discovery import (
 
 
 @pytest.mark.parametrize("_first_call", [True])
-def test_pylink_target_names_returns_sorted_uppercase(isolated_appdata, _first_call):
-    """get_pylink_target_names returns an uppercase, sorted tuple with common MCUs."""
+def test_pylink_target_names_returns_sorted_uppercase(
+    isolated_appdata, _first_call, jlink_dll_available
+):
+    """get_pylink_target_names returns an uppercase, sorted tuple with common MCUs.
+
+    需要真实 J-Link DLL（pylink.supported_devices）；CI 无驱动时 skip。
+    """
+    if not jlink_dll_available:
+        pytest.skip("需要 J-Link DLL（本机未安装 SEGGER 驱动）")
     names = get_pylink_target_names()
 
     assert isinstance(names, tuple)
@@ -36,8 +43,13 @@ def test_pylink_target_names_returns_sorted_uppercase(isolated_appdata, _first_c
     assert "STM32F030C8" in names
 
 
-def test_pylink_target_names_filters_non_mcu_noise():
-    """Non-MCU entries like ARM7/Cortex-A are filtered out; STM32 stays."""
+def test_pylink_target_names_filters_non_mcu_noise(jlink_dll_available):
+    """Non-MCU entries like ARM7/Cortex-A are filtered out; STM32 stays.
+
+    需要真实 J-Link DLL；CI 无驱动时 skip。
+    """
+    if not jlink_dll_available:
+        pytest.skip("需要 J-Link DLL（本机未安装 SEGGER 驱动）")
     names = set(get_pylink_target_names())
 
     assert "ARM7" not in names
@@ -90,16 +102,28 @@ def test_get_pylink_target_names_cached():
     assert first is second
 
 
-def test_target_discovery_no_config_chip_models_dependency(isolated_appdata):
-    """Target discovery is independent of ConfigService chip_models."""
+def test_target_discovery_no_config_chip_models_dependency(
+    isolated_appdata, jlink_dll_available
+):
+    """Target discovery is independent of ConfigService chip_models.
+
+    需 J-Link DLL 提供设备列表；CI 无驱动时 skip。
+    """
+    if not jlink_dll_available:
+        pytest.skip("需要 J-Link DLL（本机未安装 SEGGER 驱动）")
     names = get_pylink_target_names()
 
     assert isinstance(names, tuple)
     assert all(isinstance(name, str) for name in names)
 
 
-def test_pylink_target_infos_returns_sorted_uppercase():
-    """get_pylink_target_infos returns TargetDeviceInfo tuple, uppercase and sorted."""
+def test_pylink_target_infos_returns_sorted_uppercase(jlink_dll_available):
+    """get_pylink_target_infos returns TargetDeviceInfo tuple, uppercase and sorted.
+
+    需 J-Link DLL；CI 无驱动时 skip。
+    """
+    if not jlink_dll_available:
+        pytest.skip("需要 J-Link DLL（本机未安装 SEGGER 驱动）")
     infos = get_pylink_target_infos()
 
     assert isinstance(infos, tuple)
@@ -109,13 +133,17 @@ def test_pylink_target_infos_returns_sorted_uppercase():
     assert [info.name for info in infos] == sorted(info.name for info in infos)
 
 
-def test_pylink_target_infos_contain_stm32f030c8_metadata():
+def test_pylink_target_infos_contain_stm32f030c8_metadata(jlink_dll_available):
     """STM32F030C8 entry carries vendor and correct main-flash addr/size.
+
+    需 J-Link DLL；CI 无驱动时 skip。
 
     回归：首个命中的「STM32F030C8 (allow opt. bytes)」变体的 legacy FlashAddr/
     FlashSize 是选项字节垃圾（0x06000000 / 65552）。修复后必须从 aFlashArea 主
     区域取到 0x08000000 / 65536。
     """
+    if not jlink_dll_available:
+        pytest.skip("需要 J-Link DLL（本机未安装 SEGGER 驱动）")
     infos = get_pylink_target_infos()
     info = next((i for i in infos if i.name == "STM32F030C8"), None)
 
