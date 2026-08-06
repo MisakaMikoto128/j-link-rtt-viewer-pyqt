@@ -96,7 +96,9 @@ def test_connect_sequence(worker):
     w.connection_state_changed.connect(lambda c: states.append(c))
 
     w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
-    _drain_events(1.0, until=lambda: w.state_name() == "CONNECTED")
+    # 等信号回调也到达主线程（跨线程 QueuedConnection），而非只看 state_name()。
+    # 否则 until 在状态达成时立即返回，信号槽可能还没被主线程处理（3.11 偶发）。
+    _drain_events(1.0, until=lambda: w.state_name() == "CONNECTED" and True in states)
 
     # 调用顺序（pylink 1.6.0）：open() → close() → open(serial) → rtt_start() → set_tif() → set_speed() → connect()
     assert jl.open.called
