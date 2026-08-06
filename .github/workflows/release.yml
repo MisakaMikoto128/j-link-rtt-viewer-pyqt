@@ -3,10 +3,14 @@ name: release
 # 打 v* tag 时自动构建并发布 GitHub Release。
 # 用法：git tag v0.11.0 && git push origin v0.11.0
 # 产物自动挂到 release，无需手动 gh release create。
+#
+# 也可手动触发（workflow_dispatch）做链路验证：从 pyproject.toml 读版本号，
+# 产出 draft release（不公开、不发通知），确认编译/打包/release 全链路正确。
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,8 +19,9 @@ jobs:
   build:
     runs-on: windows-latest
     env:
-      # 从 tag 名算版本：'v0.11.0' -> '0.11.0'（去掉前导 v）
-      APP_VERSION: ${{ github.ref_name }}
+      # 版本号：tag 触发时取 tag 名（'v0.11.0'）；手动触发时取 pyproject.toml。
+      # 注意 Git 表达式里不允许调函数，故在步骤里用 shell 派生。
+      IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,11 +44,20 @@ jobs:
       - name: Build onefile
         run: cmd /c .\build_nuitka_onefile.bat
 
-      - name: Package artifacts
+      - name: Derive version and package artifacts
         shell: pwsh
         run: |
-          $version = "$env:APP_VERSION".Substring(1)     # strip leading 'v'
-          $base = "JLinkRTTViewer-$env:APP_VERSION-release-win64"
+          if ($env:IS_MANUAL -eq 'true') {
+            # 手动触发：从 pyproject.toml 读版本号（tag 触发时是 vX.Y.Z 由 ref_name 给）
+            $v = (Select-String -Path pyproject.toml -Pattern 'version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+            $ver = "v$v"
+            Write-Host "manual dispatch: version from pyproject -> $ver"
+          } else {
+            $ver = "$env:GITHUB_REF_NAME"
+            Write-Host "tag dispatch: version from ref -> $ver"
+          }
+          $version = $ver.Substring(1)     # strip leading 'v'
+          $base = "JLinkRTTViewer-$ver-release-win64"
           $dist = "build/dist/$base"
           New-Item -ItemType Directory -Force $dist | Out-Null
           Copy-Item build/main.dist/JLinkRTTViewer.exe "$dist/JLinkRTTViewer.exe"
@@ -51,6 +65,7 @@ jobs:
           # 7-Zip 非 runner 默认装，用 Compress-Archive 回退。
           Compress-Archive -Path "$dist/JLinkRTTViewer.exe" -DestinationPath "$dist/$base.zip" -CompressionLevel Optimal
           "version=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ver=$ver" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "base=$base" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Extract changelog section
@@ -72,8 +87,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ env.ver }}
+          name: ${{ env.ver }}
+          draft: ${{ github.event_name == 'workflow_dispatch' }}   # 手动触发建 draft（验证链路），tag 触发正式发布
           body: ${{ steps.notes.outputs.body }}
           files: |
             build/dist/${{ env.base }}/${{ env.base }}.zip
