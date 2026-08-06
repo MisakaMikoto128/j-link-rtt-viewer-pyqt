@@ -68,12 +68,13 @@ release() {
     if [ "$DRY_RUN" -eq 0 ]; then
         sed -i "s/^version *= *\"[^\"]*\"/version = \"$rel_version\"/" pyproject.toml
         sed -i "s/APP_VERSION\s*=\s*\"[^\"]*\"/APP_VERSION = \"$rel_version\"/" src/ui/about_page.py
+        sed -i "s/set PRODUCT_VERSION=.*/set PRODUCT_VERSION=$rel_version/" build_nuitka.bat
         sed -i "s/set PRODUCT_VERSION=.*/set PRODUCT_VERSION=$rel_version/" build_nuitka_onefile.bat
     fi
 
     echo "[release] commit + tag $tag"
     if [ "$DRY_RUN" -eq 0 ]; then
-        git add pyproject.toml src/ui/about_page.py build_nuitka_onefile.bat
+        git add pyproject.toml src/ui/about_page.py build_nuitka.bat build_nuitka_onefile.bat
         git commit -m "chore: bump version to $rel_version"
         git tag "$tag"
     fi

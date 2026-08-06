@@ -2,14 +2,19 @@
 # Linux onefile build: single build/onefile/JLinkRTTViewer binary.
 #
 # The payload is extracted once per version to
-#   ${XDG_CACHE_HOME:-~/.cache}/JLinkRTTViewer/Cache/0.6.0/
+#   ${XDG_CACHE_HOME:-~/.cache}/JLinkRTTViewer/Cache/<version>/
 # so subsequent launches skip extraction (persistent cache, same as Windows).
+#
+# Version is read from pyproject.toml (single source of truth, shared with
+# the Windows .bat builds) instead of being hardcoded here.
 #
 # Prerequisites and J-Link notes: see build_nuitka.sh header.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PRODUCT_VERSION=0.6.0
+# Single source of truth: pyproject.toml. Feeds --product-version, which also
+# drives the {VERSION} placeholder in the onefile cache path above.
+PRODUCT_VERSION="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' pyproject.toml | head -1)"
 COMPANY_NAME=MisakaMikoto128
 PRODUCT_NAME=JLinkRTTViewer
 JOBS="$(nproc 2>/dev/null || echo 4)"
