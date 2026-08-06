@@ -349,7 +349,9 @@ def test_reset_and_halt(worker):
     jl.opened.return_value = False
     jl.connected.return_value = True
     w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
-    _drain_events(0.3)
+    # 连接是异步事件序列（在 worker 线程跑），3.10 CI 上 0.3s 偶发没走完
+    # （3.11/3.13 正常），放宽到 0.8s 后再重置。
+    _drain_events(0.8)
     jl.reset.reset_mock()
     jl.close.reset_mock()
 
