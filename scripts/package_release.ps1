@@ -88,6 +88,8 @@ function Invoke-Release {
             Set-Content pyproject.toml -Encoding utf8 -NoNewline
         (Get-Content src/ui/about_page.py -Raw) -replace 'APP_VERSION\s*=\s*"[^"]+"', "APP_VERSION = `"$relVersion`"" |
             Set-Content src/ui/about_page.py -Encoding utf8 -NoNewline
+        (Get-Content build_nuitka.bat -Raw) -replace 'set PRODUCT_VERSION=.*', "set PRODUCT_VERSION=$relVersion" |
+            Set-Content build_nuitka.bat -Encoding ascii -NoNewline
         (Get-Content build_nuitka_onefile.bat -Raw) -replace 'set PRODUCT_VERSION=.*', "set PRODUCT_VERSION=$relVersion" |
             Set-Content build_nuitka_onefile.bat -Encoding ascii -NoNewline
     }
