@@ -67,10 +67,18 @@ def worker(qapp, monkeypatch):
         thread.wait(1000)
 
 
-def _drain_events(timeout=0.5):
+def _drain_events(timeout=0.5, until=None):
+    """Drain 事件循环直到超时；若给定 `until` 谓词，满足即提前返回。
+
+    连接完成依赖 worker 线程的事件序列，Python 3.10 CI 上事件循环整体
+    偏慢，固定时长 drain 偶发未走完（3.11/3.13 正常）。等待"状态达成"
+    而非固定时长，从根上消除这类时序 flaky。
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         QCoreApplication.processEvents()
+        if until is not None and until():
+            return
         time.sleep(0.01)
 
 
@@ -88,7 +96,7 @@ def test_connect_sequence(worker):
     w.connection_state_changed.connect(lambda c: states.append(c))
 
     w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
-    _drain_events(1.0)
+    _drain_events(1.0, until=lambda: w.state_name() == "CONNECTED")
 
     # 调用顺序（pylink 1.6.0）：open() → close() → open(serial) → rtt_start() → set_tif() → set_speed() → connect()
     assert jl.open.called
@@ -113,7 +121,7 @@ def test_no_double_open(worker):
     jl.connected.return_value = True
 
     w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
-    _drain_events(1.0)
+    _drain_events(1.0, until=lambda: w.state_name() == "CONNECTED")
 
     assert jl.open.call_count == 0  # 已 open 不再 open
 
@@ -457,7 +465,7 @@ def test_unexpected_disconnect_emits_signal(worker):
     # 读循环空转，不产生噪声也不提前触发异常
     jl.rtt_read.return_value = []
     w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
-    _drain_events(0.5)
+    _drain_events(1.0, until=lambda: w.state_name() == "CONNECTED")
     assert w.state_name() == "CONNECTED"
 
     unexpected = []
@@ -615,7 +623,7 @@ def test_unexpected_disconnect_does_not_start_reconnect_timer(worker):
     _drain_events(0.2)
 
     w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
-    _drain_events(0.5)
+    _drain_events(1.0, until=lambda: w.state_name() == "CONNECTED")
     assert w.state_name() == "CONNECTED"
 
     unexpected = []
@@ -677,7 +685,7 @@ def test_connect_detects_num_up_channels(worker):
     _set_allocated_channels(jl, 3)
     jl.rtt_read.return_value = []
     w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
-    _drain_events(0.5)
+    _drain_events(1.0, until=lambda: w.state_name() == "CONNECTED")
     assert w.state_name() == "CONNECTED"
     assert w.get_num_up_channels() == 3
 
@@ -705,7 +713,7 @@ def test_detect_counts_allocated_not_declared(worker):
     jl.rtt_get_buf_descriptor.side_effect = _desc
     jl.rtt_read.return_value = []
     w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
-    _drain_events(0.5)
+    _drain_events(1.0, until=lambda: w.state_name() == "CONNECTED")
     assert w.state_name() == "CONNECTED"
     assert w.get_num_up_channels() == 1, "应只数已分配缓冲，不是声明数 3"
 
@@ -726,7 +734,7 @@ def test_detect_retries_then_succeeds(worker):
     jl.rtt_get_buf_descriptor.side_effect = lambda ch, up=True: SimpleNamespace(SizeOfBuffer=1024)
     jl.rtt_read.return_value = []
     w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
-    _drain_events(1.0)
+    _drain_events(1.0, until=lambda: w.state_name() == "CONNECTED")
     assert w.state_name() == "CONNECTED"
     assert w.get_num_up_channels() == 2, "retry 后应探测到 2"
 
@@ -739,7 +747,7 @@ def test_connect_detect_num_up_channels_fallback(worker):
     jl.rtt_get_num_up_buffers.side_effect = RuntimeError("not supported")
     jl.rtt_read.return_value = []
     w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
-    _drain_events(0.5)
+    _drain_events(1.0, until=lambda: w.state_name() == "CONNECTED")
     assert w.state_name() == "CONNECTED", "探测失败不应让连接失败"
     assert w.get_num_up_channels() == 1
 
@@ -784,7 +792,7 @@ def test_per_channel_decoder_independence(worker):
     received = []
     w.rtt_data_received.connect(lambda ch, text: received.append((ch, text)))
     w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
-    _drain_events(0.3)
+    _drain_events(1.0, until=lambda: w.state_name() == "CONNECTED")
     assert w.state_name() == "CONNECTED"
 
     # ch0 先发半字节，ch1 发完整字符——若共享 decoder，ch1 会被 ch0 的半字节污染
