@@ -611,6 +611,37 @@ def test_devices_enumerated_empty_keeps_history_placeholder(rtt_page, qtbot):
     assert page._jlink_status_dot.isVisible(), "无设备且历史占位应显示红点"
 
 
+def test_offline_placeholder_then_click_new_device_selects_it(rtt_page, qtbot):
+    """回归：离线占位时点开下拉直接点新插入的设备应能选中。
+
+    旧 bug：占位用 setText 显示旧 serial，但 currentIndex 停在 addItem 自动
+    选中的 index 0（新设备）。点 index 0 被 _onItemClicked 判为「已选中」而
+    不 setCurrentIndex，文本仍停留在离线占位。修法：占位前 setCurrentIndex(-1)。
+    """
+    page, worker, _ = rtt_page
+    page.show()
+    qtbot.wait(20)
+    # 先在线选 222
+    worker.devices_enumerated.emit("jlink|111|A;jlink|222|B")
+    qtbot.wait(50)
+    page.cb_jlink.setCurrentIndex(1)
+    qtbot.wait(20)
+    assert page.cb_jlink.currentText() == "B: 222"
+    # 拔掉 222，新插 333（333 成为唯一的在线项 index 0）
+    worker.devices_enumerated.emit("jlink|333|C")
+    qtbot.wait(50)
+    assert page.cb_jlink.currentText() == "B: 222", "离线占位仍显示旧 serial"
+    assert page._jlink_status_dot.isVisible(), "222 离线红点"
+    assert page.cb_jlink.currentIndex() == -1, "离线占位不应残留 index 0（新设备）"
+    # 下拉点新设备 index 0（333）
+    page.cb_jlink._onItemClicked(0)
+    qtbot.wait(10)
+    assert page.cb_jlink.currentText() == "C: 333", "点新设备应选中，而非停在离线占位"
+    assert page.cb_jlink.currentIndex() == 0
+    assert not page._jlink_status_dot.isVisible(), "333 在线红点隐藏"
+
+
+
 def test_custom_target_persists_even_not_in_chip_list(rtt_page, qtbot):
     """用户输入的自定义 target 不在 chip_list 里也要记住。"""
     page, worker, cfg = rtt_page

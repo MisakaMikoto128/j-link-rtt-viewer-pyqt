@@ -1230,6 +1230,10 @@ class RTTMonitorPage(QWidget):
                 self.cb_jlink.setText(self.cb_jlink.itemText(self.cb_jlink.count() - 1))
             elif prev_serial:
                 cached_product = self._get_cached_jlink_product(prev_serial)
+                # 离线占位：先把 currentIndex 落到 -1，避免 addItem 自动选中的 index 0
+                # 残留。否则占位文本显示旧 serial，而 currentIndex 却指向新设备，
+                # 下拉里点击新设备会被 _onItemClicked 判为「已选中」而不切换（bug 回归）。
+                self.cb_jlink.setCurrentIndex(-1)
                 self.cb_jlink.setText(self._jlink_label(prev_serial, cached_product))
                 self.cb_jlink.setReadOnly(True)
             elif serials:
