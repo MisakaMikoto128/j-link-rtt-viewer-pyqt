@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-08-28
+
+### Fixes
+
+- **离线设备占位时点新设备无法选中** - RTT 页 J-Link 下拉在「上次设备离线占位」状态下，新插的设备出现在下拉里但点击无法选中，必须先把「远程连接」项点一遍才能切过去。原因：qfluentwidgets `EditableComboBox` 的 `currentIndex` 与显示文本脱钩——离线占位用 `setText` 显示旧 serial，但 `currentIndex` 仍停在 `addItem` 自动选中的 index 0（新设备），点 index 0 被 `_onItemClicked` 判为「已选中」而不切换。修法：占位前先 `setCurrentIndex(-1)`，与 Flash 页一致。
+
 ## [0.10.0] - 2026-08-06
 
 ### Features
