@@ -444,7 +444,7 @@ def test_log_recording_writes_file(worker, tmp_path):
     w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.3)
 
-    w.start_log_recording_requested.emit(str(tmp_path))
+    w.start_log_recording_requested.emit(str(tmp_path), "off", False, False)
     _drain_events(0.2)
     assert w._log_file is not None
 
@@ -456,6 +456,57 @@ def test_log_recording_writes_file(worker, tmp_path):
     logs = list(tmp_path.glob("*.log"))
     assert len(logs) == 1
     assert "hello log" in logs[0].read_text(encoding="utf-8")
+
+
+def test_log_recording_timestamp_absolute(worker, tmp_path):
+    """绝对时间模式：每个逻辑行首都带 [HH:MM:SS.mmm]，半行片段不重复插前缀。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
+    _drain_events(0.3)
+
+    w.start_log_recording_requested.emit(str(tmp_path), "absolute", False, True)
+    _drain_events(0.2)
+    assert w._log_file is not None
+
+    # 跨调用的半行：第一次只到达 "hello"（无换行，不是完整行），
+    # 第二次补上剩余部分 + 换行 + 下一行——时间戳只应出现在两个真正的行首。
+    w._write_log_file("hello")
+    w._write_log_file(" world\nsecond line\n")
+    w.stop_log_recording_requested.emit()
+    _drain_events(0.2)
+
+    logs = list(tmp_path.glob("*.log"))
+    assert len(logs) == 1
+    content = logs[0].read_text(encoding="utf-8")
+    lines = content.splitlines()
+    assert len(lines) == 2
+    assert lines[0].endswith("hello world")
+    assert lines[1].endswith("second line")
+    for line in lines:
+        assert line.startswith("[")
+        assert "]" in line
+
+
+def test_log_recording_timestamp_relative(worker, tmp_path):
+    """相对秒模式：前缀是 [N.NNNs] 格式（会话相对秒，非墙钟时间）。"""
+    w, jl = worker
+    jl.opened.return_value = False
+    jl.connected.return_value = True
+    w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
+    _drain_events(0.3)
+
+    w.start_log_recording_requested.emit(str(tmp_path), "relative", False, False)
+    _drain_events(0.2)
+
+    w._write_log_file("hello log\n")
+    w.stop_log_recording_requested.emit()
+    _drain_events(0.2)
+
+    content = next(iter(tmp_path.glob("*.log"))).read_text(encoding="utf-8")
+    assert content.startswith("[")
+    assert "s] hello log" in content
 
 
 def test_unexpected_disconnect_emits_signal(worker):

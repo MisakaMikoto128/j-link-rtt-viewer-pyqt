@@ -13,7 +13,9 @@ from PySide6.QtCore import QObject, Signal
 class FakeWorker(QObject):
     """与 JLinkWorker 同形的信号 stub。RTTMonitorPage 只需要这些通道。"""
 
-    connect_requested = Signal(str, str, str, int, int, str)  # burner_kind, target, iface, speed, channel, serial
+    connect_requested = Signal(
+        str, str, str, int, int, str
+    )  # burner_kind, target, iface, speed, channel, serial
     connect_remote_requested = Signal(str, str, int, int, str)
     disconnect_requested = Signal()
     enumerate_devices_requested = Signal()
@@ -24,7 +26,7 @@ class FakeWorker(QObject):
     set_rtt_channel_requested = Signal(int)
     set_encoding_requested = Signal(str)
     set_poll_interval_requested = Signal(int)
-    start_log_recording_requested = Signal(str)
+    start_log_recording_requested = Signal(str, str, bool, bool)
     stop_log_recording_requested = Signal()
     rtt_data_received = Signal(int, str)  # (channel, text)
     unexpected_disconnect = Signal(str)
@@ -492,6 +494,76 @@ def test_clear_button_clears_channel_buffers(rtt_page, qtbot):
 
 
 # ============================================================
+# 接收时间戳（日期/时间/相对秒）
+# ============================================================
+def test_rtt_timestamp_absolute_mode_prefixes_each_line(rtt_page, qtbot):
+    """绝对时间模式：每个逻辑行首都带前缀；跨调用的半行不重复插前缀。"""
+    page, worker, _ = rtt_page
+    page._cfg.set("rtt_timestamp_mode", "absolute")
+    page._cfg.set("rtt_timestamp_show_date", False)
+    page._cfg.set("rtt_timestamp_show_time", True)
+
+    worker.rtt_data_received.emit(0, "hello")
+    worker.rtt_data_received.emit(0, " world\nsecond line\n")
+    qtbot.wait(30)
+
+    lines = page.display.toPlainText().splitlines()
+    assert len(lines) == 2
+    assert lines[0].endswith("hello world")
+    assert lines[1].endswith("second line")
+    for line in lines:
+        assert line.startswith("[")
+        assert "]" in line
+
+
+def test_rtt_timestamp_off_mode_no_prefix(rtt_page, qtbot):
+    """关闭模式（默认）：显示区不带任何时间戳前缀。"""
+    page, worker, _ = rtt_page
+    assert page._cfg.get("rtt_timestamp_mode") == "off"
+
+    worker.rtt_data_received.emit(0, "plain line\n")
+    qtbot.wait(30)
+
+    assert page.display.toPlainText() == "plain line\n"
+
+
+def test_rtt_timestamp_survives_channel_switch(rtt_page, qtbot):
+    """切通道触发 render_view 重放历史：每行时间戳应是到达时刻，不被重放覆盖
+    （缓冲区里存的就是带时间戳的文本，不是渲染时现算）。"""
+    page, worker, _ = rtt_page
+    page._cfg.set("rtt_timestamp_mode", "relative")
+    page.sp_channel.setValue(0)
+    qtbot.wait(20)
+
+    worker.rtt_data_received.emit(0, "ch0 line\n")
+    qtbot.wait(30)
+    first_render = page.display.toPlainText()
+    assert "ch0 line" in first_render
+    assert first_render.startswith("[")
+
+    # 切到通道 1 再切回通道 0：触发 render_view 重放通道 0 历史缓冲
+    page.sp_channel.setValue(1)
+    qtbot.wait(20)
+    page.sp_channel.setValue(0)
+    qtbot.wait(20)
+
+    assert page.display.toPlainText() == first_render, "重放历史后时间戳文本应与首次渲染一致"
+
+
+def test_rtt_timestamp_hex_mode_skips_prefix(rtt_page, qtbot):
+    """HEX 显示模式下不加时间戳：HEX 是裸字节流没有行语义。"""
+    page, worker, _ = rtt_page
+    page._cfg.set("rtt_timestamp_mode", "absolute")
+    page.chk_hex_display.setChecked(True)
+    qtbot.wait(10)
+
+    worker.rtt_data_received.emit(0, "AB")
+    qtbot.wait(30)
+
+    assert "[" not in page.display.toPlainText()
+
+
+# ============================================================
 # 通道上限收紧（bug 回归：选超出范围通道连接后状态脱节）
 # ============================================================
 def test_overflow_channel_pulled_back_on_connect(rtt_page, qtbot):
@@ -639,7 +711,6 @@ def test_offline_placeholder_then_click_new_device_selects_it(rtt_page, qtbot):
     assert page.cb_jlink.currentText() == "C: 333", "点新设备应选中，而非停在离线占位"
     assert page.cb_jlink.currentIndex() == 0
     assert not page._jlink_status_dot.isVisible(), "333 在线红点隐藏"
-
 
 
 def test_custom_target_persists_even_not_in_chip_list(rtt_page, qtbot):
@@ -1172,9 +1243,9 @@ def test_search_adjacent_match_count(rtt_page, qtbot):
     for expected in ["1/4", "2/4", "3/4", "4/4"]:
         page.search_bar.search_requested.emit("foo", False, False, False, False)
         qtbot.wait(50)
-        assert page.search_bar.lbl_match.text() == expected, (
-            f"expected {expected}, got {page.search_bar.lbl_match.text()}"
-        )
+        assert (
+            page.search_bar.lbl_match.text() == expected
+        ), f"expected {expected}, got {page.search_bar.lbl_match.text()}"
 
 
 def test_search_current_match_highlighted_differently(rtt_page, qtbot):
@@ -1207,9 +1278,9 @@ def test_search_updates_on_rtt_inflow(rtt_page, qtbot):
     # RTT 流入新数据（含 2 个新 foo）-> 应自动更新计数
     worker.rtt_data_received.emit(0, "foo baz foo\n")
     qtbot.wait(400)  # 等节流 300ms 触发重新扫描
-    assert page.search_bar.lbl_match.text() == "1/3", (
-        f"expected 1/3 after RTT inflow, got {page.search_bar.lbl_match.text()}"
-    )
+    assert (
+        page.search_bar.lbl_match.text() == "1/3"
+    ), f"expected 1/3 after RTT inflow, got {page.search_bar.lbl_match.text()}"
 
 
 def test_search_emoji_position_correct(rtt_page, qtbot):
@@ -1227,9 +1298,9 @@ def test_search_emoji_position_correct(rtt_page, qtbot):
     page.search_bar.search_requested.emit("Heartbeat", False, False, False, False)
     qtbot.wait(50)
     cursor = page.display.textCursor()
-    assert cursor.selectedText() == "Heartbeat", (
-        f"emoji 错位：应选中 'Heartbeat'，实际 {cursor.selectedText()!r}"
-    )
+    assert (
+        cursor.selectedText() == "Heartbeat"
+    ), f"emoji 错位：应选中 'Heartbeat'，实际 {cursor.selectedText()!r}"
     assert page.search_bar.lbl_match.text() == "1/3"
     # 连续前向搜索第 2 个
     page.search_bar.search_requested.emit("Heartbeat", False, False, False, False)

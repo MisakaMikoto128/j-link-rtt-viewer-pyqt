@@ -82,7 +82,9 @@ class JLinkWorker(QObject):
     """J-Link 后台业务对象。**必须 moveToThread 到一个 QThread 后再用**。"""
 
     # ---- 输入信号 ----
-    connect_requested = Signal(str, str, str, int, int, str)  # burner_kind, target, iface, speed, channel, serial
+    connect_requested = Signal(
+        str, str, str, int, int, str
+    )  # burner_kind, target, iface, speed, channel, serial
     # 远程 J-Link（Remote Server）连接请求：target/iface/speed/channel/"ip:port"
     connect_remote_requested = Signal(str, str, int, int, str)
     # 枚举电脑上接入的 J-Link 列表（UI 设备下拉框填充）。worker 自己枚举：
@@ -101,7 +103,8 @@ class JLinkWorker(QObject):
     read_memory_requested = Signal(int, int)
     write_memory_requested = Signal(int, bytes)
     export_firmware_requested = Signal(str, int, int)
-    start_log_recording_requested = Signal(str)
+    # (log_dir, timestamp_mode, show_date, show_time) —— timestamp_mode: "off"/"absolute"/"relative"
+    start_log_recording_requested = Signal(str, str, bool, bool)
     stop_log_recording_requested = Signal()
     set_auto_reconnect_requested = Signal(bool)
     stop_requested = Signal()
@@ -157,6 +160,12 @@ class JLinkWorker(QObject):
         self._poll_interval: float = 0.1  # 100ms，匹配参考项目
         self._log_file = None
         self._log_path: str | None = None
+        # 日志文件行首时间戳配置（_on_start_log 开始记录时由 UI 一次性传入，
+        # 期间不支持热改——与 start/stop 生命周期绑定，简单可靠）。
+        self._log_ts_mode: str = "off"  # "off" / "absolute" / "relative"
+        self._log_ts_show_date: bool = False
+        self._log_ts_show_time: bool = True
+        self._log_at_line_start: bool = True  # 文件当前写入位置是否在行首（决定是否补时间戳前缀）
 
         # RTT 数据中转：read_thread 写入 (channel, text)（lock 保护），worker 线程
         # QTimer 取出合并 emit。**关键**：避免 native threading.Thread 直接 emit Qt signal。
@@ -467,6 +476,7 @@ class JLinkWorker(QObject):
             else:
                 self.log_message.emit("error", f"连接失败：{e}")
             self._do_disconnect()
+
     @Slot()
     def _on_disconnect(self) -> None:
         self._do_disconnect()
@@ -883,8 +893,10 @@ class JLinkWorker(QObject):
         finally:
             self._restart_read_thread()
 
-    @Slot(str)
-    def _on_start_log(self, log_dir: str) -> None:
+    @Slot(str, str, bool, bool)
+    def _on_start_log(
+        self, log_dir: str, ts_mode: str, ts_show_date: bool, ts_show_time: bool
+    ) -> None:
         if self._log_file is not None:
             return
         try:
@@ -894,6 +906,10 @@ class JLinkWorker(QObject):
             self._log_file = open(  # noqa: SIM115 log file held until _close_log_file
                 self._log_path, "a", encoding="utf-8", buffering=1
             )
+            self._log_ts_mode = ts_mode
+            self._log_ts_show_date = ts_show_date
+            self._log_ts_show_time = ts_show_time
+            self._log_at_line_start = True
             # msg 传文件路径：UI 据此弹 InfoBar + 「打开文件夹」按钮（停止时 msg 空）
             self.command_result.emit("log_recording", True, self._log_path)
         except Exception as e:
@@ -912,11 +928,59 @@ class JLinkWorker(QObject):
             self._log_file = None
             self._log_path = None
 
+    def _log_timestamp_prefix(self) -> str:
+        """按当前日志时间戳配置生成行首前缀（含尾随空格），"off" 返回空串。"""
+        if self._log_ts_mode == "relative":
+            with self._stats_lock:
+                start_ts = self._session_start_ts
+            elapsed = time.time() - start_ts if start_ts > 0 else 0.0
+            return f"[{elapsed:.3f}s] "
+        if self._log_ts_mode == "absolute":
+            now = datetime.now()
+            parts = []
+            if self._log_ts_show_date:
+                parts.append(now.strftime("%Y-%m-%d"))
+            if self._log_ts_show_time:
+                parts.append(now.strftime("%H:%M:%S.%f")[:-3])
+            if not parts:
+                return ""
+            return f"[{' '.join(parts)}] "
+        return ""
+
     def _write_log_file(self, text: str) -> None:
+        """写入实时日志文件，按配置在每个逻辑行首插入时间戳前缀。
+
+        text 是 50ms 窗口内攒的任意字节片段，可能横跨多行或只有半行——不能
+        简单按 "\\n" split 后逐段加前缀再拼接（那样会在每段开头都插一次，
+        而真正的行首只在 self._log_at_line_start 为 True 时才存在）。
+        用 self._log_at_line_start 跨调用记录"文件当前写入位置是否在行首"，
+        同通道同文件场景下与 UI 侧 _display_area 的断帧逻辑互相独立。
+        """
         if self._log_file is None:
             return
+        if self._log_ts_mode == "off" or not text:
+            out = text
+        else:
+            out_parts: list[str] = []
+            lines = text.split("\n")
+            for i, line in enumerate(lines):
+                is_last = i == len(lines) - 1
+                if is_last and line == "":
+                    # text 正好以 "\n" 收尾产生的末尾空段：不是真正的新行，
+                    # 只是标记"下一次调用是行首"。不消费前缀，否则会多写一个
+                    # 带时间戳的空行（_log_at_line_start 已在上一轮置 True）。
+                    break
+                if self._log_at_line_start:
+                    out_parts.append(self._log_timestamp_prefix())
+                out_parts.append(line)
+                if not is_last:
+                    out_parts.append("\n")
+                    self._log_at_line_start = True
+                else:
+                    self._log_at_line_start = False
+            out = "".join(out_parts)
         try:
-            self._log_file.write(text)
+            self._log_file.write(out)
             self._log_file.flush()
         except Exception as e:
             self._logger.warning(f"写日志文件失败：{e}")

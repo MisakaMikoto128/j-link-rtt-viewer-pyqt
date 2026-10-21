@@ -77,6 +77,13 @@ class ConfigService(QObject):
         "auto_scroll": True,
         "auto_frame": False,  # 自动断帧（chk_auto_frame）
         "auto_frame_timeout": "20",  # 自动断帧空闲阈值（ms，le_frame_timeout 文本）
+        # 主机接收时间戳（rb_ts_off/rb_ts_absolute/rb_ts_relative 三选一）：
+        # "off" 不加；"absolute" 按 show_date/show_time 拼 日期+时间；
+        # "relative" 会话相对秒（从连接成功起算，如 12.345s）
+        "rtt_timestamp_mode": "off",
+        "rtt_timestamp_show_date": False,  # 仅 absolute 模式下生效（chk_ts_date）
+        "rtt_timestamp_show_time": True,  # 仅 absolute 模式下生效（chk_ts_time）
+        "rtt_log_timestamp": False,  # 实时日志记录文件内是否也带同样的时间戳前缀
         "timed_send": False,  # 定时发送（chk_timed_send）
         "timed_send_interval": "1.0",  # 定时发送间隔（秒，le_timed_interval 文本）
         "show_send_text": False,  # 显示发送字符串（chk_show_send_text，发送回显）
