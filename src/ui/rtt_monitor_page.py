@@ -55,6 +55,7 @@ from qfluentwidgets import (
     PlainTextEdit,
     PrimaryPushButton,
     PushButton,
+    RadioButton,
     ScrollArea,
     SpinBox,
     StrongBodyLabel,
@@ -551,6 +552,48 @@ class RTTMonitorPage(QWidget):
         row_frame.addWidget(_frame_group)
         v.addLayout(row_frame)
 
+        # ---- 主机接收时间戳（关闭 / 绝对时间 / 相对秒 三选一 + 绝对时间下
+        # 日期/时间两个独立开关 + 实时日志是否同步带时间戳）----
+        self._lbl_timestamp = BodyLabel(self.tr("接收时间戳:"))
+        v.addWidget(self._lbl_timestamp)
+
+        row_ts_mode = QHBoxLayout()
+        row_ts_mode.setSpacing(10)
+        self.rb_ts_off = RadioButton(self.tr("关闭"), inner)
+        self.rb_ts_absolute = RadioButton(self.tr("绝对时间"), inner)
+        self.rb_ts_relative = RadioButton(self.tr("相对秒"), inner)
+        for rb in (self.rb_ts_off, self.rb_ts_absolute, self.rb_ts_relative):
+            rb.setFixedHeight(_CTRL_H)
+            row_ts_mode.addWidget(rb)
+        row_ts_mode.addStretch(1)
+        v.addLayout(row_ts_mode)
+
+        row_ts_opts = QHBoxLayout()
+        row_ts_opts.setSpacing(10)
+        self.chk_ts_date = CheckBox(self.tr("显示日期"))
+        self.chk_ts_time = CheckBox(self.tr("显示时间"))
+        self.chk_ts_date.setFixedHeight(_CTRL_H)
+        self.chk_ts_time.setFixedHeight(_CTRL_H)
+        row_ts_opts.addWidget(self.chk_ts_date)
+        row_ts_opts.addWidget(self.chk_ts_time)
+        row_ts_opts.addStretch(1)
+        v.addLayout(row_ts_opts)
+
+        self.chk_log_timestamp = CheckBox(self.tr("日志记录同步带时间戳"))
+        self.chk_log_timestamp.setFixedHeight(_CTRL_H)
+        v.addWidget(self.chk_log_timestamp)
+
+        # 按 cfg 恢复初始态：单选三态 + 从属复选框仅 absolute 模式下可用
+        _ts_mode = self._cfg.get("rtt_timestamp_mode")
+        self.rb_ts_off.setChecked(_ts_mode == "off")
+        self.rb_ts_absolute.setChecked(_ts_mode == "absolute")
+        self.rb_ts_relative.setChecked(_ts_mode == "relative")
+        self.chk_ts_date.setChecked(bool(self._cfg.get("rtt_timestamp_show_date")))
+        self.chk_ts_time.setChecked(bool(self._cfg.get("rtt_timestamp_show_time")))
+        self.chk_ts_date.setEnabled(_ts_mode == "absolute")
+        self.chk_ts_time.setEnabled(_ts_mode == "absolute")
+        self.chk_log_timestamp.setChecked(bool(self._cfg.get("rtt_log_timestamp")))
+
         # ---- 标记 / 保存 / 清空（归入接收设置区域）----
         self.le_mark = EditableComboBox(inner)
         self.le_mark.setPlaceholderText(self.tr("会话标记文本…"))
@@ -957,6 +1000,13 @@ class RTTMonitorPage(QWidget):
         self.sp_channel.valueChanged.connect(self._on_channel_changed)
         self.chk_auto_scroll.toggled.connect(self._display_area.on_auto_scroll_toggled)
         self.chk_hex_display.toggled.connect(lambda c: self._cfg.set("hex_display", c))
+        # 接收时间戳：单选三态 + 从属复选框
+        self.rb_ts_off.toggled.connect(lambda on: on and self._on_ts_mode_changed("off"))
+        self.rb_ts_absolute.toggled.connect(lambda on: on and self._on_ts_mode_changed("absolute"))
+        self.rb_ts_relative.toggled.connect(lambda on: on and self._on_ts_mode_changed("relative"))
+        self.chk_ts_date.toggled.connect(lambda c: self._cfg.set("rtt_timestamp_show_date", c))
+        self.chk_ts_time.toggled.connect(lambda c: self._cfg.set("rtt_timestamp_show_time", c))
+        self.chk_log_timestamp.toggled.connect(lambda c: self._cfg.set("rtt_log_timestamp", c))
         # 收窄模式：悬浮卡片开关
         self.btn_panel_toggle.toggled.connect(self._on_panel_toggle_toggled)
         # 用户手动滚动 → 取消 chk_auto_scroll 勾选；用 _programmatic_scroll 标志
@@ -994,9 +1044,7 @@ class RTTMonitorPage(QWidget):
 
         # 显式 QueuedConnection：worker 线程 → 主线程槽，避免 PySide6 在
         # 「emit 调用从 native threading.Thread 发起」场景下误判 sender thread 走 DirectConnection。
-        self._worker.rtt_data_received.connect(
-            self._display_area.on_rtt_data, Qt.QueuedConnection
-        )
+        self._worker.rtt_data_received.connect(self._display_area.on_rtt_data, Qt.QueuedConnection)
         self._worker.connection_state_changed.connect(self._on_state_changed, Qt.QueuedConnection)
         self._worker.unexpected_disconnect.connect(
             self._on_unexpected_disconnect, Qt.QueuedConnection
@@ -1383,9 +1431,7 @@ class RTTMonitorPage(QWidget):
             # 本地 USB 模式分支
             jlink_serial = self._serial_from_label(current)
             if not jlink_serial or self._find_jlink_index_by_serial(jlink_serial) < 0:
-                _infobar.warn(
-                    self, self.tr("提示"), self.tr("未检测到烧录器，请检查 USB 连接")
-                )
+                _infobar.warn(self, self.tr("提示"), self.tr("未检测到烧录器，请检查 USB 连接"))
                 return
             iface = self.cb_iface.currentText()
             speed = int(self.cb_speed.currentText())
@@ -1536,6 +1582,12 @@ class RTTMonitorPage(QWidget):
             info = self._worker.get_device_info()
             self._set_connected_ui(info)
             self._update_channel_range_from_worker()
+            # 会话相对秒时间戳的起算点：同步传给 DisplayArea 本地缓存，避免渲染
+            # 热路径里每条数据都跨线程读 _stats_lock（get_stats 已有 lock，这里
+            # 只在连接状态变化这一低频事件上调用一次）
+            self._display_area.set_session_start_ts(
+                self._worker.get_stats().get("session_start_ts", 0.0)
+            )
             if self._cfg.get("auto_mark_on_connect"):
                 target = info.get("target_device", "—")
                 ts = datetime.now().strftime("%H:%M:%S")
@@ -1545,6 +1597,7 @@ class RTTMonitorPage(QWidget):
         else:
             prev_info = self._worker.get_device_info()
             self._set_disconnected_ui()
+            self._display_area.set_session_start_ts(0.0)
             if self._cfg.get("auto_mark_on_disconnect"):
                 ts = datetime.now().strftime("%H:%M:%S")
                 remote_addr = prev_info.get("remote_addr", "")
@@ -1749,6 +1802,13 @@ class RTTMonitorPage(QWidget):
             display: str = ENCODING_LABEL_MAP.get(encoding, encoding.upper())
             self.lbl_status_encoding.setText(self.tr("编码: {name}").format(name=display))
 
+    def _on_ts_mode_changed(self, mode: str) -> None:
+        """接收时间戳单选三态切换：持久化 + 从属复选框仅 absolute 模式下可用。"""
+        self._cfg.set("rtt_timestamp_mode", mode)
+        enabled = mode == "absolute"
+        self.chk_ts_date.setEnabled(enabled)
+        self.chk_ts_time.setEnabled(enabled)
+
     # ------------------------------------------------------------------
     # 日志记录 / 保存当前 / 搜索 / 错误提示
     # ------------------------------------------------------------------
@@ -1757,7 +1817,15 @@ class RTTMonitorPage(QWidget):
             from core.logger import get_log_dir
 
             log_dir = self._cfg.get("log_dir") or str(get_log_dir())
-            self._worker.start_log_recording_requested.emit(log_dir)
+            ts_mode = (
+                self._cfg.get("rtt_timestamp_mode") if self._cfg.get("rtt_log_timestamp") else "off"
+            )
+            self._worker.start_log_recording_requested.emit(
+                log_dir,
+                ts_mode,
+                bool(self._cfg.get("rtt_timestamp_show_date")),
+                bool(self._cfg.get("rtt_timestamp_show_time")),
+            )
         else:
             self._worker.stop_log_recording_requested.emit()
 
@@ -1918,6 +1986,13 @@ class RTTMonitorPage(QWidget):
         self.chk_hex_display.setText(self.tr("十六进制显示"))
         tip(self.chk_hex_display, self.tr("将接收到的每个字节以大写的 HEX 格式显示"))
         self.chk_auto_frame.setText(self.tr("自动断帧"))
+        self._lbl_timestamp.setText(self.tr("接收时间戳:"))
+        self.rb_ts_off.setText(self.tr("关闭"))
+        self.rb_ts_absolute.setText(self.tr("绝对时间"))
+        self.rb_ts_relative.setText(self.tr("相对秒"))
+        self.chk_ts_date.setText(self.tr("显示日期"))
+        self.chk_ts_time.setText(self.tr("显示时间"))
+        self.chk_log_timestamp.setText(self.tr("日志记录同步带时间戳"))
         self._send_bar.retranslate()
 
         # 标记 / 清除 / 保存
