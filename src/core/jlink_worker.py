@@ -36,7 +36,7 @@ import pylink
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from .logger import get_logger
-from .probe.base import BURNER_KIND_JLINK, ProbeNotConnected
+from .probe.base import BURNER_KIND_JLINK, ProbeError, ProbeNotConnected
 from .probe.rtt_backend import (
     RTT_RESET_HALT,
     RTT_RESET_NORMAL,
@@ -95,7 +95,7 @@ class JLinkWorker(QObject):
     )  # mode: "normal" / "auto_reconnect" —— worker 内部完成完整重置流程
     set_rtt_channel_requested = Signal(int)
     set_pause_receive_requested = Signal(bool)
-    set_power_output_requested = Signal(bool)
+    set_power_output_requested = Signal(bool, str, str)  # enable, serial, remote_addr
     set_poll_interval_requested = Signal(int)
     set_encoding_requested = Signal(str)
     read_memory_requested = Signal(int, int)
@@ -213,8 +213,12 @@ class JLinkWorker(QObject):
     def initialize(self) -> None:
         """在 worker 线程内创建所有 thread-affinity 敏感的对象。"""
         self.jlink = pylink.JLink()
-        # RTT backend：per-connect 在 _do_connect 按 burner_kind 选（PylinkRttBackend
-        # 包持久 self.jlink / PyocdRttBackend 自管 session）。初始 None，连接后赋值。
+        # J-Link backend 与持久 pylink.JLink 同生命周期：独立电源会话需要记住
+        # 当前 serial/remote，后续目标连接或切换烧录器才能正确复用/重开句柄。
+        self._jlink_backend = make_rtt_backend(
+            BURNER_KIND_JLINK, self._backend_log, jlink_shared=self.jlink
+        )
+        # PyOCD backend 仍按连接创建；J-Link 使用上面的持久 backend。
         self._backend = None
         self._reset_decoders()
 
@@ -418,9 +422,14 @@ class JLinkWorker(QObject):
         self._view_channel = channel
         if channel >= 0:
             self._send_channel = channel
-        # 按 burner_kind 选 backend（per-connect：PylinkRttBackend 包持久 self.jlink，
-        # PyocdRttBackend 自管 session）
-        self._backend = make_rtt_backend(burner_kind, self._backend_log, jlink_shared=self.jlink)
+        # 按 burner_kind 选 backend：J-Link 复用持久 backend（保留独立电源会话
+        # 身份），PyOCD 每次连接自建 session。
+        if burner_kind == BURNER_KIND_JLINK:
+            self._backend = self._jlink_backend
+        else:
+            self._backend = make_rtt_backend(
+                burner_kind, self._backend_log, jlink_shared=self.jlink
+            )
         try:
             params = RttConnectParams(
                 target=target,
@@ -812,17 +821,21 @@ class JLinkWorker(QObject):
         self._reset_decoders()
         self._logger.info(f"RTT 解码编码切换为 {encoding}")
 
-    @Slot(bool)
-    def _on_set_power(self, enable: bool) -> None:
-        if self._state != _STATE_CONNECTED:
-            self.command_result.emit("power_output", False, "未连接")
-            return
+    @Slot(bool, str, str)
+    def _on_set_power(self, enable: bool, serial: str, remote_addr: str) -> None:
         try:
+            # 电源输出属于烧录器，不属于 RTT 目标会话。空闲时仅打开所选 J-Link；
+            # 已连接时沿用活动 backend，避免切换设备干扰正在进行的 RTT 会话。
+            backend = self._backend
+            if self._state != _STATE_CONNECTED:
+                backend = self._jlink_backend
+            if backend is None or not backend.supports_power():
+                raise ProbeError("当前烧录器不支持电源输出")
             if enable:
-                #  default=False（当前用法）：立即打开/关闭电源输出，仅本次生效。
-                self._backend.power_on()
+                # default=False：立即打开/关闭电源输出，仅本次生效。
+                backend.power_on(serial, remote_addr)
             else:
-                self._backend.power_off()
+                backend.power_off(serial, remote_addr)
             self.command_result.emit("power_output", True, "")
         except Exception as e:
             self._logger.error(f"控制电源失败：{e}")

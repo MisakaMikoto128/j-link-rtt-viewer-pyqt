@@ -22,7 +22,7 @@ class FakeWorker(QObject):
     reset_requested = Signal(str)
     send_data_requested = Signal(str, bool)
     set_pause_receive_requested = Signal(bool)
-    set_power_output_requested = Signal(bool)
+    set_power_output_requested = Signal(bool, str, str)
     set_rtt_channel_requested = Signal(int)
     set_encoding_requested = Signal(str)
     set_poll_interval_requested = Signal(int)

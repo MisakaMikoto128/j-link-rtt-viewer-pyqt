@@ -1049,6 +1049,20 @@ class _SignalSpy(QObject):
 
 ---
 
+## J-Link 电源输出不依赖目标连接；`open()` 后的 `connected()` 不能判断 RTT 状态
+
+**现象**：电源复选框在目标断开后被禁用，worker 也返回「未连接」。只删掉这两处门控还不够——`power_on/off` 有 `@open_required`，而原实现只在目标连接流程里打开 J-Link。另一个反直觉点：真实 J-Link PLUS 仅 `open()`、尚未 `connect(target)` 时，`connected()` 也返回 True。
+
+**原因**：把烧录器句柄生命周期、RTT 目标会话和电源输出混成了一层。`connected()` 不能表示「本次会话已经调用 `rtt_start()`」，用它做判断会让独立电源句柄后的首次 RTT 连接漏掉 `rtt_start()`。
+
+**处理**：UI 的电源可用性不再随 `_set_connected_ui` / `_set_disconnected_ui` 改变；电源命令携带当前 serial/remote。`PylinkRttBackend` 在空闲态只打开烧录器并执行 `power_on/off`，不 `set_tif`、不 `connect`、不启动 RTT。J-Link backend 与持久 pylink 实例同生命周期，记录独立电源会话的 `(serial, remote_addr)`：同设备后续目标连接复用句柄但补 `rtt_start()`；切换设备先关闭旧句柄再走正常双开连接序列。
+
+**验证**：J-Link PLUS（S/N 609788888）真机仅 open 后执行 `power_on/off` 均成功，未调用目标连接；回归测试同时覆盖 IDLE 电源控制、后续 RTT 连接和双 J-Link 切换。这里验证的是 DLL/API 路径，未用万用表测量 pin 19 电压。
+
+参考：`src/core/probe/pylink_rtt_backend.py` `_ensure_power_probe_open`、`src/core/jlink_worker.py` `_on_set_power`、`tests/test_jlink_worker.py` `test_power_output_*`。
+
+---
+
 ## pylink/J-Link DLL 同句柄并发不安全：worker 内所有 DLL 调用必须串行（`_dll_lock`）
 
 **现象**：RTT 监控页彻底报废——选对芯片也报 `连接失败：exception: access violation writing 0x...`，随后 200ms 枚举也连环 access violation；选错芯片更直接卡死崩溃。

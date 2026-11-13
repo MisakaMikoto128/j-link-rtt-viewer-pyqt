@@ -20,7 +20,7 @@ class FakeWorker(QObject):
     reset_requested = Signal(str)
     send_data_requested = Signal(str, bool)
     set_pause_receive_requested = Signal(bool)
-    set_power_output_requested = Signal(bool)
+    set_power_output_requested = Signal(bool, str, str)
     set_rtt_channel_requested = Signal(int)
     set_encoding_requested = Signal(str)
     set_poll_interval_requested = Signal(int)
@@ -45,8 +45,14 @@ class FakeWorker(QObject):
         }
         self._sent: list[tuple[str, bool]] = []
         self._resets: list[str] = []
+        self._power_commands: list[tuple[bool, str, str]] = []
         self.send_data_requested.connect(lambda t, h: self._sent.append((t, h)))
         self.reset_requested.connect(lambda m: self._resets.append(m))
+        self.set_power_output_requested.connect(
+            lambda enabled, serial, remote: self._power_commands.append(
+                (enabled, serial, remote)
+            )
+        )
 
     def get_device_info(self) -> dict:
         return dict(self._device_info)
@@ -168,6 +174,35 @@ def test_state_changed_to_disconnected_resets_ui(rtt_page, qtbot):
     assert not page.btn_reset.isEnabled()
     assert page._is_connected is False
     assert "未连接" in page.lbl_status_state.text()
+
+
+def test_power_output_stays_enabled_without_target_connection(rtt_page, qtbot):
+    """电源是烧录器功能；目标连接和断开都不能改变它的可用性。"""
+    page, worker, _ = rtt_page
+    assert page._is_connected is False
+    assert page.chk_power.isEnabled()
+
+    worker.connection_state_changed.emit(True)
+    qtbot.wait(20)
+    worker.connection_state_changed.emit(False)
+    qtbot.wait(20)
+
+    assert page._is_connected is False
+    assert page.chk_power.isEnabled()
+
+
+def test_power_output_routes_selected_probe_without_target_connection(rtt_page, qtbot):
+    """未连接目标时，电源命令携带当前选中的 J-Link serial。"""
+    page, worker, _ = rtt_page
+    page.cb_jlink.addItem("J-Link PLUS: 12345678", userData="12345678")
+    page.cb_jlink.setCurrentIndex(0)
+    page.cb_jlink.setText("J-Link PLUS: 12345678")
+    page._probe_kinds["12345678"] = "jlink"
+
+    page.chk_power.setChecked(True)
+    qtbot.wait(20)
+
+    assert worker._power_commands == [(True, "12345678", "")]
 
 
 def test_rtt_data_received_appends_to_display(rtt_page, qtbot):

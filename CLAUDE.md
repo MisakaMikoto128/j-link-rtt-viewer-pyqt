@@ -20,6 +20,7 @@
 - `set_tif(SWD | JTAG)` 是错的 — 互斥枚举二选一，不是 bit flag
 - **pylink 必须用 1.6.0**，2.x RTT 不工作（`requirements.txt` 锁版本）
 - **连接顺序**：open → close → open(serial) → rtt_start → set_tif → set_speed → connect（pylink 1.6.0 硬性要求）
+- 电源输出是烧录器功能，不依赖目标连接；仅 `open()` 后 `connected()` 也可能返回 True，不能用它判断是否已启动 RTT。独立电源会话要记 serial/remote，切换设备必须重开句柄。`pylink_rtt_backend`
 - `rtt_get_num_up_buffers()` 返回声明数不是已分配数，通道数用 buf descriptor 的 `SizeOfBuffer` 计数。`_detect_num_up_channels`
 - **DLL 同句柄并发不安全**：所有 pylink DLL 调用必须串行经 `_dll_lock`（RLock）。J-Link 报 access violation 先查这个
 - **pyocd 预热 wait 不能移走**：`wait_for_pyocd_prepare` 必须在任何 worker 启动前（含 RTT worker，不只是 FlashWorker）。预热线程 `import pyocd.probe.aggregator` 扫描时调 `JLinkProbePlugin.should_load -> pylink.JLink()` 碰 DLL，与 RTT worker `connected_emulators()` 并发崩 `0xc000001d`。commit 5a3b55f 错移、37bda17 回退。`main_window.__init__`

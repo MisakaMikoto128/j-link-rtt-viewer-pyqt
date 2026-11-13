@@ -6,7 +6,7 @@
 
 import time
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 from PySide6.QtCore import QCoreApplication, Qt
@@ -389,13 +389,99 @@ def test_power_output_on_off(worker):
     w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "0")
     _drain_events(0.3)
 
-    w.set_power_output_requested.emit(True)
+    w.set_power_output_requested.emit(True, "12345678", "")
     _drain_events(0.2)
     jl.power_on.assert_called_once()
 
-    w.set_power_output_requested.emit(False)
+    w.set_power_output_requested.emit(False, "12345678", "")
     _drain_events(0.2)
     jl.power_off.assert_called_once()
+
+
+def test_power_output_opens_selected_probe_without_connecting_target(worker):
+    """IDLE 下只打开烧录器控制电源，不启动 RTT 或连接目标。"""
+    w, jl = worker
+    assert w.state_name() == "IDLE"
+
+    w.set_power_output_requested.emit(True, "12345678", "")
+    _drain_events(0.5, until=lambda: jl.power_on.called)
+
+    jl.open.assert_called_once_with(serial_no=12345678)
+    jl.power_on.assert_called_once_with(default=False)
+    jl.rtt_start.assert_not_called()
+    jl.set_tif.assert_not_called()
+    jl.connect.assert_not_called()
+    assert w.state_name() == "IDLE"
+
+    w.set_power_output_requested.emit(False, "12345678", "")
+    jl.opened.return_value = True
+    _drain_events(0.5, until=lambda: jl.power_off.called)
+
+    jl.power_off.assert_called_once_with(default=False)
+    jl.open.assert_called_once_with(serial_no=12345678)
+    jl.rtt_start.assert_not_called()
+    jl.connect.assert_not_called()
+    assert w.state_name() == "IDLE"
+
+
+def test_power_output_reopens_when_selected_probe_changes(worker):
+    """独立电源会话不能把后续命令发给上一次选中的烧录器。"""
+    w, jl = worker
+    jl.connected_emulators.return_value = [
+        SimpleNamespace(SerialNumber=12345678, acProduct=b"J-Link PLUS"),
+        SimpleNamespace(SerialNumber=87654321, acProduct=b"J-Link PLUS"),
+    ]
+    w.set_power_output_requested.emit(True, "12345678", "")
+    _drain_events(0.5, until=lambda: jl.power_on.call_count == 1)
+    jl.opened.return_value = True
+
+    w.set_power_output_requested.emit(False, "87654321", "")
+    _drain_events(0.5, until=lambda: jl.power_off.called)
+
+    assert jl.open.call_args_list == [
+        call(serial_no=12345678),
+        call(serial_no=87654321),
+    ]
+
+
+def test_target_connect_after_power_control_still_starts_rtt(worker):
+    """真实 J-Link 仅 open 后 connected() 也为 True，不能据此跳过 rtt_start。"""
+    w, jl = worker
+    jl.connected.return_value = True
+    w.set_power_output_requested.emit(True, "12345678", "")
+    _drain_events(0.5, until=lambda: jl.power_on.called)
+    jl.opened.return_value = True
+
+    w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "12345678")
+    _drain_events(1.0, until=lambda: w.state_name() == "CONNECTED")
+
+    assert w.state_name() == "CONNECTED"
+    jl.rtt_start.assert_called_once_with()
+    jl.open.assert_called_once_with(serial_no=12345678)
+
+
+def test_target_connect_reopens_a_different_probe_after_power_control(worker):
+    """电源会话选 A、目标连接选 B 时，不能在 A 上连接 B 的目标。"""
+    w, jl = worker
+    jl.connected.return_value = True
+    jl.connected_emulators.return_value = [
+        SimpleNamespace(SerialNumber=12345678, acProduct=b"J-Link PLUS"),
+        SimpleNamespace(SerialNumber=87654321, acProduct=b"J-Link PLUS"),
+    ]
+    w.set_power_output_requested.emit(True, "12345678", "")
+    _drain_events(0.5, until=lambda: jl.power_on.called)
+    jl.opened.return_value = True
+    jl.serial_number = 87654321
+
+    w.connect_requested.emit("jlink", "STM32G070CB", "SWD", 4000, 0, "87654321")
+    _drain_events(1.0, until=lambda: w.state_name() == "CONNECTED")
+
+    assert w.state_name() == "CONNECTED"
+    assert jl.open.call_args_list[-2:] == [
+        call(serial_no=87654321),
+        call(serial_no=87654321),
+    ]
+    jl.rtt_start.assert_called_once_with()
 
 
 def test_read_memory_emits_bytes(worker):

@@ -32,6 +32,8 @@ class PylinkRttBackend:
         self._jlink = jlink
         self._log = log
         self._logger = get_logger()
+        # (serial, remote_addr)：仅独立电源会话使用；目标连接后清空。
+        self._power_identity: tuple[str, str] | None = None
 
     # ============================================================
     # 连接
@@ -41,11 +43,20 @@ class PylinkRttBackend:
         serial = params.serial
         remote = params.remote_addr
         actual_serial = ""
+        probe_was_open = j.opened()
+        connect_identity = (serial, remote)
+        if not probe_was_open:
+            self._power_identity = None
+        elif self._power_identity is not None and self._power_identity != connect_identity:
+            # 独立电源会话选的是另一台烧录器：关闭旧句柄，走正常双开序列。
+            j.close()
+            probe_was_open = False
+            self._power_identity = None
 
         if remote:
             # 远程模式：跳过 USB 枚举与 serial 校验，按 ip:port 双开。
             # J-Link DLL 不做 DNS，remote_addr 已由 UI 解析为 IPv4 字面量。
-            if not j.opened():
+            if not probe_was_open:
                 j.open(ip_addr=remote)
                 ser = j.serial_number
                 j.close()
@@ -81,7 +92,7 @@ class PylinkRttBackend:
                 )
                 raise ProbeNotConnected("jlink offline")
 
-            if not j.opened():
+            if not probe_was_open:
                 # 参考项目的双开模式（pylink 1.6.0 稳定工作的关键模式）：
                 # 先 open() 一次取 serial，close，再 open(serial)，然后 rtt_start
                 # 注意：rtt_start 必须在 connect(target) 之前调用
@@ -103,6 +114,12 @@ class PylinkRttBackend:
                 self._log("info", f"J-Link SN: {ser}")
                 actual_serial = str(int(ser)) if ser is not None else ""
 
+        # 电源输出也可独立打开 J-Link（不连接目标）。worker 只在非 CONNECTED
+        # 状态进入本方法，所以复用已 open 句柄时本次会话尚未启动 RTT。
+        # 不能用 connected() 判断：真实 J-Link 仅 open 后它也会返回 True。
+        if probe_was_open:
+            j.rtt_start()
+
         # SWD / JTAG 二选一（CLAUDE.md 'set_tif 是错的'：不可 OR 起来）
         tif = (
             pylink.enums.JLinkInterfaces.SWD
@@ -116,6 +133,7 @@ class PylinkRttBackend:
         if not j.connected():
             self._log("error", "连接目标失败")
             raise ProbeNotConnected("connect(target) 后 connected() 仍为 False")
+        self._power_identity = None
 
         num_up = self._detect_num_up_channels()
         info = self._collect_device_info(
@@ -201,6 +219,7 @@ class PylinkRttBackend:
     # 断开（幂等；close 抛 JLinkException 不致命，参考 CLAUDE.md）
     # ============================================================
     def disconnect(self) -> None:
+        self._power_identity = None
         try:
             self._jlink.rtt_stop()
         except Exception as e:
@@ -260,8 +279,41 @@ class PylinkRttBackend:
     def supports_power(self) -> bool:
         return True
 
-    def power_on(self) -> None:
+    def _ensure_power_probe_open(self, serial: str, remote_addr: str) -> None:
+        """只打开烧录器，不选择接口、不连接目标，也不启动 RTT。"""
+        j = self._jlink
+        identity = (serial, remote_addr)
+        if j.opened():
+            if self._power_identity is None or self._power_identity == identity:
+                return
+            # 只重开独立的电源会话；活动目标会话由 worker 保持原 backend。
+            j.close()
+            self._power_identity = None
+        if remote_addr:
+            j.open(ip_addr=remote_addr)
+            self._power_identity = identity
+            return
+
+        try:
+            emus = j.connected_emulators()
+        except Exception as e:
+            raise ProbeNotConnected(f"未检测到 J-Link 设备，请检查 USB 连接 ({e})") from e
+        if not emus:
+            raise ProbeNotConnected("未检测到 J-Link 设备，请检查 USB 连接")
+        if serial and serial != "0":
+            if not any(
+                str(int(getattr(e, "SerialNumber", 0) or 0)) == serial for e in emus
+            ):
+                raise ProbeNotConnected(f"选中的 J-Link（S/N: {serial}）不在线")
+            j.open(serial_no=int(serial))
+        else:
+            j.open()
+        self._power_identity = identity
+
+    def power_on(self, serial: str = "", remote_addr: str = "") -> None:
+        self._ensure_power_probe_open(serial, remote_addr)
         self._jlink.power_on(default=False)
 
-    def power_off(self) -> None:
+    def power_off(self, serial: str = "", remote_addr: str = "") -> None:
+        self._ensure_power_probe_open(serial, remote_addr)
         self._jlink.power_off(default=False)

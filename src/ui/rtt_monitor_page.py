@@ -506,7 +506,7 @@ class RTTMonitorPage(QWidget):
         v.addWidget(self.chk_pause)
         self.chk_power = CheckBox(self.tr("电源输出"))
         self.chk_power.setFixedHeight(_CTRL_H)
-        self.chk_power.setEnabled(False)
+        self.chk_power.setEnabled(True)
         v.addWidget(self.chk_power)
         self.chk_log_rec = CheckBox(self.tr("实时日志记录"))
         self.chk_log_rec.setFixedHeight(_CTRL_H)
@@ -953,7 +953,7 @@ class RTTMonitorPage(QWidget):
         self.btn_clear.clicked.connect(self._display_area.on_clear_clicked)
         self.btn_toolbar_clear.clicked.connect(self._display_area.on_clear_clicked)
         self.chk_pause.toggled.connect(self._worker.set_pause_receive_requested.emit)
-        self.chk_power.toggled.connect(self._worker.set_power_output_requested.emit)
+        self.chk_power.toggled.connect(self._on_power_output_toggled)
         self.sp_channel.valueChanged.connect(self._on_channel_changed)
         self.chk_auto_scroll.toggled.connect(self._display_area.on_auto_scroll_toggled)
         self.chk_hex_display.toggled.connect(lambda c: self._cfg.set("hex_display", c))
@@ -1475,6 +1475,32 @@ class RTTMonitorPage(QWidget):
             self.btn_reset.setText(self.tr("重置目标"))
             tip(self.btn_reset, self.tr("F4 重置目标 — 当前模式：仅重置 MCU"))
 
+    def _on_power_output_toggled(self, checked: bool) -> None:
+        """控制当前烧录器电源；serial 解析与目标连接使用同一数据源。"""
+        current = self.cb_jlink.currentText().strip()
+        serial = ""
+        remote_addr = ""
+        if current == self._remote_item_text:
+            host = self.le_remote_host.text().strip()
+            port_text = self.le_remote_port.text().strip()
+            resolved = resolve_remote_host(host)
+            if not host or resolved is None or not is_valid_port(port_text):
+                self.chk_power.blockSignals(True)
+                try:
+                    self.chk_power.setChecked(not checked)
+                finally:
+                    self.chk_power.blockSignals(False)
+                _infobar.warn(
+                    self,
+                    self.tr("电源切换失败"),
+                    self.tr("请输入可解析的远程主机和有效端口（1-65535）"),
+                )
+                return
+            remote_addr = f"{resolved}:{int(port_text)}"
+        else:
+            serial = self._serial_from_label(current)
+        self._worker.set_power_output_requested.emit(checked, serial, remote_addr)
+
     def _on_reset_clicked(self) -> None:
         # auto_reconnect=reset+disconnect+sleep+reconnect）
         self._worker.reset_requested.emit(self._cfg.get("reset_mode"))
@@ -1658,7 +1684,6 @@ class RTTMonitorPage(QWidget):
         self.btn_connect.setIcon(FluentIcon.PAUSE)
         self.btn_reset.setEnabled(True)
         self.btn_reset_halt.setEnabled(True)
-        self.chk_power.setEnabled(True)
         for key, lbl in self._info_labels.items():
             lbl.setText(str(info.get(key, "-")))
         # 状态栏会话时长归零（新连接 = 新会话；worker 端已置 start_ts）
@@ -1694,7 +1719,6 @@ class RTTMonitorPage(QWidget):
         self.btn_connect.setIcon(FluentIcon.PLAY)
         self.btn_reset.setEnabled(False)
         self.btn_reset_halt.setEnabled(False)
-        self.chk_power.setEnabled(False)
         for lbl in self._info_labels.values():
             lbl.setText("-")
         # 状态栏：仅重置连接状态与时长；收发计数保留（由「重置计数」按钮清零）

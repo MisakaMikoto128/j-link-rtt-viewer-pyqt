@@ -340,10 +340,10 @@ class PyocdRttBackend:
     def supports_power(self) -> bool:
         return False
 
-    def power_on(self) -> None:
+    def power_on(self, serial: str = "", remote_addr: str = "") -> None:
         """ST-Link/CMSIS-DAP 无 J-Link 式目标电源输出。worker 应先查 supports_power。"""
 
-    def power_off(self) -> None:
+    def power_off(self, serial: str = "", remote_addr: str = "") -> None:
         """同 power_on：no-op。"""
 
     # ============================================================
