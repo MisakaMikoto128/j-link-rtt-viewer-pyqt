@@ -82,8 +82,12 @@ jobs:
             Write-Host "::warning::CHANGELOG.md 未找到 [$env:version] 小节，release notes 将为空"
             $notes = "见 CHANGELOG.md 的 [$env:version] 小节。"
           }
-          $escaped = $notes -replace '%', '%25' -replace "`n", '%0A' -replace "`r", '%0D'
-          "body=$escaped" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          # GITHUB_OUTPUT 用 heredoc 保留原始多行文本；不要把 CRLF 编成 %0D%0A，
+          # softprops 不会解码这些字面量，会把它们直接显示在 Release 页面。
+          $delimiter = "CHANGELOG_EOF"
+          "body<<$delimiter" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $notes | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $delimiter | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Write-Host "notes extracted ($($notes.Length) chars)"
 
       - name: Check if release already exists
