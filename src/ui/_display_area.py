@@ -19,6 +19,7 @@ from __future__ import annotations
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Slot
@@ -97,6 +98,16 @@ class DisplayArea(QObject):
         # 会话标记下拉历史（最多 10 条，最近在前）
         self._mark_history: list[str] = []
 
+        # 主机接收时间戳：按通道记录"下一条数据是否处于逻辑行首"（决定是否要补
+        # 时间戳前缀）。时间戳在数据**进缓冲区时**就生成并写进缓冲文本本身
+        # （而不是渲染时临时算），这样切通道 render_view() 重放历史时，每行
+        # 显示的仍是该行最初到达时的时刻，不会被重放的那一刻覆盖。
+        self._ts_at_line_start: dict[int, bool] = {}
+        # 会话相对秒的起算点：由主类在连接成功/断开时调用 set_session_start_ts()
+        # 同步传入（worker._session_start_ts 是跨线程字段，不在渲染热路径里
+        # 每条数据都去跨线程读锁）。0 = 未开始会话。
+        self._session_start_ts: float = 0.0
+
     # ------------------------------------------------------------------
     # 视图通道（主类读写入口）
     # ------------------------------------------------------------------
@@ -105,6 +116,10 @@ class DisplayArea(QObject):
 
     def set_view_channel(self, ch: int) -> None:
         self._view_channel = ch
+
+    def set_session_start_ts(self, ts: float) -> None:
+        """主类在 connection_state_changed 回调里同步传入（0 = 断开/未连接）。"""
+        self._session_start_ts = ts
 
     @contextmanager
     def programmatic_scroll_guard(self):
@@ -116,6 +131,65 @@ class DisplayArea(QObject):
             self._programmatic_scroll = False
 
     # ------------------------------------------------------------------
+    # 主机接收时间戳
+    # ------------------------------------------------------------------
+    def _timestamp_prefix(self) -> str:
+        """按当前时间戳配置生成行首前缀（含尾随空格）。"""
+        mode = self._cfg.get("rtt_timestamp_mode")
+        if mode == "relative":
+            elapsed = time.time() - self._session_start_ts if self._session_start_ts > 0 else 0.0
+            return f"[{elapsed:.3f}s] "
+        if mode == "absolute":
+            now = datetime.now()
+            parts = []
+            if self._cfg.get("rtt_timestamp_show_date"):
+                parts.append(now.strftime("%Y-%m-%d"))
+            if self._cfg.get("rtt_timestamp_show_time"):
+                parts.append(now.strftime("%H:%M:%S.%f")[:-3])
+            if not parts:
+                return ""
+            return f"[{' '.join(parts)}] "
+        return ""
+
+    def _prepare_stored_text(self, channel: int, text: str) -> str:
+        """给 text 的每个逻辑行首插入时间戳前缀，返回要写入缓冲区/文档的文本。
+
+        text 是 50ms 窗口内攒的任意字节片段，可能横跨多行或只有半行——不能
+        简单按 "\\n" split 后逐段加前缀再拼接（那样每段开头都会插一次，而真正
+        的行首只在 self._ts_at_line_start[channel] 为 True 时才存在）。按通道
+        独立跟踪"下一条数据是否在行首"（channel_buffers 本就按通道分开）。
+
+        HEX 显示模式下跳过：HEX 是裸字节流没有"行"语义，混入时间戳字符会
+        污染字节序列，无论实时渲染还是切通道重放都不该出现。
+        """
+        mode = self._cfg.get("rtt_timestamp_mode")
+        if mode == "off" or self._chk_hex_display.isChecked():
+            if text:
+                self._ts_at_line_start[channel] = text.endswith("\n")
+            return text
+
+        at_line_start = self._ts_at_line_start.get(channel, True)
+        lines = text.split("\n")
+        out_parts: list[str] = []
+        for i, line in enumerate(lines):
+            is_last = i == len(lines) - 1
+            if is_last and line == "":
+                # text 正好以 "\n" 收尾产生的末尾空段：不是真正的新行，只是
+                # 标记"下一次调用是行首"。不消费前缀，否则会多出一个带
+                # 时间戳的空行（at_line_start 已在上一轮置 True，这里不变）。
+                break
+            if at_line_start:
+                out_parts.append(self._timestamp_prefix())
+            out_parts.append(line)
+            if not is_last:
+                out_parts.append("\n")
+                at_line_start = True
+            else:
+                at_line_start = False
+        self._ts_at_line_start[channel] = at_line_start
+        return "".join(out_parts)
+
+    # ------------------------------------------------------------------
     # 数据接收 + 渲染
     # ------------------------------------------------------------------
     @Slot(int, str)
@@ -123,7 +197,10 @@ class DisplayArea(QObject):
         """worker 50ms 合并后按通道推来的数据：先按通道入历史缓冲，再决定渲染。
 
         - 缓冲：_channel_buffers[ch] 存该通道历史，_all_rtt_buffer 存合并历史，
-          上限 rtt_channel_history_chars（默认 200k，超出丢最旧）。
+          上限 rtt_channel_history_chars（默认 200k，超出丢最旧）。时间戳在入
+          缓冲**之前**就按配置拼进文本本身（见 _prepare_stored_text），这样
+          切通道 render_view() 重放历史时每行仍是到达时刻的时间戳，不会被
+          重放的那一刻覆盖。
         - 渲染：仅当数据通道与当前视图匹配才实时插入显示区
           （全部通道视图 = 任何通道都渲染）。
         """
@@ -131,12 +208,13 @@ class DisplayArea(QObject):
             return
 
         # 1) 按通道入历史缓冲（无论当前是否查看，保证切通道后历史完整）
+        store_text = self._prepare_stored_text(channel, text)
         limit = int(self._cfg.get("rtt_channel_history_chars") or 200000)
-        buf = self._channel_buffers.get(channel, "") + text
+        buf = self._channel_buffers.get(channel, "") + store_text
         if len(buf) > limit:
             buf = buf[-limit:]
         self._channel_buffers[channel] = buf
-        self._all_rtt_buffer += text
+        self._all_rtt_buffer += store_text
         if len(self._all_rtt_buffer) > limit:
             self._all_rtt_buffer = self._all_rtt_buffer[-limit:]
 
@@ -174,7 +252,9 @@ class DisplayArea(QObject):
         cursor.beginEditBlock()
         try:
             if self._chk_hex_display.isChecked():
-                # HEX 显示：将文本编码为字节，每字节大写 HEX + 空格
+                # HEX 显示：将文本编码为字节，每字节大写 HEX + 空格。
+                # 时间戳是"行"概念，HEX 是裸字节流没有行语义，不加时间戳
+                # （用原始 text，不用拼了时间戳前缀的 store_text）。
                 try:
                     raw = text.encode(self._cfg.get("rtt_encoding") or "utf-8", errors="replace")
                 except LookupError:
@@ -182,7 +262,7 @@ class DisplayArea(QObject):
                 hex_str = " ".join(f"{b:02X}" for b in raw)
                 cursor.insertText(hex_str + " ")
             else:
-                for seg, attrs in parse_ansi(text):
+                for seg, attrs in parse_ansi(store_text):
                     cursor.insertText(seg, self._fmt(attrs))
         finally:
             cursor.endEditBlock()
@@ -216,9 +296,7 @@ class DisplayArea(QObject):
             for seg, attrs in parse_ansi(text):
                 cursor.insertText(seg, self._fmt(attrs))
         with self.programmatic_scroll_guard():
-            self._display.verticalScrollBar().setValue(
-                self._display.verticalScrollBar().maximum()
-            )
+            self._display.verticalScrollBar().setValue(self._display.verticalScrollBar().maximum())
 
     @Slot()
     def on_clear_clicked(self) -> None:
@@ -226,6 +304,7 @@ class DisplayArea(QObject):
         self._display.clear()
         self._channel_buffers.clear()
         self._all_rtt_buffer = ""
+        self._ts_at_line_start.clear()
 
     # ------------------------------------------------------------------
     # 自动滚动双向同步

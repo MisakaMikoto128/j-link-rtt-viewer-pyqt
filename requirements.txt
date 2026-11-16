@@ -1,4 +1,4 @@
-PySide6>=6.6,<7
+PySide6>=6.6,<6.12  # 6.12.0 有 QSS+NoButtons 导致 SpinBox 内 lineEdit 宽度塌陷为 1px 的渲染回归（RTT 通道号/日期等 SpinBox 文字不可见），排除该版本
 PySide6-Fluent-Widgets>=1.6,<2.0
 pylink-square==1.6.0   # 必须用 1.6.0；2.x 有 breaking API change，RTT 不工作
 
